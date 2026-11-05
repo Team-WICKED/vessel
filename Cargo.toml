@@ -75,6 +75,7 @@ str_to_string = "warn"
 wildcard_enum_match_arm = "warn"
 
 [workspace.dependencies]
+vessel-agent = { path = "crates/vessel-agent" }
 vessel-harness = { path = "crates/vessel-harness" }
 vessel-proc = { path = "crates/vessel-proc" }
 vessel-proto = { path = "crates/vessel-proto" }
@@ -83,6 +84,9 @@ vessel-node = { path = "crates/vessel-node" }
 vessel-session = { path = "crates/vessel-session" }
 vessel-testkit = { path = "crates/vessel-testkit" }
 
+# The Agent Client Protocol SDK (Zed's); one pinned version, used only by
+# vessel-agent (and the fake agent in vessel-testkit). ADR 0003.
+agent-client-protocol = "5.0"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.23"
 bytes = "1"

@@ -1,0 +1,377 @@
+//! The ACP connection driver: one task per agent session.
+//!
+//! Owns the ACP connection, the session state (ready or not, turn running
+//! or not, pending permissions, announced tool calls) and turns ACP traffic
+//! into [`AgentOutput`]s. Must not touch the process (the owner of
+//! [`AgentProcess`](crate::AgentProcess) stops it) or read ACP payloads
+//! (the `mapper` does).
+//!
+//! [Decision Log]
+//! - Purpose: ACP handlers run inside the SDK's dispatch loop, which is
+//!   blocked until they return; a handler that waited for a client's
+//!   permission answer, or for later traffic, would stall or deadlock the
+//!   connection.
+//! - Choice: handlers only forward what arrives into one bounded `inbound`
+//!   channel and return. The handshake and each prompt run as spawned
+//!   connection tasks that also report into `inbound`. One loop consumes
+//!   `inbound` and client commands and owns all state.
+//! - Why one channel: the SDK routes a prompt's response only after the
+//!   handlers for earlier notifications have returned, so a single FIFO
+//!   keeps "last message chunk, then turn ended" in order. Two channels
+//!   could deliver the end of a turn before its last chunk. The same holds
+//!   for `session/load`, whose replayed history arrives before its
+//!   response: the handshake runs in a task, so the loop keeps draining the
+//!   replay while the handshake waits.
+//! - Backpressure: `inbound` and the outputs are bounded. When the consumer
+//!   stops reading, the loop stops, handlers wait, and the SDK stops reading
+//!   the agent's stdout. (The SDK itself queues internally without bounds;
+//!   that is outside this crate's control.)
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use agent_client_protocol::v1::schema as acp;
+use agent_client_protocol::v1::{ConnectionTo, Responder};
+use agent_client_protocol::{Agent, ByteStreams, Client, Error};
+use tokio::process::{ChildStdin, ChildStdout};
+use tokio::sync::mpsc;
+use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
+use vessel_proto::{
+    AgentEvent, ContentBlock, HarnessSessionId, PermissionOutcome, PermissionRequest, ToolCallId,
+};
+
+use crate::error::{Disconnect, InputError};
+use crate::handshake::{self, AgentSetup, HandshakeError};
+use crate::input::{Command, Reply};
+use crate::mapper::{self, Update};
+use crate::output::AgentOutput;
+use crate::permissions::Permissions;
+
+/// Bound of the inbound queue between the SDK's handlers and the loop.
+const INBOUND: usize = 64;
+
+/// Something that arrived from the agent, in arrival order.
+enum Inbound {
+    Started(Result<acp::SessionId, HandshakeError>),
+    Update(acp::SessionNotification),
+    Permission(
+        acp::RequestPermissionRequest,
+        Responder<acp::RequestPermissionResponse>,
+    ),
+    TurnDone(Result<acp::PromptResponse, Error>),
+}
+
+/// Drive the ACP connection over the agent's stdio until it ends, then
+/// report why.
+pub(crate) async fn run(
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    commands: mpsc::Receiver<Command>,
+    outputs: mpsc::Sender<AgentOutput>,
+    setup: AgentSetup,
+) {
+    let (inbound, inbound_receiver) = mpsc::channel(INBOUND);
+    let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
+    let driver = Driver {
+        inbound: inbound.clone(),
+        inbound_receiver,
+        commands,
+        commands_open: true,
+        outputs: outputs.clone(),
+        session: None,
+        turn: false,
+        permissions: Permissions::default(),
+        tool_calls: HashSet::new(),
+    };
+    let ended = Client
+        .v1()
+        .name("vessel")
+        .on_receive_notification(
+            {
+                let inbound = inbound.clone();
+                async move |notification: acp::SessionNotification, _cx| {
+                    forward(&inbound, Inbound::Update(notification)).await;
+                    Ok::<(), Error>(())
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_request(
+            async move |request: acp::RequestPermissionRequest, responder, _cx| {
+                forward(&inbound, Inbound::Permission(request, responder)).await;
+                Ok::<(), Error>(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .connect_with(transport, async move |cx| driver.run(cx, setup).await)
+        .await;
+    let disconnect = ended.unwrap_or_else(|error| Disconnect::Protocol {
+        message: describe(&error),
+    });
+    if outputs
+        .send(AgentOutput::Disconnected(disconnect))
+        .await
+        .is_err()
+    {
+        tracing::debug!("agent outputs dropped before the disconnect");
+    }
+}
+
+/// Session state, owned by the driver loop.
+struct Driver {
+    /// Kept for the tasks the loop spawns (handshake, prompts).
+    inbound: mpsc::Sender<Inbound>,
+    inbound_receiver: mpsc::Receiver<Inbound>,
+    commands: mpsc::Receiver<Command>,
+    commands_open: bool,
+    outputs: mpsc::Sender<AgentOutput>,
+    /// The ACP session, once the handshake succeeded.
+    session: Option<acp::SessionId>,
+    /// Whether a prompt is in flight.
+    turn: bool,
+    permissions: Permissions,
+    /// Tool calls already announced on the timeline.
+    tool_calls: HashSet<ToolCallId>,
+}
+
+impl Driver {
+    async fn run(
+        mut self,
+        cx: ConnectionTo<Agent>,
+        setup: AgentSetup,
+    ) -> Result<Disconnect, Error> {
+        cx.spawn({
+            let cx = cx.clone();
+            let inbound = self.inbound.clone();
+            async move {
+                let started = handshake::run(&cx, &setup).await;
+                forward(&inbound, Inbound::Started(started)).await;
+                Ok(())
+            }
+        })?;
+        loop {
+            tokio::select! {
+                biased;
+                item = self.inbound_receiver.recv() => {
+                    // The loop holds a sender itself, so this never ends
+                    // while it runs.
+                    let Some(item) = item else {
+                        return Ok(Disconnect::Closed);
+                    };
+                    if let Some(end) = self.handle(item).await {
+                        return Ok(end);
+                    }
+                }
+                command = self.commands.recv(), if self.session.is_some() && self.commands_open => {
+                    match command {
+                        Some(command) => self.command(&cx, command).await,
+                        None => self.commands_open = false,
+                    }
+                }
+                () = cx.incoming_closed() => {
+                    while let Ok(item) = self.inbound_receiver.try_recv() {
+                        if self.handle(item).await.is_some() {
+                            break;
+                        }
+                    }
+                    self.abandon_turn().await;
+                    return Ok(Disconnect::Closed);
+                }
+            }
+        }
+    }
+
+    /// Apply one inbound item; `Some` ends the session.
+    async fn handle(&mut self, item: Inbound) -> Option<Disconnect> {
+        match item {
+            Inbound::Started(Ok(session)) => {
+                let harness_session = HarnessSessionId::new(Arc::clone(&session.0));
+                self.session = Some(session);
+                self.emit(AgentEvent::Ready { harness_session }).await;
+            }
+            Inbound::Started(Err(error)) => {
+                return Some(Disconnect::Handshake {
+                    message: describe(&error),
+                });
+            }
+            Inbound::Update(notification) => match mapper::session_update(notification.update) {
+                Update::Event(event) => {
+                    if let AgentEvent::ToolCall(call) = &event {
+                        let _ = self.tool_calls.insert(call.id.clone());
+                    }
+                    self.emit(event).await;
+                }
+                Update::Skipped(kind) => tracing::trace!(?kind, "session update skipped"),
+            },
+            Inbound::Permission(request, responder) => {
+                self.permission(request, responder).await;
+            }
+            Inbound::TurnDone(result) => {
+                self.turn = false;
+                self.withdraw_permissions().await;
+                let event = match result {
+                    Ok(response) => AgentEvent::TurnEnded {
+                        reason: mapper::stop_reason(response.stop_reason),
+                    },
+                    Err(error) => AgentEvent::TurnFailed {
+                        message: describe(&error),
+                    },
+                };
+                self.emit(event).await;
+            }
+        }
+        None
+    }
+
+    /// Hold a permission request and announce it.
+    async fn permission(
+        &mut self,
+        request: acp::RequestPermissionRequest,
+        responder: Responder<acp::RequestPermissionResponse>,
+    ) {
+        let tool_call = ToolCallId::new(Arc::clone(&request.tool_call.tool_call_id.0));
+        let known = !self.tool_calls.insert(tool_call.clone());
+        if let Some(event) = mapper::permission_tool_call(request.tool_call, known) {
+            self.emit(event).await;
+        }
+        let options = mapper::permission_options(request.options);
+        let id = self.permissions.open(responder, &options);
+        self.emit(AgentEvent::PermissionRequested(PermissionRequest {
+            id,
+            tool_call,
+            options,
+        }))
+        .await;
+    }
+
+    async fn command(&mut self, cx: &ConnectionTo<Agent>, command: Command) {
+        match command {
+            Command::Prompt { content, reply } => {
+                let result = self.prompt(cx, content).await;
+                answer(reply, result);
+            }
+            Command::CancelTurn { reply } => {
+                let result = self.cancel(cx).await;
+                answer(reply, result);
+            }
+            Command::Answer { id, outcome, reply } => {
+                let result = self.permissions.answer(id, &outcome);
+                if result.is_ok() {
+                    self.emit(AgentEvent::PermissionResolved { id, outcome })
+                        .await;
+                }
+                answer(reply, result);
+            }
+        }
+    }
+
+    async fn prompt(
+        &mut self,
+        cx: &ConnectionTo<Agent>,
+        content: Vec<ContentBlock>,
+    ) -> Result<(), InputError> {
+        if self.turn {
+            return Err(InputError::TurnInProgress);
+        }
+        let Some(session) = &self.session else {
+            return Err(InputError::Closed);
+        };
+        let blocks = content
+            .iter()
+            .cloned()
+            .map(mapper::prompt_block)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(InputError::InvalidContent)?;
+        let sent = cx.send_request(acp::PromptRequest::new(session.clone(), blocks));
+        let inbound = self.inbound.clone();
+        let spawned = cx.spawn(async move {
+            let result = sent.block_task().await;
+            forward(&inbound, Inbound::TurnDone(result)).await;
+            Ok(())
+        });
+        if spawned.is_err() {
+            return Err(InputError::Closed);
+        }
+        self.turn = true;
+        self.emit(AgentEvent::TurnStarted { content }).await;
+        Ok(())
+    }
+
+    async fn cancel(&mut self, cx: &ConnectionTo<Agent>) -> Result<(), InputError> {
+        let Some(session) = &self.session else {
+            return Err(InputError::Closed);
+        };
+        if !self.turn {
+            return Ok(());
+        }
+        if cx
+            .send_notification(acp::CancelNotification::new(session.clone()))
+            .is_err()
+        {
+            return Err(InputError::Closed);
+        }
+        // ACP: after `session/cancel` the client answers every pending
+        // permission request with `cancelled`; the agent then ends the
+        // turn with the `cancelled` stop reason.
+        self.withdraw_permissions().await;
+        Ok(())
+    }
+
+    /// The connection ended: settle what is still open.
+    async fn abandon_turn(&mut self) {
+        self.withdraw_permissions().await;
+        if self.turn {
+            self.turn = false;
+            self.emit(AgentEvent::TurnFailed {
+                message: String::from("the agent exited during the turn"),
+            })
+            .await;
+        }
+    }
+
+    async fn withdraw_permissions(&mut self) {
+        for id in self.permissions.cancel_all() {
+            self.emit(AgentEvent::PermissionResolved {
+                id,
+                outcome: PermissionOutcome::Cancelled,
+            })
+            .await;
+        }
+    }
+
+    /// `&mut self` rather than `&self`: the session holds permission
+    /// responders, which are `Send` but not `Sync`, so a shared borrow held
+    /// across this `.await` would make the driver future non-`Send`.
+    async fn emit(&mut self, event: AgentEvent) {
+        if self.outputs.send(AgentOutput::Event(event)).await.is_err() {
+            tracing::debug!("agent outputs dropped");
+        }
+    }
+}
+
+async fn forward(inbound: &mpsc::Sender<Inbound>, item: Inbound) {
+    // Fails only after the loop ended; the connection is going away and a
+    // dropped permission responder answers the agent with an error.
+    if inbound.send(item).await.is_err() {
+        tracing::debug!("agent traffic after the session loop ended");
+    }
+}
+
+fn answer(reply: Reply, result: Result<(), InputError>) {
+    // The caller may have stopped waiting; the command was applied anyway.
+    if reply.send(result).is_err() {
+        tracing::debug!("agent command reply dropped");
+    }
+}
+
+/// An error and its sources, as one line for people.
+pub(crate) fn describe(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
