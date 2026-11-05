@@ -36,6 +36,9 @@
 //!   node. The durable channel is the only path that may slow the session:
 //!   records are never dropped for the store, so when the node stops
 //!   draining, the actor stops reading output, and the program stalls.
+//! - Sharing: each record is allocated once as an `Arc<EventRecord>`; the
+//!   durable channel, the ring and every follower hold that same `Arc`, so
+//!   fan-out costs a reference count per reader, not a copy.
 //! - Order per record: number it, wait for a durable slot, then append to
 //!   the ring and broadcast in one step. A follower therefore never sees a
 //!   record twice (snapshot and live are disjoint) and never sees a record
@@ -56,5 +59,5 @@ mod terminal;
 pub use config::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, RuntimeConfig};
 pub use error::{InputKind, ModeKind, SessionError};
 pub use handle::SessionHandle;
-pub use ring::{Follow, Gap};
+pub use ring::{Follow, FollowError};
 pub use runtime::{Created, SessionRuntime};

@@ -22,7 +22,7 @@ use crate::handle::Shared;
 pub(crate) struct Publisher {
     shared: Arc<Shared>,
     /// `None` once the node dropped its receiver.
-    durable: Option<mpsc::Sender<EventRecord>>,
+    durable: Option<mpsc::Sender<Arc<EventRecord>>>,
     info: watch::Sender<SessionInfo>,
     next: EventSeq,
 }
@@ -30,7 +30,7 @@ pub(crate) struct Publisher {
 /// Room for one record in the durable channel.
 #[derive(Debug)]
 pub(crate) enum Slot {
-    Durable(mpsc::OwnedPermit<EventRecord>),
+    Durable(mpsc::OwnedPermit<Arc<EventRecord>>),
     /// The node no longer receives records (it dropped the channel).
     Gone,
 }
@@ -38,7 +38,7 @@ pub(crate) enum Slot {
 impl Publisher {
     pub(crate) const fn new(
         shared: Arc<Shared>,
-        durable: mpsc::Sender<EventRecord>,
+        durable: mpsc::Sender<Arc<EventRecord>>,
         info: watch::Sender<SessionInfo>,
     ) -> Self {
         Self {
@@ -78,9 +78,11 @@ impl Publisher {
         };
         let at = Utc::now();
         let change = InfoChange::of(&event);
-        let record = EventRecord { seq, at, event };
+        // The one allocation of this record; the store, the ring and every
+        // follower share it.
+        let record = Arc::new(EventRecord { seq, at, event });
         match slot {
-            Slot::Durable(permit) => drop(permit.send(record.clone())),
+            Slot::Durable(permit) => drop(permit.send(Arc::clone(&record))),
             Slot::Gone => {
                 if self.durable.take().is_some() {
                     tracing::warn!(

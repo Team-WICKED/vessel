@@ -4,11 +4,13 @@
 //! Tests wait on events (records, channel closure), never on time; the
 //! timeout only turns a hang into a failure.
 
+use std::num::NonZeroUsize;
+
 use vessel_proto::{
     ErrorCode, EventSeq, HarnessKind, ModelId, SessionEvent, SessionInput, SessionMode,
     SessionSpec, SessionStatus, TerminalInput, TerminalSize,
 };
-use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, Gap, SessionError};
+use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, FollowError, SessionError};
 
 use support::{Fixture, Follower, collect, count, keys, killed, seqs, within};
 
@@ -16,7 +18,9 @@ use support::{Fixture, Follower, collect, count, keys, killed, seqs, within};
 mod support {
     use std::collections::VecDeque;
     use std::future::Future;
+    use std::num::NonZeroUsize;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 
@@ -50,7 +54,7 @@ mod support {
     }
 
     impl Fixture {
-        pub(super) fn new(ring_capacity: usize, durable_capacity: usize) -> Self {
+        pub(super) fn new(ring_capacity: NonZeroUsize, durable_capacity: NonZeroUsize) -> Self {
             static NEXT: AtomicU32 = AtomicU32::new(0);
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let bin = std::env::temp_dir()
@@ -106,8 +110,8 @@ mod support {
 
     /// Drain a durable channel in the background, as the node would.
     pub(super) fn collect(
-        mut durable: mpsc::Receiver<EventRecord>,
-    ) -> JoinHandle<Vec<EventRecord>> {
+        mut durable: mpsc::Receiver<Arc<EventRecord>>,
+    ) -> JoinHandle<Vec<Arc<EventRecord>>> {
         tokio::spawn(async move {
             let mut records = Vec::new();
             while let Some(record) = durable.recv().await {
@@ -117,7 +121,7 @@ mod support {
         })
     }
 
-    pub(super) fn seqs(records: &[EventRecord]) -> Vec<u64> {
+    pub(super) fn seqs(records: &[Arc<EventRecord>]) -> Vec<u64> {
         records.iter().map(|record| record.seq.get()).collect()
     }
 
@@ -131,16 +135,16 @@ mod support {
         }
     }
 
-    pub(super) fn count(records: &[EventRecord]) -> u64 {
+    pub(super) fn count(records: &[Arc<EventRecord>]) -> u64 {
         u64::try_from(records.len()).unwrap()
     }
 
     /// Reads one session's records from a `follow`, accumulating terminal
     /// output as text.
     pub(super) struct Follower {
-        cached: VecDeque<EventRecord>,
+        cached: VecDeque<Arc<EventRecord>>,
         follow: Follow,
-        pub(super) records: Vec<EventRecord>,
+        pub(super) records: Vec<Arc<EventRecord>>,
         pub(super) text: String,
     }
 
@@ -156,7 +160,7 @@ mod support {
         }
 
         /// The next record, or `None` once the session has ended.
-        pub(super) async fn next(&mut self) -> Option<EventRecord> {
+        pub(super) async fn next(&mut self) -> Option<Arc<EventRecord>> {
             let record = match self.cached.pop_front() {
                 Some(record) => record,
                 None => match self.follow.live.recv().await {
@@ -169,7 +173,7 @@ mod support {
                 self.text
                     .push_str(&String::from_utf8_lossy(output.data.bytes()));
             }
-            self.records.push(record.clone());
+            self.records.push(Arc::clone(&record));
             Some(record)
         }
 
@@ -311,7 +315,7 @@ async fn shutdown_interrupts_live_sessions_and_refuses_new_ones() {
 #[tokio::test]
 async fn follow_reports_a_gap_older_than_the_ring() {
     within(async {
-        let fixture = Fixture::new(2, DEFAULT_DURABLE_CAPACITY);
+        let fixture = Fixture::new(NonZeroUsize::new(2).unwrap(), DEFAULT_DURABLE_CAPACITY);
         let created = fixture
             .runtime
             .create(support::terminal(HarnessKind::ClaudeCode))
@@ -333,12 +337,24 @@ async fn follow_reports_a_gap_older_than_the_ring() {
         let oldest = EventSeq::new(count(&stored).saturating_sub(2));
         assert_eq!(
             handle.follow(EventSeq::ZERO).unwrap_err(),
-            Gap {
+            FollowError::Gap {
                 oldest_cached: oldest
             }
         );
         let follow = handle.follow(oldest).unwrap();
         assert_eq!(follow.cached, stored[stored.len().saturating_sub(2)..]);
+        assert!(
+            std::sync::Arc::ptr_eq(&follow.cached[0], &stored[stored.len().saturating_sub(2)]),
+            "the ring shares the records the store received"
+        );
+        let end = EventSeq::new(count(&stored));
+        assert!(handle.follow(end).unwrap().cached.is_empty());
+        assert_eq!(
+            handle
+                .follow(EventSeq::new(count(&stored).saturating_add(1)))
+                .unwrap_err(),
+            FollowError::Ahead { next: end }
+        );
     })
     .await;
 }
@@ -346,7 +362,7 @@ async fn follow_reports_a_gap_older_than_the_ring() {
 #[tokio::test]
 async fn a_stalled_store_pauses_the_session_without_losing_records() {
     within(async {
-        let fixture = Fixture::new(DEFAULT_RING_CAPACITY, 1);
+        let fixture = Fixture::new(DEFAULT_RING_CAPACITY, NonZeroUsize::MIN);
         let created = fixture
             .runtime
             .create(support::terminal(HarnessKind::ClaudeCode))
