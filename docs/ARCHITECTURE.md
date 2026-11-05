@@ -118,8 +118,7 @@ that ADR and this table.
     `Interrupted`, retention, `user_version` migrations.
   - `vessel-client`: websocket connection with the bearer token, one typed
     method per call, gap-free `SessionStream` (`follow`). `wss://` is
-    refused for now: the workspace builds `rustls` without a crypto
-    provider.
+    refused: no TLS stack in milestone 1 (ADR 0005 amendment).
 - In progress (milestone 1): `vessel-node` and `vessel-cli`, which still
   contain the protocol 1 code and are excluded from the workspace until
   they are ported.
