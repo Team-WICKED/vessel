@@ -23,6 +23,12 @@ an entry here. Additive, optional fields do not need a bump.
   `{"type":"event","subscription":S,"record":{"seq":..,"at":..,"event":..}}`
   frames follow, ending with `subscription_ended`
   (`session_ended` | `unsubscribed` | `lagged{resume_from}`).
+- Ordering guarantees (ADR 0006): the node never sends `event{S}` before the
+  `response` that carries `Subscribed{S}`, and sends nothing for `S` after
+  `subscription_ended{S}`. For `session.unsubscribe`, the client receives
+  `subscription_ended{unsubscribed}` before the call's `ack`. Records within a
+  subscription arrive in `seq` order with no gaps; a gap is only ever
+  announced as `lagged{resume_from}`.
 - Session modes: `terminal` (base64 PTY bytes) and `structured` (ACP-derived
   `AgentEvent` timeline).
 
