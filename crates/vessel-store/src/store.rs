@@ -1,0 +1,164 @@
+//! The public handle to the event log.
+
+use std::sync::Arc;
+
+use chrono::Utc;
+use rusqlite::Connection;
+use tokio::sync::{mpsc, oneshot};
+use vessel_proto::{EventPage, EventRecord, EventSeq, SessionId, SessionInfo};
+
+use crate::config::StoreConfig;
+use crate::data_dir::DataDir;
+use crate::error::StoreError;
+use crate::log;
+use crate::reader::Reader;
+use crate::writer::{self, Done, Write, WriteOp};
+use crate::{recovery, schema};
+
+/// The session event log. Cheap to clone; every clone talks to the same
+/// writer thread and read pool.
+#[derive(Debug, Clone)]
+pub struct Store {
+    writes: mpsc::Sender<WriteOp>,
+    reader: Arc<Reader>,
+}
+
+/// A freshly opened store and what recovery found.
+#[derive(Debug)]
+pub struct Opened {
+    /// The store.
+    pub store: Store,
+    /// Sessions that were live when the node last stopped, now marked
+    /// `Interrupted` (their logs end with that status). Newest first.
+    pub interrupted: Vec<SessionInfo>,
+}
+
+impl Store {
+    /// Open (or create) the event log in `dir`, migrate it, and recover from
+    /// the previous run: every session that was still live is closed with a
+    /// final `Status{Interrupted}` record, then retention runs.
+    ///
+    /// # Errors
+    /// The database cannot be opened or migrated (for example it was written
+    /// by a newer Vessel), or the writer thread cannot start.
+    pub async fn open(dir: &DataDir, config: StoreConfig) -> Result<Opened, StoreError> {
+        let path = dir.database_path();
+        let retention = config.retention;
+        let opening = path.clone();
+        let (connection, interrupted) = tokio::task::spawn_blocking(move || {
+            let mut connection = Connection::open(&opening)?;
+            schema::configure_writer(&connection)?;
+            schema::migrate(&mut connection)?;
+            let interrupted = recovery::interrupt_live(&mut connection, Utc::now())?;
+            let _pruned = log::prune_ended(&connection, &retention)?;
+            Ok::<_, StoreError>((connection, interrupted))
+        })
+        .await
+        .map_err(StoreError::Task)??;
+        if !interrupted.is_empty() {
+            tracing::info!(
+                sessions = interrupted.len(),
+                "marked sessions from the previous run as interrupted"
+            );
+        }
+
+        let (writes, ops) = mpsc::channel(config.write_queue.get());
+        writer::spawn(connection, ops, retention)?;
+        let store = Self {
+            writes,
+            reader: Arc::new(Reader::new(path, config)),
+        };
+        Ok(Opened { store, interrupted })
+    }
+
+    /// Store a new session with an empty log.
+    ///
+    /// # Errors
+    /// The id is already stored, or the write failed.
+    pub async fn create_session(&self, info: SessionInfo) -> Result<(), StoreError> {
+        self.write(|done| Write::Create { info, done }).await
+    }
+
+    /// Append records to a session's log; returns once they are committed.
+    /// They must continue the log exactly (next sequence number, no gaps).
+    /// Records are taken as `Arc`s, the form the session runtime shares them
+    /// in, so persisting them clones nothing.
+    ///
+    /// Status, end time and harness session id of the stored session follow
+    /// from the records (`Status` and `Agent{Ready}` events).
+    ///
+    /// # Errors
+    /// The session is unknown, the records do not continue its log, or the
+    /// write failed. A failed append leaves the log unchanged.
+    pub async fn append(
+        &self,
+        session: SessionId,
+        records: Vec<Arc<EventRecord>>,
+    ) -> Result<(), StoreError> {
+        self.write(|done| Write::Append {
+            session,
+            records,
+            done,
+        })
+        .await
+    }
+
+    /// A page of a session's log; see `session.read` in the protocol.
+    ///
+    /// # Errors
+    /// The session is unknown, or the read failed.
+    pub async fn read_events(
+        &self,
+        session: SessionId,
+        from: EventSeq,
+        limit: u32,
+    ) -> Result<EventPage, StoreError> {
+        self.read(move |reader| reader.read_events(session, from, limit))
+            .await
+    }
+
+    /// One stored session.
+    ///
+    /// # Errors
+    /// The read failed.
+    pub async fn session(&self, id: SessionId) -> Result<Option<SessionInfo>, StoreError> {
+        self.read(move |reader| reader.session(id)).await
+    }
+
+    /// Every stored session, newest first.
+    ///
+    /// # Errors
+    /// The read failed.
+    pub async fn sessions(&self) -> Result<Vec<SessionInfo>, StoreError> {
+        self.read(Reader::sessions).await
+    }
+
+    /// Commit everything queued so far, fold the WAL into the database file
+    /// and stop the writer. Later writes through any clone fail with
+    /// [`StoreError::Closed`]; reads keep working.
+    pub async fn close(&self) {
+        let (done, closed) = oneshot::channel();
+        if self.writes.send(WriteOp::Close { done }).await.is_ok() && closed.await.is_err() {
+            tracing::debug!("event log writer stopped before acknowledging close");
+        }
+    }
+
+    async fn write(&self, write: impl FnOnce(Done) -> Write) -> Result<(), StoreError> {
+        let (done, committed) = oneshot::channel();
+        self.writes
+            .send(WriteOp::Write(write(done)))
+            .await
+            .map_err(|_closed| StoreError::Closed)?;
+        committed.await.map_err(|_dropped| StoreError::Closed)?
+    }
+
+    async fn read<T: Send + 'static>(
+        &self,
+        read: impl FnOnce(&Reader) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<T, StoreError> {
+        let reader = Arc::clone(&self.reader);
+        tokio::task::spawn_blocking(move || read(&reader))
+            .await
+            .map_err(StoreError::Task)?
+    }
+}
