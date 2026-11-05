@@ -14,8 +14,10 @@ const TOKEN_BYTES: usize = 32;
 ///
 /// `Debug` never prints it and there is no `Display`, so it cannot end up in
 /// a log line by accident. [`expose`](Self::expose) is the one way to get
-/// the text, for writing it into a request header.
-#[derive(Clone, PartialEq, Eq)]
+/// the text, for writing it into a request header. There is deliberately
+/// no `PartialEq`: [`verify`](Self::verify), in constant time, is the only
+/// comparison.
+#[derive(Clone)]
 pub struct NodeToken(String);
 
 /// Text that is not a token Vessel could have generated.
@@ -79,14 +81,14 @@ mod tests {
     fn generated_tokens_parse_and_verify() {
         let token = NodeToken::generate().unwrap();
         assert_eq!(token.expose().len(), 43);
-        assert_eq!(token.expose().parse::<NodeToken>().unwrap(), token);
+        assert!(token.verify(token.expose().parse::<NodeToken>().unwrap().expose()));
         assert!(token.verify(token.expose()));
         assert!(!token.verify(""));
         let mut other = token.expose().to_owned();
         let last = other.pop().unwrap();
         other.push(if last == 'A' { 'B' } else { 'A' });
         assert!(!token.verify(&other));
-        assert_ne!(NodeToken::generate().unwrap(), token);
+        assert!(!token.verify(NodeToken::generate().unwrap().expose()));
     }
 
     #[test]
@@ -97,7 +99,7 @@ mod tests {
 
     #[test]
     fn rejects_other_text() {
-        assert_eq!("short".parse::<NodeToken>(), Err(InvalidToken));
-        assert_eq!("".parse::<NodeToken>(), Err(InvalidToken));
+        assert!(matches!("short".parse::<NodeToken>(), Err(InvalidToken)));
+        assert!(matches!("".parse::<NodeToken>(), Err(InvalidToken)));
     }
 }

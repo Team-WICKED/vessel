@@ -16,8 +16,14 @@ use crate::codec::{
 use crate::config::{ByteCount, Retention};
 use crate::error::StoreError;
 
-/// Store a new session with an empty log. Its status comes from `info`;
-/// everything after is derived from the records appended to it.
+/// Store a new session with an empty log.
+///
+/// Only the session's identity and spec come from `info`. Its status is
+/// stored as `Starting` and live, and everything else is derived from the
+/// records appended later: `info` is a snapshot the runtime took after the
+/// process started, and a session that ends within milliseconds would
+/// otherwise be stored as ended with no end time and an empty log (and be
+/// the first one retention prunes, under the appends still coming).
 pub(crate) fn create_session(
     connection: &Connection,
     info: &SessionInfo,
@@ -27,16 +33,14 @@ pub(crate) fn create_session(
             "INSERT INTO sessions
                  (id, spec, status, live, created_at, ended_at, next_seq, first_seq,
                   retained_bytes, harness_session)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, 0, 0, 0, ?6)
+             VALUES (?1, ?2, ?3, 1, ?4, NULL, 0, 0, 0, NULL)
              ON CONFLICT (id) DO NOTHING",
         )?
         .execute(params![
             info.id.to_string(),
             encode(&info.spec)?,
-            encode(&info.status)?,
-            info.status.is_live(),
+            encode(&SessionStatus::Starting)?,
             time_to_sql(info.created_at)?,
-            info.harness_session.as_ref().map(HarnessSessionId::as_str),
         ])?;
     if inserted == 0 {
         return Err(StoreError::SessionExists(info.id));
@@ -207,7 +211,9 @@ pub(crate) fn prune_session(
 }
 
 /// Delete the ended sessions beyond the newest `max_ended_sessions`, with
-/// their logs. Returns how many were deleted.
+/// their logs. Returns how many were deleted. Only sessions with an end
+/// time count: every ended session has one (it comes from its final status
+/// record), and requiring it keeps a row in any other state out of reach.
 pub(crate) fn prune_ended(
     connection: &Connection,
     retention: &Retention,
@@ -215,7 +221,7 @@ pub(crate) fn prune_ended(
     let deleted = connection
         .prepare_cached(
             "DELETE FROM sessions WHERE id IN (
-                 SELECT id FROM sessions WHERE live = 0
+                 SELECT id FROM sessions WHERE live = 0 AND ended_at IS NOT NULL
                  ORDER BY ended_at DESC, created_at DESC
                  LIMIT -1 OFFSET ?1)",
         )?

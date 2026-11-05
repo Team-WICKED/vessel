@@ -461,3 +461,64 @@ async fn reads_scale_past_the_idle_pool() {
         assert_eq!(read.unwrap().unwrap().id, session.id);
     }
 }
+
+/// The runtime's first snapshot can already show the end of a session that
+/// exits within milliseconds. The store must not believe it: the session is
+/// stored as starting, survives retention, and takes its records.
+#[tokio::test]
+async fn a_session_that_ended_before_it_was_stored_is_kept_until_its_records_arrive() {
+    let (_temp, dir) = data_dir();
+    let config = StoreConfig {
+        retention: Retention {
+            max_ended_sessions: 1,
+            ..Retention::default()
+        },
+        ..StoreConfig::default()
+    };
+    let store = open(&dir, config).await;
+    let mut quick = new_session(0);
+    quick.status = SessionStatus::Exited { code: Some(0) };
+    store.create_session(quick.clone()).await.unwrap();
+    let stored = store.session(quick.id).await.unwrap().unwrap();
+    assert_eq!(stored.status, SessionStatus::Starting);
+    assert_eq!(stored.ended_at, None);
+
+    // Two other sessions end, so retention runs with room for one.
+    for n in 1..=2 {
+        let other = new_session(n);
+        store.create_session(other.clone()).await.unwrap();
+        let end = status(0, SessionStatus::Exited { code: None });
+        store.append(other.id, vec![end]).await.unwrap();
+    }
+    store
+        .append(
+            quick.id,
+            vec![
+                status(0, SessionStatus::Starting),
+                status(1, SessionStatus::Exited { code: Some(0) }),
+            ],
+        )
+        .await
+        .unwrap();
+    let stored = store.session(quick.id).await.unwrap().unwrap();
+    assert_eq!(stored.status, SessionStatus::Exited { code: Some(0) });
+    assert!(stored.ended_at.is_some());
+}
+
+#[tokio::test]
+async fn a_zero_limit_still_makes_progress() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+    store
+        .append(session.id, vec![output(0, 1), output(1, 1)])
+        .await
+        .unwrap();
+    let page = store
+        .read_events(session.id, EventSeq::ZERO, 0)
+        .await
+        .unwrap();
+    assert_eq!(page.records.len(), 1);
+    assert_eq!((page.next, page.at_end), (EventSeq::new(1), false));
+}
