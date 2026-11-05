@@ -2,17 +2,19 @@
 
 Rough order. Each phase ends with something usable on its own.
 
-## Phase 0: one node, one machine (milestone 1, in progress)
+## Phase 0: one node, one machine (milestone 1, implemented 2026-11-05)
 
 Plan: `docs/plans/backend-m1.md`.
 
 - [x] Workspace, lints, CI.
 - [x] Protocol 2 contract (`vessel-proto`): typed RPC, event log, ACP-shaped
       agent timeline.
-- [ ] Terminal mode (PTY) and structured mode (ACP) sessions.
-- [ ] Durable session log with resume by sequence number (SQLite).
-- [ ] Token auth on every connection.
-- [ ] Typed client library; CLI with interactive attach.
+- [x] Terminal mode (PTY) and structured mode (ACP) sessions.
+- [x] Durable session log with resume by sequence number (SQLite).
+- [x] Token auth on every connection.
+- [x] Typed client library; CLI with interactive attach.
+- [ ] Verified on Windows and macOS in CI (Linux only so far; Windows kills
+      only the direct child, not the process tree).
 
 ## Phase 1: many nodes
 
