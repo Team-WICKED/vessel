@@ -35,9 +35,12 @@ Early. Milestone 1 (one node, done properly) is in progress; see
 [docs/plans/backend-m1.md](docs/plans/backend-m1.md).
 
 - Done: the protocol 2 contract in `vessel-proto` (typed RPC, durable event
-  log, ACP-shaped agent timeline).
-- In progress: PTY and ACP session runtime, SQLite event store, RPC server and
-  client, CLI with interactive attach. Until they land, `vessel-node` and
+  log, ACP-shaped agent timeline); the session runtime (`vessel-proc`,
+  `vessel-harness`, `vessel-pty`, `vessel-agent`, `vessel-session`): terminal
+  sessions in a PTY and structured sessions over ACP, with fake harnesses in
+  `vessel-testkit` for tests.
+- In progress: SQLite event store, RPC server and client, CLI with
+  interactive attach. Until they land, `vessel-node` and
   `vessel-cli` hold the old protocol 1 code and are excluded from the
   workspace.
 
