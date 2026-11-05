@@ -57,9 +57,11 @@ that ADR and this table.
    into the bounded durable channel (the node writes it to the store), and
    broadcasts it to live followers.
 4. `session.subscribe{from}` sends cached and stored records from `from`, then
-   live ones. A subscriber that falls behind gets
+   live ones, never before the `Subscribed` reply (ADR 0006). A subscriber
+   that falls behind, on the node or in its own client, gets
    `SubscriptionEnded{Lagged{resume_from}}` and continues with `session.read`
-   plus a new subscription. Nothing is skipped silently.
+   plus a new subscription (`vessel-client`'s `SessionStream` does this).
+   Nothing is skipped silently.
 5. `session.send` routes `SessionInput` to the actor: terminal bytes and
    resizes, or prompts, cancels and permission answers. The first answer to a
    permission request wins; the resolution is an event, so every client sees
@@ -107,9 +109,20 @@ that ADR and this table.
     Structured status is `Starting` until the agent's `Ready`, then
     `Running`; a session that never became ready ends `Failed`.
   - `vessel-testkit`: `fake-tui`, `fake-acp` and the `Fake::path` locator.
-- In progress (milestone 1): every spine crate. `vessel-node` and
-  `vessel-cli` still contain the protocol 1 code and are excluded from the
-  workspace until they are ported.
+- Spine track, transport and storage done:
+  - `vessel-rpc`: handshake, typed calls with cancellation and an in-flight
+    bound, per-connection outbound queue, subscription ordering and lag on
+    both ends (ADR 0006), in-memory transport for tests.
+  - `vessel-store`: data directory (`node.id`, 0600 `token`), SQLite event
+    log with a batching writer thread, paged reads, restart recovery to
+    `Interrupted`, retention, `user_version` migrations.
+  - `vessel-client`: websocket connection with the bearer token, one typed
+    method per call, gap-free `SessionStream` (`follow`). `wss://` is
+    refused for now: the workspace builds `rustls` without a crypto
+    provider.
+- In progress (milestone 1): `vessel-node` and `vessel-cli`, which still
+  contain the protocol 1 code and are excluded from the workspace until
+  they are ported.
 
 ## Later
 
