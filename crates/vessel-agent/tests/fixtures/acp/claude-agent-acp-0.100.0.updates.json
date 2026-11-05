@@ -1,0 +1,66 @@
+[
+  {
+    "name": "recorded: available commands are skipped",
+    "notification": {
+      "sessionId": "s1",
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "compact",
+            "description": "Free up context by summarizing the conversation so far",
+            "input": {
+              "hint": "<optional custom summarization instructions>"
+            }
+          }
+        ]
+      }
+    },
+    "skipped": "AvailableCommands"
+  },
+  {
+    "name": "recorded: session title is skipped",
+    "notification": {
+      "sessionId": "s1",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Pong",
+        "updatedAt": "2026-11-05T17:02:03.438Z"
+      }
+    },
+    "skipped": "SessionInfo"
+  },
+  {
+    "name": "recorded: usage update is skipped",
+    "notification": {
+      "sessionId": "s1",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 25929,
+        "size": 750000
+      }
+    },
+    "skipped": "Usage"
+  },
+  {
+    "name": "recorded: agent message chunk with a message id",
+    "notification": {
+      "sessionId": "s1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "pong"
+        },
+        "messageId": "msg_011Cgk98azHxDW8d3rjmNHMj"
+      }
+    },
+    "expected": {
+      "event": "message_chunk",
+      "content": {
+        "type": "text",
+        "text": "pong"
+      }
+    }
+  }
+]

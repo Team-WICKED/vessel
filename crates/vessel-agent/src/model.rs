@@ -154,6 +154,28 @@ mod tests {
         assert_eq!(by_name.map(|choice| choice.value), Some("haiku".into()));
     }
 
+    /// The model option `claude-agent-acp` 0.100.0 offered in a recorded
+    /// `session/new` (2026-11-05).
+    const RECORDED_CLAUDE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/acp/claude-agent-acp-0.100.0.model-option.json"
+    ));
+
+    #[test]
+    fn selects_models_from_the_recorded_claude_adapter_option() {
+        let options: Vec<acp::SessionConfigOption> = serde_json::from_str(RECORDED_CLAUDE).unwrap();
+        for wanted in ["haiku", "claude-haiku-4-5-20251001", "Sonnet"] {
+            let choice = choose(&options, &ModelId::new(wanted)).unwrap().unwrap();
+            assert_eq!(&*choice.config.0, "model");
+            assert!(choice.value.0.eq_ignore_ascii_case(wanted), "{wanted}");
+        }
+        assert_eq!(choose(&options, &ModelId::new("default")), Ok(None));
+        assert!(matches!(
+            choose(&options, &ModelId::new("gpt-4")),
+            Err(ModelError::NotOffered { .. })
+        ));
+    }
+
     #[test]
     fn the_current_model_needs_no_change() {
         assert_eq!(choose(&models("haiku"), &ModelId::new("haiku")), Ok(None));

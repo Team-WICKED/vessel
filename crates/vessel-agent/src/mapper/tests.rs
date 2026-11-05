@@ -2,6 +2,11 @@
 //!
 //! Fixtures live in `tests/fixtures/acp/`: ACP v1 JSON as harness adapters
 //! send it, each paired with the Vessel event it must become.
+//! `session_updates.json` covers every mapped shape;
+//! `claude-agent-acp-0.100.0.updates.json` is recorded from a real
+//! `claude-agent-acp` 0.100.0 session (2026-11-05), trimmed: session id
+//! replaced, `_meta` dropped, the account's `_auth/status_update` and the
+//! user's own slash commands removed.
 
 use serde::Deserialize;
 
@@ -10,6 +15,10 @@ use super::*;
 const SESSION_UPDATES: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/acp/session_updates.json"
+));
+const RECORDED_CLAUDE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/acp/claude-agent-acp-0.100.0.updates.json"
 ));
 const PERMISSION_REQUEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -28,7 +37,13 @@ struct Case {
 
 #[test]
 fn session_update_fixtures_map_as_recorded() {
-    let cases: Vec<Case> = serde_json::from_str(SESSION_UPDATES).unwrap();
+    for fixture in [SESSION_UPDATES, RECORDED_CLAUDE] {
+        check(fixture);
+    }
+}
+
+fn check(fixture: &str) {
+    let cases: Vec<Case> = serde_json::from_str(fixture).unwrap();
     assert!(!cases.is_empty());
     for case in cases {
         let mapped = session_update(case.notification.update);
