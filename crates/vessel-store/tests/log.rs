@@ -1,0 +1,463 @@
+//! The event log on a temporary data directory.
+
+use std::num::{NonZeroU32, NonZeroUsize};
+use std::sync::Arc;
+
+use fixtures::{at, data_dir, new_session, open, output, plain, record, status};
+use vessel_proto::{
+    AgentEvent, EventRecord, EventSeq, HarnessSessionId, SessionEvent, SessionId, SessionStatus,
+};
+use vessel_store::{ByteCount, Retention, Store, StoreConfig, StoreError};
+
+/// Builders for sessions and records. A `cfg(test)` module so the lints'
+/// test allowances (`unwrap` and friends) apply to it.
+#[cfg(test)]
+mod fixtures {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use chrono::{DateTime, Utc};
+    use tempfile::TempDir;
+    use vessel_proto::{
+        EventRecord, EventSeq, HarnessKind, SessionEvent, SessionId, SessionInfo, SessionMode,
+        SessionSpec, SessionStatus, TerminalBytes, TerminalOutput, TerminalSize,
+    };
+    use vessel_store::{DataDir, Store, StoreConfig};
+
+    pub(crate) fn at(second: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000_i64.saturating_add(second), 123_456_789).unwrap()
+    }
+
+    pub(crate) fn data_dir() -> (TempDir, DataDir) {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = DataDir::new(temp.path());
+        dir.prepare().unwrap();
+        (temp, dir)
+    }
+
+    pub(crate) fn new_session(created: i64) -> SessionInfo {
+        SessionInfo {
+            id: SessionId::random(),
+            spec: SessionSpec {
+                harness: HarnessKind::Codex,
+                cwd: Some(PathBuf::from("/work")),
+                mode: SessionMode::Terminal {
+                    args: Vec::new(),
+                    size: TerminalSize::default(),
+                },
+            },
+            status: SessionStatus::Starting,
+            created_at: at(created),
+            ended_at: None,
+            next_seq: EventSeq::ZERO,
+            harness_session: None,
+        }
+    }
+
+    pub(crate) fn record(seq: u64, event: SessionEvent) -> Arc<EventRecord> {
+        Arc::new(EventRecord {
+            seq: EventSeq::new(seq),
+            at: at(i64::try_from(seq).unwrap()),
+            event,
+        })
+    }
+
+    pub(crate) fn status(seq: u64, status: SessionStatus) -> Arc<EventRecord> {
+        record(seq, SessionEvent::Status { status })
+    }
+
+    /// A terminal chunk of `len` bytes (stored as about `4/3 * len` + 40).
+    pub(crate) fn output(seq: u64, len: usize) -> Arc<EventRecord> {
+        let data = TerminalBytes::new(Bytes::from(vec![b'x'; len]));
+        record(seq, SessionEvent::Terminal(TerminalOutput { data }))
+    }
+
+    pub(crate) fn plain(records: &[Arc<EventRecord>]) -> Vec<EventRecord> {
+        records.iter().map(|record| (**record).clone()).collect()
+    }
+
+    pub(crate) async fn open(dir: &DataDir, config: StoreConfig) -> Store {
+        Store::open(dir, config).await.unwrap().store
+    }
+}
+
+#[tokio::test]
+async fn appended_records_read_back_in_pages() {
+    let (_temp, dir) = data_dir();
+    let config = StoreConfig {
+        max_page_records: NonZeroU32::new(4).unwrap(),
+        ..StoreConfig::default()
+    };
+    let store = open(&dir, config).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+
+    let records: Vec<_> = (0..10).map(|seq| output(seq, 10)).collect();
+    let (first, rest) = records.split_at(3);
+    store.append(session.id, first.to_vec()).await.unwrap();
+    store.append(session.id, rest.to_vec()).await.unwrap();
+
+    let page = store
+        .read_events(session.id, EventSeq::ZERO, 3)
+        .await
+        .unwrap();
+    assert_eq!(page.records, plain(&records[0..3]));
+    assert_eq!((page.next, page.at_end), (EventSeq::new(3), false));
+
+    // The configured cap wins over the caller's limit.
+    let page = store
+        .read_events(session.id, EventSeq::new(3), 100)
+        .await
+        .unwrap();
+    assert_eq!(page.records, plain(&records[3..7]));
+
+    let page = store
+        .read_events(session.id, EventSeq::new(9), 100)
+        .await
+        .unwrap();
+    assert_eq!(page.records, plain(&records[9..]));
+    assert_eq!((page.next, page.at_end), (EventSeq::new(10), true));
+
+    let page = store
+        .read_events(session.id, EventSeq::new(10), 100)
+        .await
+        .unwrap();
+    assert!(page.records.is_empty());
+    assert_eq!((page.next, page.at_end), (EventSeq::new(10), true));
+
+    let stored = store.session(session.id).await.unwrap().unwrap();
+    assert_eq!(stored.next_seq, EventSeq::new(10));
+}
+
+#[tokio::test]
+async fn pages_stop_at_the_byte_cap_but_never_come_back_empty() {
+    let (_temp, dir) = data_dir();
+    let config = StoreConfig {
+        max_page_bytes: ByteCount::new(1),
+        ..StoreConfig::default()
+    };
+    let store = open(&dir, config).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+    store
+        .append(session.id, vec![output(0, 100), output(1, 100)])
+        .await
+        .unwrap();
+    let page = store
+        .read_events(session.id, EventSeq::ZERO, 10)
+        .await
+        .unwrap();
+    assert_eq!(page.records.len(), 1);
+    assert_eq!((page.next, page.at_end), (EventSeq::new(1), false));
+}
+
+#[tokio::test]
+async fn the_log_only_accepts_its_exact_continuation() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+
+    assert!(matches!(
+        store.create_session(session.clone()).await,
+        Err(StoreError::SessionExists(_))
+    ));
+    let gap = store.append(session.id, vec![output(1, 1)]).await;
+    assert!(matches!(
+        gap,
+        Err(StoreError::OutOfOrder { expected, got, .. })
+            if expected == EventSeq::ZERO && got == EventSeq::new(1)
+    ));
+    // A failing append leaves nothing behind, even its valid prefix.
+    let partial = store
+        .append(session.id, vec![output(0, 1), output(2, 1)])
+        .await;
+    assert!(matches!(partial, Err(StoreError::OutOfOrder { .. })));
+    let unknown = store.append(SessionId::random(), vec![output(0, 1)]).await;
+    assert!(matches!(unknown, Err(StoreError::UnknownSession(_))));
+    assert_eq!(
+        unknown.unwrap_err().code(),
+        vessel_proto::ErrorCode::NotFound
+    );
+
+    store.append(session.id, vec![output(0, 1)]).await.unwrap();
+    let page = store
+        .read_events(session.id, EventSeq::ZERO, 10)
+        .await
+        .unwrap();
+    assert_eq!(page.records, plain(&[output(0, 1)]));
+}
+
+#[tokio::test]
+async fn concurrent_appends_to_many_sessions_all_commit() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let mut sessions = Vec::new();
+    for n in 0..8 {
+        let session = new_session(n);
+        store.create_session(session.clone()).await.unwrap();
+        sessions.push(session.id);
+    }
+    let writers = sessions.iter().map(|&id| {
+        let store = store.clone();
+        tokio::spawn(async move {
+            for seq in 0..50 {
+                store.append(id, vec![output(seq, 8)]).await.unwrap();
+            }
+        })
+    });
+    for writer in futures_util::future::join_all(writers).await {
+        writer.unwrap();
+    }
+    for id in sessions {
+        let stored = store.session(id).await.unwrap().unwrap();
+        assert_eq!(stored.next_seq, EventSeq::new(50));
+    }
+}
+
+#[tokio::test]
+async fn session_rows_follow_the_records() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+    let harness_session = HarnessSessionId::new("acp-session-1");
+    let ready = record(
+        2,
+        SessionEvent::Agent {
+            event: AgentEvent::Ready {
+                harness_session: harness_session.clone(),
+            },
+        },
+    );
+    let exited = status(3, SessionStatus::Exited { code: Some(0) });
+    store
+        .append(
+            session.id,
+            vec![
+                status(0, SessionStatus::Starting),
+                status(1, SessionStatus::Running),
+                ready,
+                Arc::clone(&exited),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let stored = store.session(session.id).await.unwrap().unwrap();
+    assert_eq!(stored.status, SessionStatus::Exited { code: Some(0) });
+    assert_eq!(stored.ended_at, Some(exited.at));
+    assert_eq!(stored.harness_session, Some(harness_session));
+    assert_eq!(stored.next_seq, EventSeq::new(4));
+    assert_eq!(stored.spec, session.spec);
+    assert_eq!(stored.created_at, session.created_at);
+}
+
+#[tokio::test]
+async fn restart_interrupts_sessions_that_were_live() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let live = new_session(0);
+    let ended = new_session(1);
+    for session in [&live, &ended] {
+        store.create_session(session.clone()).await.unwrap();
+    }
+    store
+        .append(
+            live.id,
+            vec![
+                status(0, SessionStatus::Starting),
+                status(1, SessionStatus::Running),
+            ],
+        )
+        .await
+        .unwrap();
+    store
+        .append(
+            ended.id,
+            vec![
+                status(0, SessionStatus::Starting),
+                status(1, SessionStatus::Exited { code: Some(3) }),
+            ],
+        )
+        .await
+        .unwrap();
+    store.close().await;
+    assert!(matches!(
+        store.append(live.id, vec![output(2, 1)]).await,
+        Err(StoreError::Closed)
+    ));
+    drop(store);
+
+    let reopened = Store::open(&dir, StoreConfig::default()).await.unwrap();
+    assert_eq!(reopened.interrupted.len(), 1);
+    let interrupted = reopened.interrupted.first().unwrap();
+    assert_eq!(interrupted.id, live.id);
+    assert_eq!(interrupted.status, SessionStatus::Interrupted);
+    assert_eq!(interrupted.next_seq, EventSeq::new(3));
+    assert!(interrupted.ended_at.is_some());
+
+    let store = reopened.store;
+    let log = store
+        .read_events(live.id, EventSeq::ZERO, 10)
+        .await
+        .unwrap();
+    let statuses: Vec<_> = log
+        .records
+        .iter()
+        .map(|record| (record.seq.get(), record.event.clone()))
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            (
+                0,
+                SessionEvent::Status {
+                    status: SessionStatus::Starting
+                }
+            ),
+            (
+                1,
+                SessionEvent::Status {
+                    status: SessionStatus::Running
+                }
+            ),
+            (
+                2,
+                SessionEvent::Status {
+                    status: SessionStatus::Interrupted
+                }
+            ),
+        ]
+    );
+    let untouched = store.session(ended.id).await.unwrap().unwrap();
+    assert_eq!(untouched.status, SessionStatus::Exited { code: Some(3) });
+    assert_eq!(store.sessions().await.unwrap().len(), 2);
+
+    // A second restart finds nothing left to interrupt.
+    store.close().await;
+    drop(store);
+    let again = Store::open(&dir, StoreConfig::default()).await.unwrap();
+    assert!(again.interrupted.is_empty());
+}
+
+#[tokio::test]
+async fn retention_drops_the_oldest_records_but_keeps_the_newest() {
+    let (_temp, dir) = data_dir();
+    let config = StoreConfig {
+        retention: Retention {
+            max_session_bytes: ByteCount::new(600),
+            ..Retention::default()
+        },
+        ..StoreConfig::default()
+    };
+    let store = open(&dir, config).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+    for seq in 0..10 {
+        // Each record stores about 180 bytes.
+        store
+            .append(session.id, vec![output(seq, 100)])
+            .await
+            .unwrap();
+    }
+    let page = store
+        .read_events(session.id, EventSeq::ZERO, 100)
+        .await
+        .unwrap();
+    let first = page.records.first().unwrap().seq;
+    assert!(first > EventSeq::new(5), "kept from {first}");
+    assert_eq!(page.records.last().unwrap().seq, EventSeq::new(9));
+    assert_eq!((page.next, page.at_end), (EventSeq::new(10), true));
+    // Kept records are still a gap-free run.
+    for (record, seq) in page.records.iter().zip(first.get()..) {
+        assert_eq!(record.seq, EventSeq::new(seq));
+    }
+
+    // Even a single oversized record is kept.
+    store
+        .append(session.id, vec![output(10, 5000)])
+        .await
+        .unwrap();
+    let page = store
+        .read_events(session.id, EventSeq::ZERO, 100)
+        .await
+        .unwrap();
+    assert_eq!(page.records, plain(&[output(10, 5000)]));
+}
+
+#[tokio::test]
+async fn retention_keeps_the_most_recently_ended_sessions() {
+    let (_temp, dir) = data_dir();
+    let config = StoreConfig {
+        retention: Retention {
+            max_ended_sessions: 2,
+            ..Retention::default()
+        },
+        ..StoreConfig::default()
+    };
+    let store = open(&dir, config).await;
+    let live = new_session(0);
+    store.create_session(live.clone()).await.unwrap();
+    let mut ended = Vec::new();
+    for n in 1..=3 {
+        let session = new_session(n);
+        store.create_session(session.clone()).await.unwrap();
+        let end = Arc::new(EventRecord {
+            seq: EventSeq::ZERO,
+            at: at(100 + n),
+            event: SessionEvent::Status {
+                status: SessionStatus::Exited { code: None },
+            },
+        });
+        store.append(session.id, vec![end]).await.unwrap();
+        ended.push(session.id);
+    }
+    let kept: Vec<SessionId> = store
+        .sessions()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|session| session.id)
+        .collect();
+    let [oldest, second, newest] = ended.as_slice() else {
+        panic!("three sessions");
+    };
+    assert_eq!(kept, vec![*newest, *second, live.id]);
+    assert!(matches!(
+        store.read_events(*oldest, EventSeq::ZERO, 10).await,
+        Err(StoreError::UnknownSession(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_newer_schema_is_refused() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    store.close().await;
+    drop(store);
+    let connection = rusqlite::Connection::open(dir.database_path()).unwrap();
+    connection.pragma_update(None, "user_version", 99).unwrap();
+    drop(connection);
+    assert!(matches!(
+        Store::open(&dir, StoreConfig::default()).await,
+        Err(StoreError::NewerSchema { found: 99, .. })
+    ));
+}
+
+#[tokio::test]
+async fn reads_scale_past_the_idle_pool() {
+    let (_temp, dir) = data_dir();
+    let config = StoreConfig {
+        idle_readers: NonZeroUsize::new(1).unwrap(),
+        ..StoreConfig::default()
+    };
+    let store = open(&dir, config).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+    let reads = (0..16).map(|_| store.session(session.id));
+    for read in futures_util::future::join_all(reads).await {
+        assert_eq!(read.unwrap().unwrap().id, session.id);
+    }
+}
