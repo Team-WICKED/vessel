@@ -107,9 +107,6 @@ that ADR and this table.
     Structured status is `Starting` until the agent's `Ready`, then
     `Running`; a session that never became ready ends `Failed`.
   - `vessel-testkit`: `fake-tui`, `fake-acp` and the `Fake::path` locator.
-- Known gaps (wire contract): ACP user-message chunks (replayed by
-  `session/load`) and `raw_input` on tool call updates have no `AgentEvent`
-  field and are not forwarded.
 - In progress (milestone 1): every spine crate. `vessel-node` and
   `vessel-cli` still contain the protocol 1 code and are excluded from the
   workspace until they are ported.

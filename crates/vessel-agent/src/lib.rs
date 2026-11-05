@@ -22,10 +22,6 @@
 //! own tools, as they do in a terminal, and Vessel does not re-implement
 //! them.
 //!
-//! Known gaps, waiting on the wire contract: ACP's user-message chunks
-//! (replayed by `session/load`) and `raw_input` carried by tool call
-//! *updates* have no `AgentEvent` field, so they are not forwarded.
-//!
 //! [Decision Log]
 //! - Purpose: one client for every structured harness (ADR 0003).
 //! - Alternatives: the SDK's `ActiveSession` helper (it buffers updates in
