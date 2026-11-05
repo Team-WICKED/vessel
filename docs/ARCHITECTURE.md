@@ -111,9 +111,11 @@ depend on the node, so there is no cycle).
     Structured status is `Starting` until the agent's `Ready`, then
     `Running`; a session that never became ready ends `Failed`.
   - `vessel-testkit`: `fake-tui`, `fake-acp` and the `Fake::path` locator.
-- Spine track, transport and storage done:
+- Spine track:
   - `vessel-rpc`: handshake, typed calls with cancellation and an in-flight
-    bound, per-connection outbound queue, subscription ordering and lag on
+    bound (calls beyond it are refused `Unavailable`; the connection keeps
+    being read so `Cancel` gets through), per-connection outbound queue
+    with bounded flush batching, subscription ordering, release and lag on
     both ends (ADR 0006), in-memory transport for tests.
   - `vessel-store`: data directory (`node.id`, 0600 `token`), SQLite event
     log with a batching writer thread, paged reads, restart recovery to
@@ -127,11 +129,17 @@ depend on the node, so there is no cycle).
     durable channel into the store and publishes "durable through N"),
     `subscribe` (ring, then a durable-gated store gap fill, then live;
     `Lagged` when a subscriber falls behind), and an ordered shutdown in
-    which subscribers still receive the final `Interrupted` status.
-    Terminal sessions run end to end (`tests/terminal.rs`).
-- In progress (milestone 1): the structured half of the end-to-end test;
-  `vessel-cli`, which still contains the protocol 1 code and is excluded
-  from the workspace until it is ported.
+    which subscribers still receive the final `Interrupted` status. Both
+    modes run end to end (`tests/e2e`: `fake-tui` as `claude`, `fake-acp`
+    as its ACP adapter), including restart, `Interrupted` and resume.
+  - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
+    `sessions`, `run`, `attach`, `send`, `log`, `kill`; sessions named by
+    id prefix; terminal attach in raw mode with `Ctrl-]` to detach (live
+    resize on Unix, initial size only on Windows); structured attach as a
+    conversation with numbered permission answers. Tested through the
+    binary (`tests/cli.rs`).
+- Milestone 1 is complete on both tracks, pending the coordinator's
+  merge and the manual smokes against real harnesses.
 
 ## Later
 

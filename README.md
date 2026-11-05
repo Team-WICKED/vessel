@@ -31,19 +31,37 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Early. Milestone 1 (one node, done properly) is in progress; see
-[docs/plans/backend-m1.md](docs/plans/backend-m1.md).
+Milestone 1 (one node, done properly; see
+[docs/plans/backend-m1.md](docs/plans/backend-m1.md)) is implemented:
 
-- Done: the protocol 2 contract in `vessel-proto` (typed RPC, durable event
-  log, ACP-shaped agent timeline); the session runtime (`vessel-proc`,
-  `vessel-harness`, `vessel-pty`, `vessel-agent`, `vessel-session`): terminal
-  sessions in a PTY and structured sessions over ACP, with fake harnesses in
-  `vessel-testkit` for tests; the RPC layer (`vessel-rpc`), the SQLite event
-  store (`vessel-store`) and the typed client (`vessel-client`).
-- In progress: the node daemon on protocol 2, CLI with interactive attach.
-  Until they land, `vessel-node` and
-  `vessel-cli` hold the old protocol 1 code and are excluded from the
-  workspace.
+- the protocol 2 contract in `vessel-proto` (typed RPC, durable event log,
+  ACP-shaped agent timeline);
+- the session runtime: terminal sessions in a PTY and structured sessions
+  over ACP (`vessel-proc`, `vessel-harness`, `vessel-pty`, `vessel-agent`,
+  `vessel-session`), with fake harnesses in `vessel-testkit` for tests;
+- the RPC layer (`vessel-rpc`), the SQLite event store (`vessel-store`),
+  the node daemon `vesseld` (`vessel-node`), the typed client
+  (`vessel-client`) and the `vessel` CLI (`vessel-cli`).
+
+Not yet: other machines (SSH transport, relay, TLS), fleet sync, harness
+profiles, model routing, the LSP bridge. See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Try it
+
+```bash
+cargo build --release
+./target/release/vessel node start          # or ./target/release/vesseld
+# in another terminal, on the same machine (the token is read from ~/.vessel):
+./target/release/vessel status
+./target/release/vessel run claude          # Claude Code's own TUI; Ctrl-] detaches
+./target/release/vessel run claude --structured   # needs claude-agent-acp on PATH
+./target/release/vessel sessions
+./target/release/vessel attach 3f2a         # any unique prefix of a session id
+./target/release/vessel log 3f2a > session.log
+```
+
+Sessions survive client disconnects; stopping the node marks live ones
+`Interrupted`, and their logs stay readable after a restart.
 
 ## Layout
 

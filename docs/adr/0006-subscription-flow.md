@@ -42,6 +42,14 @@ Option 3.
   drops any frame still queued for that id. `session.unsubscribe` goes
   through the writer too: the client receives `SubscriptionEnded{Unsubscribed}`
   before the call's `Ack`.
+- Release: every sink carries a departure signal the writer watches. A
+  sink that ends cleanly says so; one dropped without ending is noticed
+  reliably (no best-effort message from `Drop`). Before its announcement
+  the subscription is discarded silently; after it, the client gets
+  `SubscriptionEnded{Lagged{resume_from}}` at the first record the writer
+  did not write, so a crashed or buggy forwarder costs the client a
+  resume, never a hang. Departures are handled after the queue, so records
+  queued before the drop still go out.
 - Client side: `Connection::subscribe` (not the generic `call`, which a
   `Unary` marker trait excludes `Subscribe` from at compile time) returns a
   `Subscription` with its own bounded channel, created by the connection's

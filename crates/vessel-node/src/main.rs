@@ -31,6 +31,8 @@ async fn main() -> ExitCode {
                 .unwrap_or_else(|_unset| "info".into()),
         )
         .with_writer(std::io::stderr)
+        // Colours only for a person at a terminal, not for log files.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
     let args = Args::parse();
