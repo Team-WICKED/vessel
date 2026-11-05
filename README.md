@@ -31,44 +31,21 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Early. What works today:
+Early. Milestone 1 (one node, done properly) is in progress; see
+[docs/plans/backend-m1.md](docs/plans/backend-m1.md).
 
-- `vesseld` runs on one machine, discovers installed harnesses, spawns them,
-  and streams their output over HTTP + WebSocket.
-- `vessel` CLI talks to a node: status, harness list, run, attach, send, kill.
-
-Nothing about peers, relay, or sync exists yet. See
-[docs/ROADMAP.md](docs/ROADMAP.md).
-
-## Quick start
-
-```bash
-cargo build --workspace
-```
-
-Start a node (foreground):
-
-```bash
-cargo run --bin vesseld
-```
-
-In another shell:
-
-```bash
-cargo run --bin vessel -- status
-cargo run --bin vessel -- run claude-code -- --version
-```
-
-`run` prints the session id, then streams output until the harness exits.
-Use `--detach` to return immediately and `attach <id>` to come back later.
+- Done: the protocol 2 contract in `vessel-proto` (typed RPC, durable event
+  log, ACP-shaped agent timeline).
+- In progress: PTY and ACP session runtime, SQLite event store, RPC server and
+  client, CLI with interactive attach. Until they land, `vessel-node` and
+  `vessel-cli` hold the old protocol 1 code and are excluded from the
+  workspace.
 
 ## Layout
 
-| Crate | What |
-| --- | --- |
-| `crates/vessel-core` | Shared types and wire protocol. No I/O. |
-| `crates/vessel-node` | The node daemon (`vesseld`) and its library. |
-| `crates/vessel-cli` | The `vessel` command-line client. |
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for every crate and how they
+depend on each other, [docs/adr/](docs/adr/) for why, and
+[docs/LESSONS.md](docs/LESSONS.md) for what Vessel takes from Zed and Paseo.
 
 ## Development
 

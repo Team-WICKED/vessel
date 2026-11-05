@@ -2,18 +2,22 @@
 
 Rough order. Each phase ends with something usable on its own.
 
-## Phase 0: one node, one machine (now)
+## Phase 0: one node, one machine (milestone 1, in progress)
+
+Plan: `docs/plans/backend-m1.md`.
 
 - [x] Workspace, lints, CI.
-- [x] Harness discovery.
-- [x] Spawn a harness, stream output, send input, kill.
-- [x] CLI: status, harnesses, sessions, run, attach, send, kill.
-- [ ] Interactive attach (forward local stdin).
-- [ ] Session persistence across node restarts (at least the log).
-- [ ] Auth token for non-loopback binds.
+- [x] Protocol 2 contract (`vessel-proto`): typed RPC, event log, ACP-shaped
+      agent timeline.
+- [ ] Terminal mode (PTY) and structured mode (ACP) sessions.
+- [ ] Durable session log with resume by sequence number (SQLite).
+- [ ] Token auth on every connection.
+- [ ] Typed client library; CLI with interactive attach.
 
 ## Phase 1: many nodes
 
+- [ ] SSH stdio transport (`vesseld attach`, Zed's proxy/daemon split).
+- [ ] Versioned side-by-side `vesseld` install and update on a remote.
 - [ ] Peer list and node identity exchange.
 - [ ] Relay: nodes reach each other without port-forwarding (evaluate
       `tsnet` vs WireGuard vs a hosted rendezvous).
@@ -21,6 +25,7 @@ Rough order. Each phase ends with something usable on its own.
 
 ## Phase 2: fleet sync
 
+- [ ] Harness profiles (one harness, several accounts or configs).
 - [ ] Sync skills, MCP server configs, memory, and conversation history.
 - [ ] First-run setup: `vessel init` on a fresh machine pulls the fleet's
       config and installs harnesses.
