@@ -1,5 +1,5 @@
 //! The `vessel` binary against an in-process node with `fake-tui` installed
-//! as `claude`. The CLI finds the node through `--node` and its token
+//! as `claude` and `fake-acp` as its ACP adapter. The CLI finds the node through `--node` and its token
 //! through `--data-dir`, as it would on the node's own machine.
 //!
 //! Tests wait on the CLI process and on the session's own end, never on
@@ -60,6 +60,8 @@ mod support {
             let bin = tempfile::tempdir().unwrap();
             let tui = Fake::Tui.path().unwrap();
             drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
+            let acp = Fake::Acp.path().unwrap();
+            drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Structured, &acp).unwrap());
             let mut config = Config::new(DataDir::new(data.path()));
             config.bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
             config.harness_lookup = Lookup::new([bin.path().to_path_buf()]);
@@ -230,6 +232,44 @@ async fn errors_are_reported_and_fail_the_command() {
             not_installed.stderr.contains("not installed"),
             "{}",
             not_installed.stderr
+        );
+        fixture.stop().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_piped_prompt_shows_the_whole_reply_then_detaches() {
+    within(async {
+        let fixture = Fixture::start().await;
+        let cwd = fixture.cwd();
+        let run = fixture
+            .vessel(
+                &["run", "claude", "--structured", "--detach", "--cwd", &cwd],
+                b"",
+            )
+            .await;
+        assert!(run.ok, "{}", run.stderr);
+        let id = run.stdout.trim().to_owned();
+
+        let attach = fixture.vessel(&["attach", &id], b"plain\n").await;
+        assert!(attach.ok, "{}", attach.stderr);
+        assert!(attach.stdout.contains("> plain"), "{}", attach.stdout);
+        assert!(attach.stdout.contains("echo: plain"), "{}", attach.stdout);
+        assert!(
+            attach.stdout.contains("[turn ended: done]"),
+            "{}",
+            attach.stdout
+        );
+        assert!(attach.stderr.contains("detached"), "{}", attach.stderr);
+
+        let log = fixture.vessel(&["log", &id], b"").await;
+        assert!(log.stdout.contains("echo: plain"), "{}", log.stdout);
+        let sessions = fixture.vessel(&["sessions"], b"").await;
+        assert!(
+            sessions.stdout.contains(" structured "),
+            "{}",
+            sessions.stdout
         );
         fixture.stop().await;
     })

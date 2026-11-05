@@ -43,20 +43,20 @@ enum Ended {
     Session(Option<vessel_proto::SessionStatus>),
 }
 
-/// Send input while attached. A refusal from the node (the session just
-/// ended, or another client answered a permission request first) is shown
-/// and attaching goes on; the timeline says what happened. Losing the
-/// connection ends the attach.
+/// Send input while attached; returns whether the node accepted it. A
+/// refusal (the session just ended, or another client answered a
+/// permission request first) is shown and attaching goes on; the timeline
+/// says what happened. Losing the connection ends the attach.
 async fn send(
     client: &NodeClient,
     session: SessionId,
     input: SessionInput,
-) -> Result<(), CliError> {
+) -> Result<bool, CliError> {
     match client.send(session, input).await {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(true),
         Err(CallError::Remote(error)) => {
             io::note(&format!("\r\n[vessel] {}\r\n", error.message)).await?;
-            Ok(())
+            Ok(false)
         }
         Err(error) => Err(error.into()),
     }

@@ -1,11 +1,18 @@
 //! Structured attach: the agent's timeline as text, typed lines as prompts,
 //! numbers as permission answers. Other clients may answer the same
-//! request first; the node then refuses ours and shows who won through the
-//! timeline.
+//! request first; the node then refuses ours and the timeline shows who won.
+//!
+//! History is replayed up to where the session was when attaching before
+//! any input is read, so every turn seen afterwards is new. That makes the
+//! end of input well defined: the attach leaves once every prompt it sent
+//! has started and the turn in progress has ended, so
+//! `echo "fix the build" | vessel attach ID` prints the whole reply and
+//! exits.
 
-use vessel_client::NodeClient;
+use vessel_client::{NodeClient, SessionStream};
 use vessel_proto::{
-    ContentBlock, EventSeq, PermissionOutcome, SessionEvent, SessionId, SessionInput,
+    AgentEvent, ContentBlock, EventRecord, EventSeq, PermissionOutcome, SessionEvent, SessionId,
+    SessionInput, SessionStatus,
 };
 
 use super::{Ended, send};
@@ -13,38 +20,82 @@ use crate::error::CliError;
 use crate::io;
 use crate::view::{Action, Conversation, HELP};
 
+/// Turns as seen by this attach.
+#[derive(Debug, Default)]
+struct Turns {
+    /// A turn has started and not ended.
+    in_progress: bool,
+    /// Prompts this attach sent whose turn has not started yet.
+    unstarted: usize,
+    /// Input ended; leave once the turns above are done.
+    input_closed: bool,
+}
+
+impl Turns {
+    fn observe(&mut self, record: &EventRecord) {
+        if let SessionEvent::Agent { event } = &record.event {
+            match event {
+                AgentEvent::TurnStarted { .. } => {
+                    self.in_progress = true;
+                    self.unstarted = self.unstarted.saturating_sub(1);
+                }
+                AgentEvent::TurnEnded { .. } | AgentEvent::TurnFailed { .. } => {
+                    self.in_progress = false;
+                }
+                AgentEvent::Ready { .. }
+                | AgentEvent::UserMessageChunk { .. }
+                | AgentEvent::MessageChunk { .. }
+                | AgentEvent::ThoughtChunk { .. }
+                | AgentEvent::ToolCall(_)
+                | AgentEvent::ToolCallUpdate(_)
+                | AgentEvent::Plan { .. }
+                | AgentEvent::PermissionRequested(_)
+                | AgentEvent::PermissionResolved { .. }
+                | AgentEvent::HarnessLog { .. } => {}
+            }
+        }
+    }
+
+    const fn done(&self) -> bool {
+        self.input_closed && self.unstarted == 0 && !self.in_progress
+    }
+}
+
 pub(super) async fn attach(
     client: &NodeClient,
     session: SessionId,
     from: EventSeq,
 ) -> Result<Ended, CliError> {
     let mut stream = client.follow(session, from).await?;
+    let mut view = View::default();
+    // History first, up to where the session was when the stream opened.
+    let joined_at = stream.info().next_seq;
+    while stream.cursor() < joined_at {
+        if let Some(ended) = view.next(&mut stream).await? {
+            return Ok(ended);
+        }
+    }
     io::note(HELP).await?;
     let mut lines = io::input_lines()?;
-    let mut conversation = Conversation::default();
-    let mut last_status = None;
     loop {
         tokio::select! {
-            item = stream.next() => match item {
-                None => return Ok(Ended::Session(last_status)),
-                Some(Ok(record)) => {
-                    if let SessionEvent::Status { status } = &record.event
-                        && !status.is_live()
-                    {
-                        last_status = Some(status.clone());
-                    }
-                    io::out(conversation.show(&record).as_bytes()).await?;
+            ended = view.next(&mut stream) => {
+                if let Some(ended) = ended? {
+                    return Ok(ended);
                 }
-                Some(Err(error)) if !error.is_fatal() => {
-                    io::note(&format!("[vessel] {error}\n")).await?;
-                }
-                Some(Err(error)) => return Err(error.into()),
-            },
-            line = lines.recv() => {
-                let Some(line) = line else {
+                if view.turns.done() {
                     return Ok(Ended::Detached);
+                }
+            }
+            line = lines.recv(), if !view.turns.input_closed => {
+                let Some(line) = line else {
+                    view.turns.input_closed = true;
+                    if view.turns.done() {
+                        return Ok(Ended::Detached);
+                    }
+                    continue;
                 };
-                let input = match conversation.interpret(&line) {
+                let input = match view.conversation.interpret(&line) {
                     Action::Prompt(text) => SessionInput::Prompt {
                         content: vec![ContentBlock::Text { text }],
                     },
@@ -60,8 +111,43 @@ pub(super) async fn attach(
                     }
                     Action::Nothing => continue,
                 };
-                send(client, session, input).await?;
+                let is_prompt = matches!(input, SessionInput::Prompt { .. });
+                if send(client, session, input).await? && is_prompt {
+                    view.turns.unstarted = view.turns.unstarted.saturating_add(1);
+                }
             }
+        }
+    }
+}
+
+/// What has been shown so far.
+#[derive(Debug, Default)]
+struct View {
+    conversation: Conversation,
+    turns: Turns,
+    last_status: Option<SessionStatus>,
+}
+
+impl View {
+    /// Show the next record; `Some` when the session has ended.
+    async fn next(&mut self, stream: &mut SessionStream) -> Result<Option<Ended>, CliError> {
+        match stream.next().await {
+            None => Ok(Some(Ended::Session(self.last_status.take()))),
+            Some(Ok(record)) => {
+                if let SessionEvent::Status { status } = &record.event
+                    && !status.is_live()
+                {
+                    self.last_status = Some(status.clone());
+                }
+                self.turns.observe(&record);
+                io::out(self.conversation.show(&record).as_bytes()).await?;
+                Ok(None)
+            }
+            Some(Err(error)) if !error.is_fatal() => {
+                io::note(&format!("[vessel] {error}\n")).await?;
+                Ok(None)
+            }
+            Some(Err(error)) => Err(error.into()),
         }
     }
 }

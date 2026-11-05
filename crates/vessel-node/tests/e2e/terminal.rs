@@ -1,9 +1,4 @@
-//! The node end to end in terminal mode: an in-process `vesseld` on a
-//! random loopback port with a temporary data directory, `fake-tui`
-//! installed as `claude`, driven only through `vessel-client`.
-//!
-//! Tests wait on records and replies, never on time; the timeout only turns
-//! a hang into a failure.
+//! Terminal mode: `fake-tui` as `claude`.
 
 use vessel_client::{CallError, NodeClient};
 use vessel_proto::{
@@ -11,172 +6,9 @@ use vessel_proto::{
     TerminalSize,
 };
 
-use support::{
+use crate::support::{
     Fixture, collect_until, keys, output_of, read_all, seqs, status_of, terminal_spec, within,
 };
-
-#[cfg(test)]
-mod support {
-    use std::future::Future;
-    use std::net::{Ipv4Addr, SocketAddr};
-    use std::time::Duration;
-
-    use bytes::Bytes;
-    use tempfile::TempDir;
-    use vessel_client::{BearerToken, NodeClient, NodeUrl, SessionStream};
-    use vessel_harness::Lookup;
-    use vessel_harness::fakes::{Role, install};
-    use vessel_node::{Config, DataDir, Node};
-    use vessel_proto::{
-        ClientInfo, EventRecord, EventSeq, HarnessKind, SessionEvent, SessionId, SessionInput,
-        SessionMode, SessionSpec, SessionStatus, TerminalBytes, TerminalInput, TerminalSize,
-    };
-    use vessel_testkit::Fake;
-
-    const SAFETY_NET: Duration = Duration::from_secs(60);
-
-    pub(super) async fn within<F: Future>(test: F) -> F::Output {
-        tokio::time::timeout(SAFETY_NET, test)
-            .await
-            .expect("test timed out")
-    }
-
-    /// A data directory and a harness directory holding `fake-tui` as
-    /// `claude`, shared by every node started from this fixture.
-    pub(super) struct Fixture {
-        data: TempDir,
-        bin: TempDir,
-    }
-
-    impl Fixture {
-        pub(super) fn new() -> Self {
-            let data = tempfile::tempdir().unwrap();
-            let bin = tempfile::tempdir().unwrap();
-            let tui = Fake::Tui.path().unwrap();
-            drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
-            Self { data, bin }
-        }
-
-        pub(super) fn data_dir(&self) -> DataDir {
-            DataDir::new(self.data.path())
-        }
-
-        pub(super) async fn start(&self) -> Node {
-            self.start_with(|_| {}).await
-        }
-
-        pub(super) async fn start_with(&self, adjust: impl FnOnce(&mut Config)) -> Node {
-            let mut config = Config::new(self.data_dir());
-            config.bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-            config.harness_lookup = Lookup::new([self.bin.path().to_path_buf()]);
-            adjust(&mut config);
-            Node::start(config).await.unwrap()
-        }
-
-        pub(super) fn token(&self) -> BearerToken {
-            self.data_dir()
-                .read_token()
-                .unwrap()
-                .expose()
-                .parse()
-                .unwrap()
-        }
-
-        pub(super) async fn connect(&self, node: &Node) -> NodeClient {
-            NodeClient::connect(&url(node), &self.token(), client())
-                .await
-                .unwrap()
-        }
-
-        pub(super) fn cwd(&self) -> std::path::PathBuf {
-            self.data.path().to_path_buf()
-        }
-    }
-
-    pub(super) fn url(node: &Node) -> NodeUrl {
-        node.address().to_string().parse().unwrap()
-    }
-
-    pub(super) fn client() -> ClientInfo {
-        ClientInfo {
-            name: "vessel-node-e2e".to_owned(),
-            version: "0".to_owned(),
-        }
-    }
-
-    pub(super) fn terminal_spec(fixture: &Fixture, harness: HarnessKind) -> SessionSpec {
-        SessionSpec {
-            harness,
-            cwd: Some(fixture.cwd()),
-            mode: SessionMode::Terminal {
-                args: Vec::new(),
-                size: TerminalSize::default(),
-            },
-        }
-    }
-
-    pub(super) fn keys(text: &'static str) -> SessionInput {
-        SessionInput::Terminal {
-            input: TerminalInput::Data {
-                data: TerminalBytes::new(Bytes::from_static(text.as_bytes())),
-            },
-        }
-    }
-
-    /// The terminal output in `records`, as text.
-    pub(super) fn output_of(records: &[EventRecord]) -> String {
-        let bytes: Vec<u8> = records
-            .iter()
-            .filter_map(|record| match &record.event {
-                SessionEvent::Terminal(output) => Some(output.data.bytes().to_vec()),
-                SessionEvent::Status { .. } | SessionEvent::Agent { .. } => None,
-            })
-            .flatten()
-            .collect();
-        String::from_utf8_lossy(&bytes).into_owned()
-    }
-
-    /// Read records into `seen` until the output contains `needle`.
-    pub(super) async fn collect_until(
-        stream: &mut SessionStream,
-        seen: &mut Vec<EventRecord>,
-        needle: &str,
-    ) {
-        while !output_of(seen).contains(needle) {
-            let record = stream
-                .next()
-                .await
-                .unwrap_or_else(|| panic!("stream ended before {needle:?}"))
-                .unwrap();
-            seen.push(record);
-        }
-    }
-
-    pub(super) fn seqs(records: &[EventRecord]) -> Vec<u64> {
-        records.iter().map(|record| record.seq.get()).collect()
-    }
-
-    pub(super) fn status_of(record: &EventRecord) -> Option<&SessionStatus> {
-        match &record.event {
-            SessionEvent::Status { status } => Some(status),
-            SessionEvent::Terminal(_) | SessionEvent::Agent { .. } => None,
-        }
-    }
-
-    /// Read a whole log with `session.read`, page by page.
-    pub(super) async fn read_all(client: &NodeClient, session: SessionId) -> Vec<EventRecord> {
-        let mut records = Vec::new();
-        let mut from = EventSeq::ZERO;
-        loop {
-            let page = client.read(session, from, 7).await.unwrap();
-            records.extend(page.records);
-            from = page.next;
-            if page.at_end {
-                return records;
-            }
-        }
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_terminal_session_survives_clients_and_a_node_restart() {
@@ -358,7 +190,12 @@ async fn connections_need_the_token() {
         let fixture = Fixture::new();
         let node = fixture.start().await;
         let wrong: vessel_client::BearerToken = "not-the-token".parse().unwrap();
-        let refused = NodeClient::connect(&support::url(&node), &wrong, support::client()).await;
+        let refused = NodeClient::connect(
+            &crate::support::url(&node),
+            &wrong,
+            crate::support::client(),
+        )
+        .await;
         assert!(
             matches!(refused, Err(vessel_client::ConnectError::Unauthorized)),
             "{refused:?}"
