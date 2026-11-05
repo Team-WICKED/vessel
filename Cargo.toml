@@ -75,8 +75,13 @@ str_to_string = "warn"
 wildcard_enum_match_arm = "warn"
 
 [workspace.dependencies]
+vessel-harness = { path = "crates/vessel-harness" }
+vessel-proc = { path = "crates/vessel-proc" }
 vessel-proto = { path = "crates/vessel-proto" }
+vessel-pty = { path = "crates/vessel-pty" }
 vessel-node = { path = "crates/vessel-node" }
+vessel-session = { path = "crates/vessel-session" }
+vessel-testkit = { path = "crates/vessel-testkit" }
 
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.23"
@@ -86,7 +91,10 @@ clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
 futures-util = "0.3"
 hostname = "0.4"
+nix = { version = "0.31", features = ["signal"] }
+portable-pty = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustix = { version = "1", default-features = false, features = ["std", "termios"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"

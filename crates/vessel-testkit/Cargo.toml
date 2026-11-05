@@ -1,0 +1,23 @@
+[package]
+name = "vessel-testkit"
+description = "Fake harness binaries (fake-tui, fake-acp) for Vessel's process-level tests; never shipped"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "fake-tui"
+path = "src/bin/fake_tui.rs"
+
+[dependencies]
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[lints]
+workspace = true
