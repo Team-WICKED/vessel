@@ -36,6 +36,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{Outcome, Reply, ServerFrame, SubscriptionEnd, SubscriptionId};
 
+use super::encode::Frame;
 use super::outbound::Outgoing;
 use crate::error::ServeError;
 
@@ -55,13 +56,13 @@ struct Open {
 
 impl Subscriptions {
     /// Apply one queued item and return the frame to write, if any.
-    fn apply(&mut self, item: Outgoing) -> Option<ServerFrame> {
+    fn apply(&mut self, item: Outgoing) -> Option<Frame> {
         match item {
             Outgoing::Response { id, outcome } => {
                 if let Outcome::Ok(Reply::Subscribe(subscribed)) = &outcome {
                     self.announce(subscribed.subscription);
                 }
-                Some(ServerFrame::Response { id, outcome })
+                Some(Frame::Server(ServerFrame::Response { id, outcome }))
             }
             Outgoing::Open {
                 subscription,
@@ -83,14 +84,14 @@ impl Subscriptions {
             } => self
                 .open
                 .contains_key(&subscription)
-                .then_some(ServerFrame::Event {
+                .then_some(Frame::Event {
                     subscription,
                     record,
                 }),
             Outgoing::End { subscription, end } => self
                 .open
                 .remove(&subscription)
-                .map(|_open| ServerFrame::SubscriptionEnded { subscription, end }),
+                .map(|_open| Frame::Server(ServerFrame::SubscriptionEnded { subscription, end })),
             Outgoing::Close {
                 subscription,
                 found,
@@ -98,10 +99,10 @@ impl Subscriptions {
                 let closed = self.open.remove(&subscription);
                 let frame = closed.as_ref().map(|open| {
                     open.cancel.cancel();
-                    ServerFrame::SubscriptionEnded {
+                    Frame::Server(ServerFrame::SubscriptionEnded {
                         subscription,
                         end: SubscriptionEnd::Unsubscribed,
-                    }
+                    })
                 });
                 if found.send(closed.is_some()).is_err() {
                     tracing::trace!(%subscription, "unsubscribe call went away");
@@ -160,7 +161,7 @@ where
         let Some(frame) = subscriptions.apply(item) else {
             continue;
         };
-        let text = serde_json::to_string(&frame).map_err(ServeError::Encode)?;
+        let text = frame.encode().map_err(ServeError::Encode)?;
         // Queue frames without flushing while more are waiting, so a burst
         // costs one flush rather than one per frame.
         let flush = queue.is_empty();
@@ -210,7 +211,7 @@ async fn finish<K, E>(
         let Some(frame) = subscriptions.apply(item) else {
             continue;
         };
-        let Ok(text) = serde_json::to_string(&frame) else {
+        let Ok(text) = frame.encode() else {
             break;
         };
         if sink.feed(text).await.is_err() {

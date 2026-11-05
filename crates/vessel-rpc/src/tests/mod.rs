@@ -231,7 +231,7 @@ impl Handler for Fake {
                 return;
             }
             for seq in request.from.get()..RECORDS {
-                if sink.send(record(seq)).await.is_err() {
+                if sink.send(Arc::new(record(seq))).await.is_err() {
                     return;
                 }
             }

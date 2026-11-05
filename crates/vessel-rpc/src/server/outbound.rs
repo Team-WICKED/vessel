@@ -22,10 +22,11 @@ pub(super) enum Outgoing {
         announce: oneshot::Sender<()>,
         cancel: CancellationToken,
     },
-    /// A record for an open subscription.
+    /// A record for an open subscription, shared with its other
+    /// subscribers.
     Event {
         subscription: SubscriptionId,
-        record: EventRecord,
+        record: Arc<EventRecord>,
     },
     /// The forwarder ended its subscription.
     End {
@@ -158,7 +159,10 @@ impl SubscriptionSink {
     ///
     /// # Errors
     /// The client unsubscribed or the connection is closing.
-    pub async fn send(&mut self, record: EventRecord) -> Result<(), SubscriptionClosed> {
+    ///
+    /// The record is shared, not copied: the same `Arc` can go to every
+    /// subscriber of a session.
+    pub async fn send(&mut self, record: Arc<EventRecord>) -> Result<(), SubscriptionClosed> {
         self.wait_announced().await?;
         let event = Outgoing::Event {
             subscription: self.id,
