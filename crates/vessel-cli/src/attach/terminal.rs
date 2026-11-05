@@ -39,7 +39,7 @@ pub(super) async fn attach(
         io::note("[vessel] attached; Ctrl-] detaches\r\n").await?;
     }
     if let Some(size) = window_size() {
-        send(client, session, resize(size)).await?;
+        let _accepted = send(client, session, resize(size)).await?;
     }
     let mut keys = io::input_chunks()?;
     let mut size_changes = resizes();
@@ -75,7 +75,8 @@ pub(super) async fn attach(
                 let (keys, detach) = until_detach(chunk);
                 if !keys.is_empty() {
                     let data = TerminalInput::Data { data: TerminalBytes::new(keys) };
-                    send(client, session, SessionInput::Terminal { input: data }).await?;
+                    let _accepted =
+                        send(client, session, SessionInput::Terminal { input: data }).await?;
                 }
                 if detach {
                     return Ok(Ended::Detached);
@@ -85,7 +86,7 @@ pub(super) async fn attach(
                 if notice.is_none() {
                     size_changes_open = false;
                 } else if let Some(size) = window_size() {
-                    send(client, session, resize(size)).await?;
+                    let _accepted = send(client, session, resize(size)).await?;
                 }
             }
         }

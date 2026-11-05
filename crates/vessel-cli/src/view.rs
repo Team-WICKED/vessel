@@ -38,11 +38,25 @@ pub(crate) enum Action {
 pub(crate) const HELP: &str = "type a message and press Enter; while a permission request is \
 open, a number answers it; /cancel stops the turn; /detach (or Ctrl-D) leaves\n";
 
-/// State needed to render a timeline: whether a reply is mid-line, and the
-/// permission requests still open (oldest first).
+/// Which streamed message, if any, the current output line belongs to.
+/// Chunks of the same message continue the line; anything else starts a
+/// new one.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Streaming {
+    /// At the start of a line.
+    #[default]
+    Nothing,
+    /// The agent's reply.
+    Reply,
+    /// A user message the harness replays on resume.
+    UserReplay,
+}
+
+/// State needed to render a timeline: what is streaming on the current
+/// line, and the permission requests still open (oldest first).
 #[derive(Debug, Default)]
 pub(crate) struct Conversation {
-    mid_line: bool,
+    streaming: Streaming,
     pending: Vec<PermissionRequest>,
 }
 
@@ -65,10 +79,10 @@ impl Conversation {
                 self.line(format!("[ready: harness session {harness_session}]"))
             }
             AgentEvent::TurnStarted { content } => self.line(format!("> {}", text(content))),
-            AgentEvent::MessageChunk { content } => {
-                self.mid_line = true;
-                block(content)
+            AgentEvent::UserMessageChunk { content } => {
+                self.stream(Streaming::UserReplay, "> ", content)
             }
+            AgentEvent::MessageChunk { content } => self.stream(Streaming::Reply, "", content),
             AgentEvent::ThoughtChunk { content } => {
                 self.line(format!("(thinking) {}", block(content)))
             }
@@ -132,13 +146,28 @@ impl Conversation {
         }
     }
 
-    /// `text` on a line of its own, ending any reply in progress first.
+    /// `text` on a line of its own, ending any streamed message first.
     fn line(&mut self, mut text: String) -> String {
-        if self.mid_line {
+        if self.streaming != Streaming::Nothing {
             text.insert(0, '\n');
         }
-        self.mid_line = false;
+        self.streaming = Streaming::Nothing;
         text.push('\n');
+        text
+    }
+
+    /// One chunk of a streamed message: continues the line if the same
+    /// message is streaming, otherwise starts a new line with `prefix`.
+    fn stream(&mut self, message: Streaming, prefix: &str, content: &ContentBlock) -> String {
+        let mut text = String::new();
+        if self.streaming != message {
+            if self.streaming != Streaming::Nothing {
+                text.push('\n');
+            }
+            text.push_str(prefix);
+        }
+        self.streaming = message;
+        text.push_str(&block(content));
         text
     }
 
@@ -258,6 +287,22 @@ mod tests {
         });
         assert_eq!(view.show(&ended), "\n[turn ended: done]\n");
         assert_eq!(view.show(&ended), "[turn ended: done]\n");
+    }
+
+    #[test]
+    fn replayed_user_messages_get_their_own_lines() {
+        let mut view = Conversation::default();
+        let user = |text: &str| {
+            agent(AgentEvent::UserMessageChunk {
+                content: ContentBlock::Text {
+                    text: text.to_owned(),
+                },
+            })
+        };
+        assert_eq!(view.show(&user("fix ")), "> fix ");
+        assert_eq!(view.show(&user("it")), "it");
+        assert_eq!(view.show(&chunk("On it.")), "\nOn it.");
+        assert_eq!(view.show(&user("thanks")), "\n> thanks");
     }
 
     #[test]
