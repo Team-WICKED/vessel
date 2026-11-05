@@ -2,7 +2,7 @@
 resolver = "3"
 members = ["crates/*"]
 # Parked until ported to the protocol-2 contract (docs/plans/backend-m1.md, spine track).
-exclude = ["crates/vessel-node", "crates/vessel-cli"]
+exclude = ["crates/vessel-cli"]
 
 [workspace.package]
 version = "0.1.0"

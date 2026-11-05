@@ -1,6 +1,6 @@
 [package]
 name = "vessel-node"
-description = "Vessel node daemon: runs agent harnesses on one machine and exposes them over HTTP/WS"
+description = "Vessel node daemon (vesseld): runs agent harness sessions on one machine and serves them over protocol 2"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,21 +12,29 @@ name = "vesseld"
 path = "src/main.rs"
 
 [dependencies]
-vessel-core.workspace = true
+vessel-harness.workspace = true
+vessel-proto.workspace = true
+vessel-rpc.workspace = true
+vessel-session.workspace = true
+vessel-store.workspace = true
 
 axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
-dirs.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+hostname.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-which.workspace = true
-hostname.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+tempfile.workspace = true
+vessel-client.workspace = true
+vessel-harness = { workspace = true, features = ["fakes"] }
+vessel-testkit.workspace = true
 
 [lints]
 workspace = true

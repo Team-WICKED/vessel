@@ -121,13 +121,18 @@ pub enum OutboundError {
 }
 
 impl OutboundError {
+    /// The wire error code a handler should answer with.
+    #[must_use]
+    pub const fn code(self) -> ErrorCode {
+        match self {
+            Self::ConnectionClosed | Self::SubscriptionIdsExhausted => ErrorCode::Unavailable,
+            Self::UnknownSubscription(_) => ErrorCode::NotFound,
+        }
+    }
+
     /// The wire error a handler should answer with.
     #[must_use]
     pub fn to_wire(self) -> WireError {
-        let code = match self {
-            Self::ConnectionClosed | Self::SubscriptionIdsExhausted => ErrorCode::Unavailable,
-            Self::UnknownSubscription(_) => ErrorCode::NotFound,
-        };
-        WireError::new(code, self.to_string())
+        WireError::new(self.code(), self.to_string())
     }
 }
