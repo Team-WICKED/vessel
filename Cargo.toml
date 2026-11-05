@@ -76,12 +76,15 @@ wildcard_enum_match_arm = "warn"
 
 [workspace.dependencies]
 vessel-agent = { path = "crates/vessel-agent" }
+vessel-client = { path = "crates/vessel-client" }
 vessel-harness = { path = "crates/vessel-harness" }
+vessel-node = { path = "crates/vessel-node" }
 vessel-proc = { path = "crates/vessel-proc" }
 vessel-proto = { path = "crates/vessel-proto" }
 vessel-pty = { path = "crates/vessel-pty" }
-vessel-node = { path = "crates/vessel-node" }
+vessel-rpc = { path = "crates/vessel-rpc" }
 vessel-session = { path = "crates/vessel-session" }
+vessel-store = { path = "crates/vessel-store" }
 vessel-testkit = { path = "crates/vessel-testkit" }
 
 # The Agent Client Protocol SDK (Zed's); one pinned version, used only by

@@ -1348,6 +1348,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "vessel-rpc"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "vessel-proto",
+]
+
+[[package]]
 name = "vessel-session"
 version = "0.1.0"
 dependencies = [
