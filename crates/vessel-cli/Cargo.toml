@@ -1,6 +1,6 @@
 [package]
 name = "vessel-cli"
-description = "Vessel command-line client"
+description = "Vessel command-line client: run, attach to and inspect harness sessions on a node"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,19 +12,23 @@ name = "vessel"
 path = "src/main.rs"
 
 [dependencies]
-vessel-core.workspace = true
+vessel-client.workspace = true
 vessel-node.workspace = true
+vessel-proto.workspace = true
 
+bytes.workspace = true
 clap.workspace = true
-futures-util.workspace = true
-reqwest.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+crossterm.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-tokio-tungstenite.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tempfile.workspace = true
+vessel-harness = { workspace = true, features = ["fakes"] }
+vessel-testkit.workspace = true
 
 [lints]
 workspace = true
