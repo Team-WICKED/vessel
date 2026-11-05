@@ -119,8 +119,8 @@ to change, tell the coordinator first.
 ```rust
 pub struct RuntimeConfig {
     pub harness_lookup: vessel_harness::Lookup, // where binaries are found
-    pub ring_capacity: usize,     // in-memory records per session (cache)
-    pub durable_capacity: usize,  // bound of the durable channel
+    pub ring_capacity: NonZeroUsize,     // in-memory records per session (cache)
+    pub durable_capacity: NonZeroUsize,  // bound of the durable channel
 }
 
 pub struct SessionRuntime { /* private */ }
@@ -140,7 +140,7 @@ pub struct Created {
     /// Every record, in order, exactly once. The node must drain it into the
     /// store. Bounded: if the node stops draining, the session applies
     /// backpressure (pumps pause) rather than dropping records.
-    pub durable: tokio::sync::mpsc::Receiver<EventRecord>,
+    pub durable: tokio::sync::mpsc::Receiver<Arc<EventRecord>>,
 }
 
 #[derive(Clone)]
@@ -152,23 +152,30 @@ impl SessionHandle {
     pub async fn send(&self, input: SessionInput) -> Result<(), SessionError>;
     pub fn kill(&self);
     /// Live records from `from`. Fails with `Gap { oldest_cached }` when
-    /// `from` is older than the in-memory ring; the node then reads
-    /// `from..oldest_cached` from the store and calls `follow` again.
-    pub fn follow(&self, from: EventSeq) -> Result<Follow, Gap>;
+    /// `from` is older than the in-memory ring (the node then reads
+    /// `from..oldest_cached` from the store and calls `follow` again), and
+    /// with `Ahead { next }` when `from` is past the end of the log.
+    pub fn follow(&self, from: EventSeq) -> Result<Follow, FollowError>;
 }
 
 pub struct Follow {
-    pub cached: Vec<EventRecord>,                 // from..next, from the ring
-    pub live: tokio::sync::broadcast::Receiver<EventRecord>, // after that
+    pub cached: Vec<Arc<EventRecord>>,                 // from..next, from the ring
+    pub live: tokio::sync::broadcast::Receiver<Arc<EventRecord>>, // after that
 }
 
-pub struct Gap { pub oldest_cached: EventSeq }
+pub enum FollowError {
+    Gap { oldest_cached: EventSeq },
+    Ahead { next: EventSeq },
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError { /* typed variants */ }
 impl SessionError { pub fn code(&self) -> vessel_proto::ErrorCode; }
 ```
 
+- Records are allocated once as `Arc<EventRecord>` and shared by the
+  durable channel, the ring and every follower (amended 2026-11-05 after the
+  R checkpoint review; no per-follower deep clones).
 - One actor task per session owns the process (PTY or ACP), assigns
   `EventSeq`, appends to the ring, sends to `durable`, then broadcasts.
 - `SessionInput` that does not match the mode returns `Unsupported`.
