@@ -138,8 +138,19 @@ depend on the node, so there is no cycle).
     resize on Unix, initial size only on Windows); structured attach as a
     conversation with numbered permission answers. Tested through the
     binary (`tests/cli.rs`).
-- Milestone 1 is complete on both tracks, pending the coordinator's
-  merge and the manual smokes against real harnesses.
+- Milestone 1 is merged on `backend/m1` (draft PR #1).
+- Manual smoke on Linux (2026-11-05) with real binaries:
+  - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.
+  - A structured Claude Code session (Haiku, `claude-agent-acp` 0.100.0)
+    answered.
+  - A `SIGTERM` stop left no adapter processes behind. After a restart the
+    session showed `interrupted` with its full log.
+  - `--resume` (ACP `session/load`) continued the conversation.
+  - `/rpc` without a token returned 401.
+- Harness environment: `vesseld` passes its own environment to harnesses.
+  For Claude Code that means the `CLAUDE_CONFIG_DIR` of whoever started the
+  node decides which account a session uses. Choosing this per session is
+  the "harness profiles" item of a later milestone.
 
 ## Later
 
