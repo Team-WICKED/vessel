@@ -1,6 +1,6 @@
 # Backend milestone 1: one node, done properly
 
-Status: in progress (started 2026-11-05). Owner: coordinator (the agent that
+Status: implemented on `backend/m1` (2026-11-05), draft PR #1; review fixes in progress. Owner: coordinator (the agent that
 wrote this plan). Two implementation tracks run in parallel in separate git
 worktrees.
 
@@ -279,5 +279,7 @@ when they compile against protocol 2.
   `vesseld` install and update (Zed's remote server model), peer list.
 - M3: relay on an existing overlay (tsnet or WireGuard), connected-hosts
   routing with grant intersection.
-- M4: harness profiles (Paseo `extends`), fleet sync, `vessel init`.
+- M4: harness profiles (Paseo `extends`; today the node's own environment,
+  including `CLAUDE_CONFIG_DIR`, decides the account), fleet sync,
+  `vessel init`.
 - M5: model routing proxy; LSP-to-MCP bridge.
