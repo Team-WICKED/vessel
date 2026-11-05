@@ -1,0 +1,25 @@
+[package]
+name = "vessel-client"
+description = "Typed async client for Vessel nodes, with gap-free session streams"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proto.workspace = true
+vessel-rpc.workspace = true
+
+futures-util = { workspace = true, features = ["sink"] }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true
