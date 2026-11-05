@@ -4,7 +4,8 @@
 //! side in the caller's task until the connection ends:
 //!
 //! - the reader (`calls`) decodes client frames and runs each call as its
-//!   own task, at most [`ServerConfig::max_in_flight`] at a time;
+//!   own task, at most [`ServerConfig::max_in_flight`] at a time (more are
+//!   refused with `Unavailable`, never left unread);
 //! - the writer (`writer`) owns the transport's sink and the connection's
 //!   subscription table, and writes every frame from one bounded queue.
 //!
@@ -47,9 +48,9 @@ const fn at_least_one(n: usize) -> NonZeroUsize {
 /// Limits for each server connection.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    /// Calls one connection may run at once. When reached, the server stops
-    /// reading that connection until a call finishes, which pushes back on
-    /// the client through the transport instead of queueing without bound.
+    /// Calls one connection may run at once. Requests beyond it are answered
+    /// `Unavailable` immediately; the connection keeps being read, so
+    /// `Cancel` and other calls still get through.
     pub max_in_flight: NonZeroUsize,
     /// Frames queued for the writer. When full, producers wait: call answers
     /// are delayed, and subscription forwarders stop pulling records, so the

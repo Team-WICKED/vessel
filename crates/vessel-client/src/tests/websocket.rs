@@ -93,3 +93,23 @@ async fn tls_urls_are_refused_before_any_tls_code_runs() {
         "{result:?}"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_node_that_never_answers_times_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    // Accepts the TCP connection, then never speaks HTTP.
+    let silent = tokio::spawn(async move { listener.accept().await });
+    let url: NodeUrl = address.to_string().parse().unwrap();
+    let token: BearerToken = TOKEN.parse().unwrap();
+    let config = ClientConfig {
+        handshake_timeout: std::time::Duration::from_secs(5),
+        ..ClientConfig::default()
+    };
+    let result = NodeClient::connect_with(&url, &token, client_info(), &config).await;
+    assert!(
+        matches!(result, Err(ConnectError::Timeout { .. })),
+        "{result:?}"
+    );
+    drop(silent);
+}

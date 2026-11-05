@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use vessel_proto::{EventRecord, Outcome, RequestId, SubscriptionEnd, SubscriptionId};
+use vessel_proto::{EventRecord, EventSeq, Outcome, RequestId, SubscriptionEnd, SubscriptionId};
 
 use crate::error::OutboundError;
 
@@ -19,8 +19,14 @@ pub(super) enum Outgoing {
     /// A handler opened a subscription; its events wait for `announce`.
     Open {
         subscription: SubscriptionId,
+        /// Where the subscription starts: the resume point if it is
+        /// released before sending anything.
+        from: EventSeq,
         announce: oneshot::Sender<()>,
         cancel: CancellationToken,
+        /// Resolves when the sink goes away: `Ok` after a clean `end`, an
+        /// error when it was dropped without one.
+        departure: oneshot::Receiver<()>,
     },
     /// A record for an open subscription, shared with its other
     /// subscribers.
@@ -38,8 +44,6 @@ pub(super) enum Outgoing {
         subscription: SubscriptionId,
         found: oneshot::Sender<bool>,
     },
-    /// A sink was dropped without ending its subscription.
-    Released(SubscriptionId),
 }
 
 /// A connection's outlet for subscriptions. Cheap to clone; a handler keeps
@@ -60,27 +64,38 @@ impl Outbound {
         }
     }
 
-    /// Open a subscription: mint its id and get the sink its frames go
-    /// through. Return the id in this call's `Subscribed` reply; the sink
-    /// holds every frame back until that reply has been queued.
+    /// Open a subscription starting at `from`: mint its id and get the sink
+    /// its frames go through. Return the id in this call's `Subscribed`
+    /// reply; the sink holds every frame back until that reply has been
+    /// queued.
     ///
-    /// If the call fails after this, drop the sink and the subscription is
-    /// discarded without the client ever seeing it.
+    /// Do everything that can fail before opening, and hand the sink to its
+    /// forwarder as the call's last step (no `.await` after spawning it), so
+    /// a cancelled call cannot leave a forwarder waiting for an
+    /// announcement that never comes. If the call fails after opening, drop
+    /// the sink: the subscription is discarded without the client ever
+    /// seeing it.
     ///
     /// # Errors
     /// The connection is closing, or its subscription ids are exhausted.
-    pub async fn open_subscription(&self) -> Result<SubscriptionSink, OutboundError> {
+    pub async fn open_subscription(
+        &self,
+        from: EventSeq,
+    ) -> Result<SubscriptionSink, OutboundError> {
         let id = self
             .next_subscription
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map(SubscriptionId::new)
             .map_err(|_exhausted| OutboundError::SubscriptionIdsExhausted)?;
         let (announce, announced) = oneshot::channel();
+        let (departing, departure) = oneshot::channel();
         let cancel = self.closing.child_token();
         let open = Outgoing::Open {
             subscription: id,
+            from,
             announce,
             cancel: cancel.clone(),
+            departure,
         };
         self.queue
             .send(open)
@@ -91,7 +106,7 @@ impl Outbound {
             queue: self.queue.clone(),
             announced: Some(announced),
             cancel,
-            ended: false,
+            departing,
         })
     }
 
@@ -133,9 +148,11 @@ pub struct SubscriptionClosed;
 /// Where one subscription's frames go. Owned by the task forwarding that
 /// subscription's records.
 ///
-/// End it with [`end`](Self::end). Dropping it without ending discards the
-/// subscription silently (the right thing when the call that opened it
-/// failed).
+/// End it with [`end`](Self::end). Dropping it without ending is noticed
+/// by the writer, never lost: before the announcement the subscription is
+/// discarded silently (the right thing when the call that opened it
+/// failed); after it, the client gets `SubscriptionEnded{Lagged}` with the
+/// first record it did not receive, so it resumes instead of waiting.
 #[derive(Debug)]
 pub struct SubscriptionSink {
     id: SubscriptionId,
@@ -143,7 +160,8 @@ pub struct SubscriptionSink {
     /// Resolves when the reply announcing `id` was queued; `None` after.
     announced: Option<oneshot::Receiver<()>>,
     cancel: CancellationToken,
-    ended: bool,
+    /// Signalled on a clean `end`; dropped with the sink otherwise.
+    departing: oneshot::Sender<()>,
 }
 
 impl SubscriptionSink {
@@ -180,13 +198,17 @@ impl SubscriptionSink {
         if self.wait_announced().await.is_err() {
             return;
         }
-        self.ended = true;
         let end = Outgoing::End {
             subscription: self.id,
             end,
         };
         if self.queue.send(end).await.is_err() {
             tracing::trace!(subscription = %self.id, "connection gone before subscription end");
+            return;
+        }
+        // The end is queued; tell the writer this departure is clean.
+        if self.departing.send(()).is_err() {
+            tracing::trace!(subscription = %self.id, "writer gone after subscription end");
         }
     }
 
@@ -206,19 +228,5 @@ impl SubscriptionSink {
         }
         self.announced = None;
         Ok(())
-    }
-}
-
-impl Drop for SubscriptionSink {
-    fn drop(&mut self) {
-        if self.ended {
-            return;
-        }
-        // Best effort: if the queue is full the entry stays in the table
-        // until the connection closes, which costs a few bytes and nothing
-        // else (no frame is ever written for it).
-        if self.queue.try_send(Outgoing::Released(self.id)).is_err() {
-            tracing::trace!(subscription = %self.id, "could not release subscription early");
-        }
     }
 }

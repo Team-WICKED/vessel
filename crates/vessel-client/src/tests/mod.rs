@@ -184,7 +184,7 @@ impl Handler for FakeNode {
         let first = self.subscribes.fetch_add(1, Ordering::Relaxed) == 0;
         let mut sink = context
             .outbound
-            .open_subscription()
+            .open_subscription(request.from)
             .await
             .map_err(OutboundError::to_wire)?;
         let subscription = sink.id();

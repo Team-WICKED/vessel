@@ -129,3 +129,76 @@ async fn unknown_methods_are_answered_by_id() {
     assert_eq!(id, RequestId::new(5));
     assert_eq!(error.code, ErrorCode::InvalidRequest);
 }
+
+#[tokio::test]
+async fn calls_over_the_limit_are_refused_while_cancel_still_gets_through() {
+    let (client_end, server_end) = pair();
+    let config = ServerConfig {
+        max_in_flight: NonZeroUsize::new(1).unwrap(),
+        ..ServerConfig::default()
+    };
+    let served = serve_with(server_end, config);
+    let client = Connection::connect(client_end, client_info(), &ClientConfig::default())
+        .await
+        .unwrap();
+    let blocked = client.clone();
+    let stuck = tokio::spawn(async move {
+        blocked
+            .call(KillSession {
+                session: session(1),
+            })
+            .await
+    });
+    served.probe.started.notified().await;
+    assert_eq!(
+        client.call(GetNode).await.unwrap_err().code(),
+        Some(ErrorCode::Unavailable)
+    );
+    // The connection is still read: the cancel arrives and frees the slot.
+    stuck.abort();
+    served.probe.aborted.notified().await;
+    assert_eq!(client.call(GetNode).await.unwrap().name, "test-node");
+}
+
+#[tokio::test]
+async fn callers_never_wait_on_a_node_that_stopped_reading_and_hung_up() {
+    let (client_end, mut node_end) = memory::pair(NonZeroUsize::new(1).unwrap());
+    let node_side = async move {
+        let _hello = node_end.next().await.unwrap().unwrap();
+        let welcome = ServerFrame::Welcome(vessel_proto::Welcome {
+            protocol: ProtocolVersion::new(2),
+            node: node(),
+        });
+        node_end
+            .send(serde_json::to_string(&welcome).unwrap())
+            .await
+            .unwrap();
+        node_end
+    };
+    let config = ClientConfig {
+        command_capacity: NonZeroUsize::new(1).unwrap(),
+        ..ClientConfig::default()
+    };
+    let (client, mut node_end) = tokio::join!(
+        async {
+            Connection::connect(client_end, client_info(), &config)
+                .await
+                .unwrap()
+        },
+        node_side
+    );
+    // Far more calls than the transport and the command queue hold; the
+    // node reads none of them.
+    let calls: Vec<_> = (0..10)
+        .map(|_| {
+            let client = client.clone();
+            tokio::spawn(async move { client.call(GetNode).await })
+        })
+        .collect();
+    tokio::task::yield_now().await;
+    node_end.close_sending();
+    for call in calls {
+        assert_eq!(call.await.unwrap(), Err(CallError::Disconnected));
+    }
+    drop(node_end);
+}
