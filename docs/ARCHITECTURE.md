@@ -79,7 +79,26 @@ that ADR and this table.
 ## State (2026-11-05)
 
 - Done: `vessel-proto` (protocol 2 contract).
-- In progress (milestone 1): every other crate. `vessel-node` and
+- Runtime track, terminal path working end to end:
+  - `vessel-proc`: `CommandSpec`, `spawn` as a process-group leader,
+    `ProcessGroup` (Unix). Stopping signals the whole group, and the group
+    is swept once its leader exits. Windows terminates only the direct
+    child (no job objects yet).
+  - `vessel-harness`: one descriptor module per harness, `Lookup` (explicit
+    search path), concurrent `discover` with a version-probe timeout,
+    `launch`. The `fakes` feature installs testkit binaries under real
+    harness names for other crates' tests. Model selection is not here: it
+    goes over ACP in `vessel-agent`.
+  - `vessel-pty`: `PtyProcess` over `portable-pty`, with dedicated reader,
+    control (input and resize, in order) and waiter threads behind bounded
+    channels.
+  - `vessel-session`: the R6 API (`SessionRuntime`, `SessionHandle`,
+    `Follow`/`Gap`, `Created::durable`). Terminal sessions run end to end;
+    structured sessions return `Unsupported` (`StructuredPending`) until
+    `vessel-agent` lands.
+  - `vessel-testkit`: `fake-tui` and the `Fake::path` locator.
+- In progress (milestone 1): `vessel-agent` (ACP) and `fake-acp`, then
+  structured mode in `vessel-session`; every spine crate. `vessel-node` and
   `vessel-cli` still contain the protocol 1 code and are excluded from the
   workspace until they are ported.
 
