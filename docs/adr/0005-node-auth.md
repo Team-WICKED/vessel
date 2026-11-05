@@ -1,0 +1,42 @@
+# ADR 0005: Every connection presents the node token
+
+Status: accepted, 2026-11-05
+
+## Context
+
+Phase 0 had no authentication and bound to loopback. Loopback is not a
+security boundary on a shared machine, and Phase 1 exposes nodes to other
+machines. Paseo uses one bearer token per daemon run and takes caller identity
+from a query parameter, so any local agent can impersonate another.
+
+## Options
+
+1. No auth on loopback, a token otherwise. Convenient, but unsafe on
+   multi-user hosts and easy to misconfigure.
+2. A token on every connection, read from a 0600 file by local clients.
+3. Unix socket permissions only. Strong locally, but no Windows story and no
+   help for remote clients.
+
+## Decision
+
+Option 2:
+
+- On first start the node writes a random 256-bit token to
+  `<data_dir>/token` (mode 0600 on Unix). The token never appears in logs or
+  in `NodeInfo`.
+- The websocket upgrade must carry `Authorization: Bearer <token>`. The
+  comparison takes constant time. `/health` stays open.
+- Local clients (`vessel` CLI) read the token file; remote clients get it
+  through `--token`/`VESSEL_TOKEN`.
+- Binding a non-loopback address logs a warning that names the token file.
+
+## Why
+
+- One rule everywhere, no "safe because local" assumption.
+- Matches what the relay will need anyway: a principal per connection.
+
+## Consequences
+
+- Per-agent principals (so a harness calling back into the node is
+  identified and limited) come in Phase 2, before agents get node tools.
+- Token rotation is "delete the file and restart" for now.
