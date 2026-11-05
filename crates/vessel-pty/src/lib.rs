@@ -27,12 +27,16 @@
 //! [`CommandSpec`]: vessel_proc::CommandSpec
 //! [`Bytes`]: bytes::Bytes
 
+mod command;
 mod error;
 mod kill;
 mod process;
 mod size;
+mod streams;
+mod threads;
 
 pub use error::{PtyClosed, PtyError};
-pub use process::{PtyInput, PtyOutput, PtyProcess};
+pub use process::PtyProcess;
 pub use size::WindowSize;
+pub use streams::{PtyInput, PtyOutput};
 pub use vessel_proc::Signal;
