@@ -28,7 +28,13 @@ an entry here. Additive, optional fields do not need a bump.
   `subscription_ended{S}`. For `session.unsubscribe`, the client receives
   `subscription_ended{unsubscribed}` before the call's `ack`. Records within a
   subscription arrive in `seq` order with no gaps; a gap is only ever
-  announced as `lagged{resume_from}`.
+  announced as `lagged{resume_from}`. If the node stops serving a
+  subscription for any other reason after announcing it, it also ends it
+  with `lagged{resume_from}` at the first record not written, so the client
+  resyncs instead of waiting.
+- Limits: each connection has a bound on calls in flight. Calls over the
+  bound are answered at once with `unavailable`; the node keeps reading the
+  connection, so `cancel` and `session.kill` always get through.
 - Session modes: `terminal` (base64 PTY bytes) and `structured` (ACP-derived
   `AgentEvent` timeline).
 
