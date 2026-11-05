@@ -60,4 +60,4 @@ pub use config::Config;
 pub use error::NodeError;
 pub use node::Node;
 pub use shutdown::signal;
-pub use vessel_store::{DataDir, NodeToken};
+pub use vessel_store::{DataDir, NodeToken, StoreError};

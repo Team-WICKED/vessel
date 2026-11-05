@@ -87,8 +87,8 @@ pub(crate) fn readable_by_others(path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn readable_by_others(_path: &Path) -> io::Result<bool> {
-    Ok(false)
+pub(crate) fn readable_by_others(path: &Path) -> io::Result<bool> {
+    std::fs::metadata(path).map(|_metadata| false)
 }
 
 /// Create the directory (and parents) if missing; owner-only on Unix.
