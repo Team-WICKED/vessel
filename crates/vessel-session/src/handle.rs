@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use vessel_agent::AgentInput;
 use vessel_proto::{EventSeq, SessionId, SessionInfo, SessionInput, TerminalInput};
 use vessel_pty::{PtyInput, WindowSize};
 
@@ -40,18 +41,21 @@ impl Shared {
 
 /// The input path of a session, chosen by its mode.
 ///
-/// Terminal input goes straight to the PTY's bounded input queue, not
-/// through the actor, so a program that stops reading input slows down only
-/// the caller sending it, never the actor's output pump or `kill`.
+/// Input goes straight to the process side (the PTY's bounded input queue,
+/// or the ACP driver), not through the actor, so a program that stops
+/// reading input slows down only the caller sending it, never the actor's
+/// output pump or `kill`.
 #[derive(Debug)]
 pub(crate) enum Input {
     Terminal(PtyInput),
+    Structured(AgentInput),
 }
 
 impl Input {
     const fn mode(&self) -> ModeKind {
         match self {
             Self::Terminal(_) => ModeKind::Terminal,
+            Self::Structured(_) => ModeKind::Structured,
         }
     }
 }
@@ -88,10 +92,14 @@ impl SessionHandle {
     /// Send input to the session.
     ///
     /// Terminal input waits while the program's input queue is full.
+    /// Structured input waits until the agent has applied it (and, while the
+    /// ACP handshake runs, until it is ready).
     ///
     /// # Errors
     /// [`SessionError::Unsupported`] when the input does not match the
-    /// session's mode, [`SessionError::Ended`] once the session has ended.
+    /// session's mode, [`SessionError::Ended`] once the session has ended,
+    /// [`SessionError::Input`] when the agent refuses it (for example a
+    /// second answer to a permission request).
     pub async fn send(&self, input: SessionInput) -> Result<(), SessionError> {
         if !self.0.info.borrow().status.is_live() {
             return Err(SessionError::Ended);
@@ -110,15 +118,25 @@ impl SessionHandle {
                 };
                 sent.map_err(|vessel_pty::PtyClosed| SessionError::Ended)
             }
+            (Input::Structured(agent), SessionInput::Prompt { content }) => {
+                Ok(agent.prompt(content).await?)
+            }
+            (Input::Structured(agent), SessionInput::CancelTurn) => Ok(agent.cancel_turn().await?),
+            (Input::Structured(agent), SessionInput::AnswerPermission { id, outcome }) => {
+                Ok(agent.answer(id, outcome).await?)
+            }
             (
                 input_path @ Input::Terminal(_),
                 input @ (SessionInput::Prompt { .. }
                 | SessionInput::CancelTurn
                 | SessionInput::AnswerPermission { .. }),
-            ) => Err(SessionError::Unsupported {
-                input: InputKind::of(&input),
-                mode: input_path.mode(),
-            }),
+            )
+            | (input_path @ Input::Structured(_), input @ SessionInput::Terminal { .. }) => {
+                Err(SessionError::Unsupported {
+                    input: InputKind::of(&input),
+                    mode: input_path.mode(),
+                })
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 //! The session runtime the node uses.
 //!
-//! Owns: one actor task per session that owns its process (a PTY today, an
-//! ACP agent with `vessel-agent`), numbers every event (`EventSeq`, gap-free
+//! Owns: one actor task per session that owns its process (a PTY program
+//! from `vessel-pty`, or an ACP agent from `vessel-agent`), numbers every event (`EventSeq`, gap-free
 //! from zero), keeps a bounded in-memory ring of recent records, hands every
 //! record to the node through a bounded durable channel, and broadcasts it
 //! to live followers. Must not: persist anything (the node owns the store,
@@ -43,17 +43,23 @@
 //!   the ring and broadcast in one step. A follower therefore never sees a
 //!   record twice (snapshot and live are disjoint) and never sees a record
 //!   the store will not get.
-//! - Stopping: `kill` asks politely (`SIGHUP` for a PTY), then kills the
-//!   whole process group after a grace period. The actor keeps reacting to
-//!   `kill` even while it waits for a durable slot.
+//! - Stopping: `kill` asks politely (`SIGHUP` for a PTY, `SIGTERM` for an
+//!   ACP agent), then kills the whole process group after a grace period.
+//!   The actor keeps reacting to `kill` even while it waits for a durable
+//!   slot.
+//! - Structured status: `Starting` until the agent's `Ready` event, then
+//!   `Running`; a session that never became ready ends `Failed` with the
+//!   reason.
 
 mod config;
 mod error;
 mod handle;
+mod lifecycle;
 mod publish;
 mod ring;
 mod runtime;
 mod stop;
+mod structured;
 mod terminal;
 
 pub use config::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, RuntimeConfig};

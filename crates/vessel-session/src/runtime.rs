@@ -8,18 +8,21 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::Instrument as _;
+use vessel_agent::{AgentProcess, AgentSetup};
 use vessel_proto::{
-    EventRecord, EventSeq, SessionId, SessionInfo, SessionMode, SessionSpec, SessionStatus,
-    TerminalSize,
+    EventRecord, EventSeq, HarnessSessionId, ModelId, SessionId, SessionInfo, SessionMode,
+    SessionSpec, SessionStatus, TerminalSize,
 };
 use vessel_pty::{PtyProcess, WindowSize};
 
 use crate::config::RuntimeConfig;
 use crate::error::SessionError;
 use crate::handle::{Input, SessionHandle, Shared};
+use crate::lifecycle::Lifecycle;
 use crate::publish::Publisher;
 use crate::ring::Ring;
 use crate::stop::Stopper;
+use crate::structured::StructuredActor;
 use crate::terminal::TerminalActor;
 
 /// Runs every session of one node.
@@ -42,6 +45,13 @@ pub struct SessionRuntime {
     shutdown: CancellationToken,
     tasks: TaskTracker,
     sessions: RwLock<HashMap<SessionId, SessionHandle>>,
+}
+
+/// The process-independent parts of a new session.
+struct Parts {
+    shared: Arc<Shared>,
+    life: Lifecycle,
+    durable: mpsc::Receiver<Arc<EventRecord>>,
 }
 
 /// A session that was just started.
@@ -72,12 +82,14 @@ impl SessionRuntime {
     /// Start a session. Status events are part of the stream: the first
     /// record is `Status{Starting}`.
     ///
+    /// A structured session's handshake failing is not an error here: the
+    /// session exists and ends with `Status{Failed}`, with the agent's log.
+    ///
     /// # Errors
     /// [`SessionError::Launch`] when the harness, its adapter or the working
-    /// directory is missing, [`SessionError::Spawn`] when the program cannot
-    /// be started, [`SessionError::ShuttingDown`] after shutdown began, and
-    /// [`SessionError::StructuredPending`] for structured sessions until
-    /// `vessel-agent` lands.
+    /// directory is missing, [`SessionError::Spawn`] or
+    /// [`SessionError::StartAgent`] when the program cannot be started, and
+    /// [`SessionError::ShuttingDown`] after shutdown began.
     pub async fn create(&self, spec: SessionSpec) -> Result<Created, SessionError> {
         // Counts as a running task, so a concurrent `shutdown` waits until
         // this session is either refused or tracked.
@@ -85,9 +97,11 @@ impl SessionRuntime {
         if self.shutdown.is_cancelled() {
             return Err(SessionError::ShuttingDown);
         }
-        match spec.mode {
+        match spec.mode.clone() {
             SessionMode::Terminal { size, .. } => self.create_terminal(spec, size).await,
-            SessionMode::Structured { .. } => Err(SessionError::StructuredPending),
+            SessionMode::Structured { model, resume } => {
+                self.create_structured(spec, model, resume).await
+            }
         }
     }
 
@@ -115,15 +129,70 @@ impl SessionRuntime {
             return Err(SessionError::ShuttingDown);
         }
 
-        let (info, kill, shared) = self.shared(spec, Input::Terminal(pty.input()));
-        let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
+        let parts = self.parts(spec, Input::Terminal(pty.input()));
         let actor = TerminalActor {
             pty,
             output,
-            out: Publisher::new(Arc::clone(&shared), durable_sender, info),
-            stop: Stopper::new(kill, self.shutdown.clone()),
+            life: parts.life,
         };
-        Ok(self.start(shared, actor.run(), durable))
+        Ok(self.start(parts.shared, actor.run(), parts.durable))
+    }
+
+    async fn create_structured(
+        &self,
+        spec: SessionSpec,
+        model: Option<ModelId>,
+        resume: Option<HarnessSessionId>,
+    ) -> Result<Created, SessionError> {
+        let lookup = self.config.harness_lookup.clone();
+        let launch_spec = spec.clone();
+        // Lookup and directory checks block.
+        let (command, cwd) = tokio::task::spawn_blocking(move || {
+            let command = vessel_harness::launch(&lookup, &launch_spec)?;
+            // ACP needs an explicit directory; the launch defaults it to
+            // the home directory, and the node's own is the last resort.
+            let cwd = command
+                .cwd
+                .clone()
+                .or_else(|| std::env::current_dir().ok())
+                .ok_or(SessionError::NoWorkingDirectory)?;
+            Ok::<_, SessionError>((command, cwd))
+        })
+        .await
+        .map_err(SessionError::Internal)??;
+        // `fork`/`exec` on this thread, as `tokio::process` does.
+        let (agent, input, outputs) =
+            AgentProcess::spawn(&command, AgentSetup { cwd, model, resume })
+                .map_err(SessionError::StartAgent)?;
+        if self.shutdown.is_cancelled() {
+            // Dropping the agent kills its process group.
+            drop(agent);
+            return Err(SessionError::ShuttingDown);
+        }
+
+        let parts = self.parts(spec, Input::Structured(input));
+        let actor = StructuredActor {
+            agent,
+            outputs,
+            life: parts.life,
+            ready: false,
+            disconnect: None,
+        };
+        Ok(self.start(parts.shared, actor.run(), parts.durable))
+    }
+
+    /// Everything a new session needs besides its process.
+    fn parts(&self, spec: SessionSpec, input: Input) -> Parts {
+        let (info, kill, shared) = self.shared(spec, input);
+        let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
+        Parts {
+            life: Lifecycle {
+                out: Publisher::new(Arc::clone(&shared), durable_sender, info),
+                stop: Stopper::new(kill, self.shutdown.clone()),
+            },
+            shared,
+            durable,
+        }
     }
 
     /// Initial info and the state shared by the actor and its handles.
