@@ -93,7 +93,8 @@ that ADR and this table.
     control (input and resize, in order) and waiter threads behind bounded
     channels.
   - `vessel-session`: the R6 API (`SessionRuntime`, `SessionHandle`,
-    `Follow`/`Gap`, `Created::durable`). Terminal sessions run end to end;
+    `Follow`/`FollowError`, `Created::durable`; records shared as
+    `Arc<EventRecord>`). Terminal sessions run end to end;
     structured sessions return `Unsupported` (`StructuredPending`) until
     `vessel-agent` lands.
   - `vessel-testkit`: `fake-tui` and the `Fake::path` locator.

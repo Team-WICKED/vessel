@@ -8,7 +8,7 @@ use vessel_proto::{EventSeq, SessionId, SessionInfo, SessionInput, TerminalInput
 use vessel_pty::{PtyInput, WindowSize};
 
 use crate::error::{InputKind, ModeKind, SessionError};
-use crate::ring::{Follow, Gap, Ring};
+use crate::ring::{Follow, FollowError, Ring};
 
 /// State shared between a session's actor and its handles.
 ///
@@ -131,13 +131,12 @@ impl SessionHandle {
 
     /// Records from `from` onwards: the cached part now, the rest live.
     ///
-    /// Ask for at most `info().next_seq`; a `from` beyond the end yields
-    /// no cached records and a receiver starting at the current end.
-    ///
     /// # Errors
-    /// [`Gap`] when `from` is older than the ring. The node then reads
-    /// `from..oldest_cached` from the store and calls `follow` again.
-    pub fn follow(&self, from: EventSeq) -> Result<Follow, Gap> {
+    /// [`FollowError::Gap`] when `from` is older than the ring (the node
+    /// then reads `from..oldest_cached` from the store and calls `follow`
+    /// again), [`FollowError::Ahead`] when `from` is past the end of the
+    /// log.
+    pub fn follow(&self, from: EventSeq) -> Result<Follow, FollowError> {
         self.0.ring().follow(from)
     }
 }

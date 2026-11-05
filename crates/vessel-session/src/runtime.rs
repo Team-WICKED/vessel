@@ -52,8 +52,9 @@ pub struct Created {
     /// Every record, in order, exactly once. The node must drain it into the
     /// store. Bounded: if the node stops draining, the session applies
     /// backpressure (its output pump pauses) rather than dropping records.
-    /// Closes after the final status record.
-    pub durable: mpsc::Receiver<EventRecord>,
+    /// Closes after the final status record. The records are shared with
+    /// the ring and live followers, not copies.
+    pub durable: mpsc::Receiver<Arc<EventRecord>>,
 }
 
 impl SessionRuntime {
@@ -115,7 +116,7 @@ impl SessionRuntime {
         }
 
         let (info, kill, shared) = self.shared(spec, Input::Terminal(pty.input()));
-        let (durable_sender, durable) = mpsc::channel(self.config.durable());
+        let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         let actor = TerminalActor {
             pty,
             output,
@@ -145,7 +146,7 @@ impl SessionRuntime {
         let shared = Arc::new(Shared {
             id,
             info: info_receiver,
-            ring: Mutex::new(Ring::new(self.config.ring())),
+            ring: Mutex::new(Ring::new(self.config.ring_capacity)),
             input,
             kill: kill.clone(),
         });
@@ -157,7 +158,7 @@ impl SessionRuntime {
         &self,
         shared: Arc<Shared>,
         actor: impl Future<Output = ()> + Send + 'static,
-        durable: mpsc::Receiver<EventRecord>,
+        durable: mpsc::Receiver<Arc<EventRecord>>,
     ) -> Created {
         let handle = SessionHandle(shared);
         let id = handle.id();
