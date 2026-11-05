@@ -1,0 +1,32 @@
+[package]
+name = "vessel-node"
+description = "Vessel node daemon: runs agent harnesses on one machine and exposes them over HTTP/WS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "vesseld"
+path = "src/main.rs"
+
+[dependencies]
+vessel-core.workspace = true
+
+axum.workspace = true
+chrono.workspace = true
+clap.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+which.workspace = true
+hostname.workspace = true
+
+[lints]
+workspace = true
