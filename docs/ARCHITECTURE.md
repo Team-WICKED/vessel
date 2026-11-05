@@ -42,7 +42,9 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) for tests. | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
-that ADR and this table.
+that ADR and this table. Test-only edges: `vessel-node`'s end-to-end tests
+drive a node through `vessel-client` (a dev-dependency; the client does not
+depend on the node, so there is no cycle).
 
 ## Data flow
 
@@ -119,9 +121,17 @@ that ADR and this table.
   - `vessel-client`: websocket connection with the bearer token, one typed
     method per call, gap-free `SessionStream` (`follow`). `wss://` is
     refused: no TLS stack in milestone 1 (ADR 0005 amendment).
-- In progress (milestone 1): `vessel-node` and `vessel-cli`, which still
-  contain the protocol 1 code and are excluded from the workspace until
-  they are ported.
+  - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
+    the `Handler` routing to `sessions` (live runtime sessions plus stored
+    ones from earlier runs), `persist` (one task per session drains its
+    durable channel into the store and publishes "durable through N"),
+    `subscribe` (ring, then a durable-gated store gap fill, then live;
+    `Lagged` when a subscriber falls behind), and an ordered shutdown in
+    which subscribers still receive the final `Interrupted` status.
+    Terminal sessions run end to end (`tests/terminal.rs`).
+- In progress (milestone 1): the structured half of the end-to-end test;
+  `vessel-cli`, which still contains the protocol 1 code and is excluded
+  from the workspace until it is ported.
 
 ## Later
 

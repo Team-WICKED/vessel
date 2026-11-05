@@ -1,127 +1,63 @@
-//! Vessel node daemon.
+//! `vesseld`: one node per machine, serving its harness sessions over
+//! protocol 2.
 //!
-//! One node runs per machine. It discovers the agent harnesses installed
-//! there (Claude Code, Codex, ...), launches them on request, and streams
-//! their output to any client over HTTP and websockets. Clients are the
-//! `vessel` CLI today and editors tomorrow.
+//! This crate assembles the others; it holds wiring and node policy, not
+//! mechanisms:
+//!
+//! ```text
+//!  client --ws /rpc (bearer token)--> server ---> vessel-rpc Server
+//!                                                    | Handler
+//!                                                 service (routing only)
+//!                                                    |
+//!            sessions: live runtime sessions + stored ones from earlier runs
+//!              |  create ---> vessel-session ---durable records---> persist ---> vessel-store
+//!              |  subscribe -> follow (ring) + store gap fill ---> Outbound
+//!              |  read ------> wait until durable, then the store
+//! ```
+//!
+//! - `config`, `identity`: what to run and who this node is.
+//! - `server`, `auth`, `transport`: HTTP (`GET /health`) and the `/rpc`
+//!   websocket, token check before the upgrade.
+//! - `service`: the `Handler` implementation; routes each call, maps typed
+//!   errors to wire errors once.
+//! - `sessions`: the node's view of sessions, live and stored.
+//! - `persist`: drains each session's durable channel into the store and
+//!   publishes how far it is committed.
+//! - `subscribe`: forwards a session's records to one subscription.
+//! - `node`, `shutdown`: start, and stop in an order that loses nothing.
+//!
+//! [Decision Log]
+//! - Purpose: the node is the product (ARCHITECTURE "Design rules"); it must
+//!   keep every record, survive slow and vanishing clients, and stop
+//!   without leaving work half done.
+//! - Persistence policy lives here, not in the runtime (ADR 0001): the
+//!   runtime hands over records on a bounded channel, and this crate
+//!   decides how they are committed and when a reader may rely on them.
+//! - "Durable through N": `persist` publishes, per session, the sequence
+//!   number below which every record is committed. Gap fills and
+//!   `session.read` wait on it, because a record can leave the runtime's
+//!   ring before the store has committed it; reading the store without that
+//!   wait could skip it.
+//! - Shutdown order: stop accepting; end sessions (they publish
+//!   `Interrupted`); wait until everything is committed; let connections
+//!   flush their last frames; close the store. Subscribers therefore see
+//!   the final status, and a restart finds every log complete.
 
-pub mod error;
-pub mod harness;
-pub mod routes;
-pub mod session;
+mod auth;
+mod config;
+mod error;
+mod identity;
+mod node;
+mod persist;
+mod server;
+mod service;
+mod sessions;
+mod shutdown;
+mod subscribe;
+mod transport;
 
-use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use chrono::Utc;
-use vessel_core::{DEFAULT_PORT, NodeId, NodeInfo, PROTOCOL_VERSION};
-
+pub use config::Config;
 pub use error::NodeError;
-use routes::AppState;
-use session::SessionManager;
-
-/// How to run a node.
-#[derive(Debug, Clone)]
-pub struct Config {
-    /// Address to listen on. Defaults to loopback only.
-    pub bind: SocketAddr,
-    /// Node name shown to clients. Defaults to the hostname.
-    pub name: Option<String>,
-    /// Where the node keeps its identity and, later, synced state.
-    /// Defaults to `~/.vessel`.
-    pub data_dir: Option<PathBuf>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)),
-            name: None,
-            data_dir: None,
-        }
-    }
-}
-
-fn hostname() -> String {
-    hostname::get()
-        .ok()
-        .and_then(|name| name.into_string().ok())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-fn resolve_data_dir(config: &Config) -> PathBuf {
-    config.data_dir.clone().unwrap_or_else(|| {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".vessel")
-    })
-}
-
-/// Load the node id from `<data_dir>/node.id`, creating one on first run.
-fn load_or_create_id(data_dir: &PathBuf) -> Result<NodeId, NodeError> {
-    std::fs::create_dir_all(data_dir).map_err(|e| NodeError::DataDir(data_dir.clone(), e))?;
-    let path = data_dir.join("node.id");
-    if let Ok(text) = std::fs::read_to_string(&path)
-        && let Ok(id) = text.parse::<NodeId>()
-    {
-        return Ok(id);
-    }
-    let id = NodeId::random();
-    std::fs::write(&path, id.to_string()).map_err(|e| NodeError::DataDir(path, e))?;
-    Ok(id)
-}
-
-/// Build the node's self-description.
-///
-/// # Errors
-/// Fails if the data directory cannot be created or written.
-pub fn node_info(config: &Config) -> Result<NodeInfo, NodeError> {
-    let data_dir = resolve_data_dir(config);
-    let id = load_or_create_id(&data_dir)?;
-    let hostname = hostname();
-    Ok(NodeInfo {
-        id,
-        name: config.name.clone().unwrap_or_else(|| hostname.clone()),
-        hostname,
-        os: std::env::consts::OS.to_owned(),
-        arch: std::env::consts::ARCH.to_owned(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        protocol: PROTOCOL_VERSION,
-        started_at: Utc::now(),
-    })
-}
-
-/// Run the node until `Ctrl-C`.
-///
-/// # Errors
-/// Fails if the data directory is unusable, the address cannot be bound,
-/// or the server stops abnormally.
-pub async fn serve(config: Config) -> Result<(), NodeError> {
-    let node = node_info(&config)?;
-    tracing::info!(id = %node.id, name = %node.name, bind = %config.bind, "vessel node starting");
-
-    let state = Arc::new(AppState {
-        node,
-        sessions: SessionManager::new(),
-    });
-    let app = routes::router(state);
-
-    let listener = tokio::net::TcpListener::bind(config.bind)
-        .await
-        .map_err(|e| NodeError::Bind(config.bind, e))?;
-    tracing::info!(bind = %config.bind, "listening");
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(NodeError::Serve)
-}
-
-async fn shutdown_signal() {
-    if let Err(err) = tokio::signal::ctrl_c().await {
-        tracing::warn!(%err, "failed to listen for ctrl-c; running until killed");
-        std::future::pending::<()>().await;
-    }
-    tracing::info!("shutdown requested");
-}
+pub use node::Node;
+pub use shutdown::signal;
+pub use vessel_store::{DataDir, NodeToken};
