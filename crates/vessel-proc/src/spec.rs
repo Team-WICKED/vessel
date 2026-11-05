@@ -84,14 +84,15 @@ impl CommandSpec {
         self
     }
 
-    /// Whether this spec sets (not removes) the variable `name`.
+    /// The change this spec makes to the variable `name`, if any (the last
+    /// entry for that name, since later entries win).
     #[must_use]
-    pub fn sets_env(&self, name: &str) -> bool {
+    pub fn env_change(&self, name: &str) -> Option<&EnvValue> {
         self.env
             .iter()
             .rev()
             .find(|(key, _)| key == name)
-            .is_some_and(|(_, value)| matches!(value, EnvValue::Set(_)))
+            .map(|(_, value)| value)
     }
 
     /// The equivalent `std::process::Command`, with stdio left at defaults.
@@ -122,9 +123,9 @@ mod tests {
             .env("A", "1")
             .env_remove("A")
             .env("B", "2");
-        assert!(!spec.sets_env("A"));
-        assert!(spec.sets_env("B"));
-        assert!(!spec.sets_env("C"));
+        assert_eq!(spec.env_change("A"), Some(&EnvValue::Remove));
+        assert_eq!(spec.env_change("B"), Some(&EnvValue::Set("2".into())));
+        assert_eq!(spec.env_change("C"), None);
     }
 
     #[test]

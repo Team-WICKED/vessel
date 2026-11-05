@@ -1,0 +1,24 @@
+[package]
+name = "vessel-pty"
+description = "Runs a command in a pseudo-terminal for Vessel's terminal sessions: byte I/O, resize, group kill"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proc.workspace = true
+
+bytes.workspace = true
+portable-pty.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+vessel-testkit.workspace = true
+
+[lints]
+workspace = true
