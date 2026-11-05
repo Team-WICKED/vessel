@@ -89,14 +89,16 @@ impl Reader {
 
     /// A page of a session's log from `from` (or from its oldest retained
     /// record, if older ones were pruned). At most `limit` records, capped by
-    /// the configured page limits; at least one record if any exist.
+    /// the configured page limits; at least one record if any exist (a
+    /// `limit` of zero is read as one, so a page never comes back empty
+    /// while claiming more follow, which would make a reader loop).
     pub(crate) fn read_events(
         &self,
         session: SessionId,
         from: EventSeq,
         limit: u32,
     ) -> Result<EventPage, StoreError> {
-        let limit = limit.min(self.config.max_page_records.get());
+        let limit = limit.clamp(1, self.config.max_page_records.get());
         let max_bytes = usize::try_from(self.config.max_page_bytes.get()).unwrap_or(usize::MAX);
         self.with(|connection| {
             // One read transaction, so the bounds and the rows agree even

@@ -14,8 +14,8 @@ fn identity_is_created_once_and_then_stable() {
     assert_eq!(dir.load_or_create_node_id().unwrap(), id);
 
     let token = dir.load_or_create_token().unwrap();
-    assert_eq!(dir.load_or_create_token().unwrap(), token);
-    assert_eq!(dir.read_token().unwrap(), token);
+    assert!(token.verify(dir.load_or_create_token().unwrap().expose()));
+    assert!(token.verify(dir.read_token().unwrap().expose()));
     assert!(token.verify(token.expose()));
     assert!(!token.verify("not the token"));
 }
