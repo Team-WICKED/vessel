@@ -27,6 +27,12 @@ pub enum ConnectError {
         "TLS (wss://) connections are not supported yet; reach remote nodes through an SSH tunnel"
     )]
     TlsUnsupported,
+    /// The node did not accept the connection in time.
+    #[error("{url} did not answer in time")]
+    Timeout {
+        /// Where.
+        url: NodeUrl,
+    },
     /// The node refused the token.
     #[error("the node refused the token")]
     Unauthorized,

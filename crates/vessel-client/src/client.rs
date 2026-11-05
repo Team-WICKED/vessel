@@ -21,18 +21,36 @@ pub struct NodeClient {
 }
 
 impl NodeClient {
-    /// Connect to the node at `url` with its token.
+    /// Connect to the node at `url` with its token, with default limits.
     ///
     /// # Errors
-    /// The node is unreachable, refused the token, or shares no protocol
-    /// version with this client.
+    /// The node is unreachable, refused the token, did not answer in time,
+    /// or shares no protocol version with this client.
     pub async fn connect(
         url: &NodeUrl,
         token: &BearerToken,
         client: ClientInfo,
     ) -> Result<Self, ConnectError> {
-        let transport = ws::connect(url, token).await?;
-        let connection = Connection::connect(transport, client, &ClientConfig::default())
+        Self::connect_with(url, token, client, &ClientConfig::default()).await
+    }
+
+    /// [`connect`](Self::connect) with explicit limits. Opening the TCP
+    /// connection and the websocket upgrade together get
+    /// `config.handshake_timeout` (the OS's own connect timeout is about two
+    /// minutes), and the protocol handshake gets it again.
+    ///
+    /// # Errors
+    /// As [`connect`](Self::connect).
+    pub async fn connect_with(
+        url: &NodeUrl,
+        token: &BearerToken,
+        client: ClientInfo,
+        config: &ClientConfig,
+    ) -> Result<Self, ConnectError> {
+        let transport = tokio::time::timeout(config.handshake_timeout, ws::connect(url, token))
+            .await
+            .map_err(|_elapsed| ConnectError::Timeout { url: url.clone() })??;
+        let connection = Connection::connect(transport, client, config)
             .await
             .map_err(ConnectError::Handshake)?;
         tracing::debug!(%url, node = %connection.welcome().node.name, "connected");

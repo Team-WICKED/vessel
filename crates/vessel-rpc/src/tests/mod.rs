@@ -41,6 +41,12 @@ fn endless() -> SessionId {
     session(99)
 }
 
+/// A session whose forwarder sends two records and then drops its sink
+/// without ending the subscription.
+fn abandoned() -> SessionId {
+    session(98)
+}
+
 fn node() -> NodeInfo {
     NodeInfo {
         id: NodeId::random(),
@@ -217,7 +223,7 @@ impl Handler for Fake {
         self.saw(request.into_call());
         let mut sink = context
             .outbound
-            .open_subscription()
+            .open_subscription(request.from)
             .await
             .map_err(crate::OutboundError::to_wire)?;
         let subscription = sink.id();
@@ -228,6 +234,15 @@ impl Handler for Fake {
             if request.session == endless() {
                 sink.cancelled().await;
                 probe.unsubscribed.notify_one();
+                return;
+            }
+            if request.session == abandoned() {
+                for seq in request.from.get()..request.from.get().saturating_add(2) {
+                    if sink.send(Arc::new(record(seq))).await.is_err() {
+                        return;
+                    }
+                }
+                drop(sink);
                 return;
             }
             for seq in request.from.get()..RECORDS {
@@ -280,6 +295,10 @@ fn pair() -> (MemoryTransport, MemoryTransport) {
 }
 
 fn serve(transport: MemoryTransport) -> Served {
+    serve_with(transport, ServerConfig::default())
+}
+
+fn serve_with(transport: MemoryTransport, config: ServerConfig) -> Served {
     let (forwarded, forwarded_rx) = mpsc::channel(64);
     let probe = Arc::new(Probe {
         started: Notify::new(),
@@ -293,12 +312,7 @@ fn serve(transport: MemoryTransport) -> Served {
         probe: Arc::clone(&probe),
         seen,
     };
-    let server = Server::new(
-        Arc::new(fake),
-        node(),
-        ServerConfig::default(),
-        shutdown.clone(),
-    );
+    let server = Server::new(Arc::new(fake), node(), config, shutdown.clone());
     let task = tokio::spawn(async move {
         server
             .serve(transport, |peer| Context {

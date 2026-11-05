@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::{Sink, SinkExt as _, Stream, StreamExt as _};
 use tokio::sync::mpsc::error::TrySendError;
@@ -27,6 +28,9 @@ use vessel_proto::{
 
 use super::RequestIds;
 use crate::error::{CallError, ProtocolViolation};
+
+/// How long closing the transport may take once every handle is gone.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Registrations in flight from writer to reader. The reader drains them
 /// before every answer, so this only needs to absorb a burst.
@@ -136,7 +140,9 @@ where
     K: Sink<String, Error = E> + Unpin,
 {
     let _close_on_exit = closed.clone().drop_guard();
-    loop {
+    // Fed but not flushed: a sink may hold fed frames back until flushed.
+    let mut unflushed = false;
+    'drive: loop {
         let command = tokio::select! {
             biased;
             () = closed.cancelled() => break,
@@ -158,7 +164,13 @@ where
                 ClientFrame::Cancel { id }
             }
             Command::Unsubscribe(subscription) => {
-                let Some(id) = ids.next() else { continue };
+                let Some(id) = ids.next() else {
+                    if unflushed && commands.is_empty() {
+                        flush(&mut sink, &closed).await?;
+                        unflushed = false;
+                    }
+                    continue;
+                };
                 ClientFrame::Request {
                     id,
                     call: Unsubscribe { subscription }.into_call(),
@@ -166,15 +178,43 @@ where
             }
         };
         let text = serde_json::to_string(&frame).map_err(DriverError::Encode)?;
-        sink.feed(text).await.map_err(DriverError::Transport)?;
+        // Watch `closed` around every wait on the sink: a node that stopped
+        // reading must not keep this writer, and the callers queued behind
+        // it, waiting after the connection is known to be over.
+        let written = tokio::select! {
+            biased;
+            () = closed.cancelled() => break 'drive,
+            written = sink.feed(text) => written,
+        };
+        written.map_err(DriverError::Transport)?;
+        unflushed = true;
         if commands.is_empty() {
-            sink.flush().await.map_err(DriverError::Transport)?;
+            flush(&mut sink, &closed).await?;
+            unflushed = false;
         }
     }
-    if sink.close().await.is_err() {
+    // Say goodbye if the node still listens; never wait long for it.
+    let closing = tokio::select! {
+        biased;
+        () = closed.cancelled() => None,
+        closing = tokio::time::timeout(CLOSE_TIMEOUT, sink.close()) => Some(closing),
+    };
+    if !matches!(closing, Some(Ok(Ok(())))) {
         tracing::trace!("node gone while closing");
     }
     Ok(())
+}
+
+/// Flush, unless the connection is known to be over first.
+async fn flush<K, E>(sink: &mut K, closed: &CancellationToken) -> Result<(), DriverError<E>>
+where
+    K: Sink<String, Error = E> + Unpin,
+{
+    tokio::select! {
+        biased;
+        () = closed.cancelled() => Ok(()),
+        flushed = sink.flush() => flushed.map_err(DriverError::Transport),
+    }
 }
 
 /// Where one subscription's records go.

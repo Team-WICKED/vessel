@@ -85,7 +85,7 @@ pub(crate) async fn open(
             (info, Source::Stored)
         }
     };
-    let sink = outbound.open_subscription().await?;
+    let sink = outbound.open_subscription(from).await?;
     let subscription = sink.id();
     let forwarder = Forwarder {
         store: sessions.store().clone(),

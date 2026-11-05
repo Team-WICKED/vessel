@@ -5,6 +5,14 @@
 //! never delays reading the next frame, `Cancel` can abort exactly one call,
 //! and a handler that fails unexpectedly takes down only its own call: the
 //! client still gets an `Internal` answer for it.
+//!
+//! The reader never stops reading because of the in-flight limit: a request
+//! over the limit is answered `Unavailable` at once. Stopping instead would
+//! also stop `Cancel` and `session.kill` from getting through, exactly when
+//! they are needed (for example many `session.send` calls stuck on a
+//! program that does not read its input). Memory stays bounded: a refused
+//! request costs one queued answer, and the reader waits when the outbound
+//! queue is full.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -139,14 +147,25 @@ where
                     return Ok(());
                 }
             }
-            frame = stream.next(), if calls.has_room() => {
+            frame = stream.next() => {
                 let Some(frame) = frame else {
                     return Ok(());
                 };
                 let text = frame.map_err(ServeError::Transport)?;
                 match decode(&text) {
-                    Inbound::Call { id, call } => {
+                    Inbound::Call { id, call } if calls.has_room() => {
                         calls.start(id, call).map_err(ServeError::Violation)?;
+                    }
+                    Inbound::Call { id, call } => {
+                        tracing::debug!(%id, method = call.method().as_str(), "too many calls in flight");
+                        let error = WireError::new(
+                            ErrorCode::Unavailable,
+                            "too many calls in flight on this connection; retry when one finishes",
+                        );
+                        let answer = Outgoing::Response { id, outcome: Outcome::Err(error) };
+                        if queue.send(answer).await.is_err() {
+                            return Ok(());
+                        }
                     }
                     Inbound::Cancel(id) => calls.cancel(id),
                     Inbound::Invalid { id, error } => {

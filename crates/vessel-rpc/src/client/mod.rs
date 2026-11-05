@@ -238,11 +238,17 @@ impl Connection {
             .ids
             .next()
             .ok_or(CallError::RequestIdsExhausted)?;
-        self.shared
-            .commands
-            .send(Command::Call { id, call, waiter })
-            .await
-            .map_err(|_closed| CallError::Disconnected)?;
+        let command = Command::Call { id, call, waiter };
+        // The queue is bounded; while waiting for room, also watch for the
+        // connection closing, so a caller never waits on a dead driver.
+        let queued = tokio::select! {
+            biased;
+            () = self.shared.closed.cancelled() => Err(CallError::Disconnected),
+            queued = self.shared.commands.send(command) => {
+                queued.map_err(|_closed| CallError::Disconnected)
+            }
+        };
+        queued?;
         Ok(PendingCall {
             id,
             commands: &self.shared.commands,

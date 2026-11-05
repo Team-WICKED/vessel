@@ -113,3 +113,30 @@ async fn slow_subscriber_lags_without_blocking_the_connection() {
         })
     );
 }
+
+#[tokio::test]
+async fn an_abandoned_subscription_ends_lagged_at_the_first_unsent_record() {
+    let running = start(ClientConfig::default()).await;
+    let mut subscription = running
+        .client
+        .subscribe(Subscribe {
+            session: abandoned(),
+            from: EventSeq::new(5),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        subscription.next().await,
+        SubscriptionItem::Record(record(5))
+    );
+    assert_eq!(
+        subscription.next().await,
+        SubscriptionItem::Record(record(6))
+    );
+    assert_eq!(
+        subscription.next().await,
+        SubscriptionItem::Ended(SubscriptionEnd::Lagged {
+            resume_from: EventSeq::new(7)
+        })
+    );
+}

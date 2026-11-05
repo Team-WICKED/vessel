@@ -43,6 +43,15 @@ pub fn pair(capacity: NonZeroUsize) -> (MemoryTransport, MemoryTransport) {
     )
 }
 
+#[cfg(test)]
+impl MemoryTransport {
+    /// Close only the sending direction, as a peer that hangs up its side
+    /// but never reads again.
+    pub(crate) fn close_sending(&mut self) {
+        self.outgoing.close();
+    }
+}
+
 impl Stream for MemoryTransport {
     type Item = Result<String, Disconnected>;
 
