@@ -1357,6 +1357,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "vessel-agent",
  "vessel-harness",
  "vessel-proto",
  "vessel-pty",

@@ -79,27 +79,38 @@ that ADR and this table.
 ## State (2026-11-05)
 
 - Done: `vessel-proto` (protocol 2 contract).
-- Runtime track, terminal path working end to end:
+- Runtime track, terminal and structured sessions working end to end:
   - `vessel-proc`: `CommandSpec`, `spawn` as a process-group leader,
     `ProcessGroup` (Unix). Stopping signals the whole group, and the group
     is swept once its leader exits. Windows terminates only the direct
     child (no job objects yet).
   - `vessel-harness`: one descriptor module per harness, `Lookup` (explicit
     search path), concurrent `discover` with a version-probe timeout,
-    `launch`. The `fakes` feature installs testkit binaries under real
-    harness names for other crates' tests. Model selection is not here: it
-    goes over ACP in `vessel-agent`.
+    `launch` (working directory made absolute and checked). The `fakes`
+    feature installs testkit binaries under real harness names for other
+    crates' tests. Model selection is not here: it goes over ACP in
+    `vessel-agent`.
   - `vessel-pty`: `PtyProcess` over `portable-pty`, with dedicated reader,
     control (input and resize, in order) and waiter threads behind bounded
-    channels.
+    channels; modules `process`, `streams`, `threads`, `command`.
+  - `vessel-agent`: ACP v1 client on `agent-client-protocol` 5.0.
+    `AgentProcess` (own process group), `AgentInput` (prompt, cancel,
+    permission answers with typed refusals), `AgentOutputs` (bounded).
+    A single driver loop owns the session; handlers forward into one
+    ordered channel. The model is chosen through the `model` config option.
+    The `mapper` is pure and tested against fixtures in
+    `crates/vessel-agent/tests/fixtures/acp/`.
   - `vessel-session`: the R6 API (`SessionRuntime`, `SessionHandle`,
     `Follow`/`FollowError`, `Created::durable`; records shared as
-    `Arc<EventRecord>`). Terminal sessions run end to end;
-    structured sessions return `Unsupported` (`StructuredPending`) until
-    `vessel-agent` lands.
-  - `vessel-testkit`: `fake-tui` and the `Fake::path` locator.
-- In progress (milestone 1): `vessel-agent` (ACP) and `fake-acp`, then
-  structured mode in `vessel-session`; every spine crate. `vessel-node` and
+    `Arc<EventRecord>`). Terminal actor and structured actor share the
+    `lifecycle` module (stop-responsive publishing, two-step stop).
+    Structured status is `Starting` until the agent's `Ready`, then
+    `Running`; a session that never became ready ends `Failed`.
+  - `vessel-testkit`: `fake-tui`, `fake-acp` and the `Fake::path` locator.
+- Known gaps (wire contract): ACP user-message chunks (replayed by
+  `session/load`) and `raw_input` on tool call updates have no `AgentEvent`
+  field and are not forwarded.
+- In progress (milestone 1): every spine crate. `vessel-node` and
   `vessel-cli` still contain the protocol 1 code and are excluded from the
   workspace until they are ported.
 

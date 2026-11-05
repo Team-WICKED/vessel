@@ -77,6 +77,11 @@ impl Stopper {
         };
     }
 
+    /// Whether no stop has started yet.
+    pub(crate) const fn is_idle(&self) -> bool {
+        matches!(self.state, State::Idle)
+    }
+
     /// Whether the session is ending because the runtime shut down.
     pub(crate) fn interrupted(&self) -> bool {
         self.shutdown.is_cancelled()

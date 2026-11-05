@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use vessel_agent::InputError;
 use vessel_harness::HarnessError;
 use vessel_proto::{ErrorCode, SessionInput};
 
@@ -12,12 +13,21 @@ pub enum SessionError {
     /// directory).
     #[error(transparent)]
     Launch(#[from] HarnessError),
-    /// The program could not be started.
+    /// The program could not be started in a PTY.
     #[error("cannot start the session")]
     Spawn(#[source] vessel_pty::PtyError),
-    /// Structured (ACP) sessions are not available in this build yet.
-    #[error("structured sessions are not available yet")]
-    StructuredPending,
+    /// The ACP agent could not be started.
+    #[error("cannot start the agent")]
+    StartAgent(#[source] vessel_agent::AgentError),
+    /// Neither the spec nor the node user's home gives a working directory,
+    /// and ACP requires one.
+    #[error("no working directory: the spec has none and the node user has no home directory")]
+    NoWorkingDirectory,
+    /// The agent refused structured input (a turn already running, a
+    /// permission already answered, an unknown option or id, content ACP
+    /// cannot carry).
+    #[error(transparent)]
+    Input(InputError),
     /// The input does not apply to this session's mode.
     #[error("{input} cannot be sent to a {mode} session")]
     Unsupported {
@@ -43,14 +53,37 @@ impl SessionError {
     pub const fn code(&self) -> ErrorCode {
         match self {
             Self::Launch(HarnessError::NotInstalled { .. }) => ErrorCode::HarnessNotInstalled,
-            Self::Launch(HarnessError::StructuredUnavailable { .. })
-            | Self::StructuredPending
-            | Self::Unsupported { .. } => ErrorCode::Unsupported,
-            Self::Launch(HarnessError::NoSuchDirectory { .. }) => ErrorCode::InvalidRequest,
-            Self::Spawn(_) => ErrorCode::SpawnFailed,
-            Self::Ended => ErrorCode::Conflict,
+            Self::Launch(HarnessError::StructuredUnavailable { .. }) | Self::Unsupported { .. } => {
+                ErrorCode::Unsupported
+            }
+            Self::Launch(HarnessError::NoSuchDirectory { .. })
+            | Self::NoWorkingDirectory
+            | Self::Input(InputError::InvalidContent(_) | InputError::UnknownOption { .. }) => {
+                ErrorCode::InvalidRequest
+            }
+            Self::Spawn(_) | Self::StartAgent(_) => ErrorCode::SpawnFailed,
+            Self::Input(InputError::PermissionNotFound(_)) => ErrorCode::NotFound,
+            Self::Ended
+            | Self::Input(
+                InputError::Closed | InputError::TurnInProgress | InputError::PermissionSettled(_),
+            ) => ErrorCode::Conflict,
             Self::ShuttingDown => ErrorCode::Unavailable,
             Self::Internal(_) => ErrorCode::Internal,
+        }
+    }
+}
+
+impl From<InputError> for SessionError {
+    /// A closed agent connection means the session has ended, whatever the
+    /// process is still doing; everything else is the agent's verdict.
+    fn from(error: InputError) -> Self {
+        match error {
+            InputError::Closed => Self::Ended,
+            refused @ (InputError::TurnInProgress
+            | InputError::InvalidContent(_)
+            | InputError::PermissionNotFound(_)
+            | InputError::PermissionSettled(_)
+            | InputError::UnknownOption { .. }) => Self::Input(refused),
         }
     }
 }

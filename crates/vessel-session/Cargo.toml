@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+vessel-agent.workspace = true
 vessel-harness.workspace = true
 vessel-proto.workspace = true
 vessel-pty.workspace = true
