@@ -10,12 +10,42 @@ use std::process::{Command, Stdio};
 use vessel_testkit::Fake;
 
 #[test]
-fn locator_finds_the_cargo_built_binary() {
-    let located = Fake::Tui.path().unwrap();
-    let built = std::path::PathBuf::from(env!("CARGO_BIN_EXE_fake-tui"));
+fn locator_finds_the_cargo_built_binaries() {
+    for (fake, built) in [
+        (Fake::Tui, env!("CARGO_BIN_EXE_fake-tui")),
+        (Fake::Acp, env!("CARGO_BIN_EXE_fake-acp")),
+    ] {
+        let located = fake.path().unwrap();
+        let built = std::path::PathBuf::from(built);
+        assert_eq!(
+            located.canonicalize().unwrap(),
+            built.canonicalize().unwrap()
+        );
+    }
+}
+
+#[test]
+fn fake_acp_answers_the_version_probe_and_can_fail_at_start() {
+    let output = Command::new(env!("CARGO_BIN_EXE_fake-acp"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with("fake-acp ")
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_fake-acp"))
+        .env("FAKE_ACP_EXIT_EARLY", "1")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
     assert_eq!(
-        located.canonicalize().unwrap(),
-        built.canonicalize().unwrap()
+        String::from_utf8(output.stderr).unwrap().trim(),
+        "fake-acp: not logged in"
     );
 }
 

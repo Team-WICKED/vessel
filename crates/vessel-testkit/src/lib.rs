@@ -8,6 +8,9 @@
 //! - `fake-tui`: a line-oriented "TUI" that echoes input, reports its window
 //!   size, and leaves a sleeping grandchild behind so group kills can be
 //!   checked. See `src/bin/fake_tui.rs` for its exact behaviour.
+//! - `fake-acp`: a scripted ACP v1 agent on stdio (message, thought, tool
+//!   call, plan, permission request, cancel, `session/load`, a model config
+//!   option). See `src/bin/fake_acp.rs`.
 //!
 //! This crate is a dev-dependency only; nothing in `vesseld` links it.
 //!
@@ -40,6 +43,9 @@ pub enum Fake {
     /// `SIGWINCH` (Unix), runs `exit [code]`, `env NAME` and `cwd` commands,
     /// and keeps a sleeping grandchild in its process group.
     Tui,
+    /// `fake-acp`: a scripted ACP agent; its prompt text picks a scenario
+    /// (`plain`, `wait`, or the full tool-call-and-permission turn).
+    Acp,
 }
 
 impl Fake {
@@ -48,6 +54,7 @@ impl Fake {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Tui => "fake-tui",
+            Self::Acp => "fake-acp",
         }
     }
 

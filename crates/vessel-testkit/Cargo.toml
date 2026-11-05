@@ -12,9 +12,16 @@ publish = false
 name = "fake-tui"
 path = "src/bin/fake_tui.rs"
 
+[[bin]]
+name = "fake-acp"
+path = "src/bin/fake_acp.rs"
+
 [dependencies]
+agent-client-protocol.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["io-std", "rt"] }
+tokio-util = { workspace = true, features = ["compat"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
