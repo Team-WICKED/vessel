@@ -38,9 +38,10 @@ Early. Milestone 1 (one node, done properly) is in progress; see
   log, ACP-shaped agent timeline); the session runtime (`vessel-proc`,
   `vessel-harness`, `vessel-pty`, `vessel-agent`, `vessel-session`): terminal
   sessions in a PTY and structured sessions over ACP, with fake harnesses in
-  `vessel-testkit` for tests.
-- In progress: SQLite event store, RPC server and client, CLI with
-  interactive attach. Until they land, `vessel-node` and
+  `vessel-testkit` for tests; the RPC layer (`vessel-rpc`), the SQLite event
+  store (`vessel-store`) and the typed client (`vessel-client`).
+- In progress: the node daemon on protocol 2, CLI with interactive attach.
+  Until they land, `vessel-node` and
   `vessel-cli` hold the old protocol 1 code and are excluded from the
   workspace.
 
