@@ -28,6 +28,13 @@ pub enum AgentEvent {
         /// The prompt.
         content: Vec<ContentBlock>,
     },
+    /// A chunk of an earlier user message, replayed by the harness when a
+    /// session is resumed. Prompts sent through Vessel appear as
+    /// `TurnStarted` instead.
+    UserMessageChunk {
+        /// The chunk.
+        content: ContentBlock,
+    },
     /// A chunk of the agent's visible reply.
     MessageChunk {
         /// The chunk.
@@ -214,6 +221,10 @@ pub struct ToolCallUpdate {
     /// Replacement locations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locations: Option<Vec<ToolLocation>>,
+    /// The tool's raw input arguments, when the harness sends them only with
+    /// an update (Claude's adapter often does). Forwarded, never interpreted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_input: Option<RawJson>,
     /// The tool's raw output, forwarded and never interpreted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_output: Option<RawJson>,

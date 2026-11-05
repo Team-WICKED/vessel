@@ -225,6 +225,7 @@ fn kind(event: &AgentEvent) -> &'static str {
     match event {
         AgentEvent::Ready { .. } => "ready",
         AgentEvent::TurnStarted { .. } => "turn_started",
+        AgentEvent::UserMessageChunk { .. } => "user_message",
         AgentEvent::MessageChunk { .. } => "message",
         AgentEvent::ThoughtChunk { .. } => "thought",
         AgentEvent::ToolCall(_) => "tool_call",

@@ -31,10 +31,6 @@ pub(crate) enum Update {
 /// Kinds of `session/update` Vessel does not put on the timeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Skipped {
-    /// The user's own message, replayed by `session/load`. The timeline
-    /// has no user-message chunk event; Vessel records prompts as
-    /// `TurnStarted` when it sends them.
-    UserMessage,
     /// Slash commands the agent offers.
     AvailableCommands,
     /// The agent's mode changed.
@@ -55,6 +51,9 @@ pub(crate) enum Skipped {
 pub(crate) fn session_update(update: acp::SessionUpdate) -> Update {
     use acp::SessionUpdate as U;
     let event = match update {
+        U::UserMessageChunk(chunk) => AgentEvent::UserMessageChunk {
+            content: content(chunk.content),
+        },
         U::AgentMessageChunk(chunk) => AgentEvent::MessageChunk {
             content: content(chunk.content),
         },
@@ -71,7 +70,6 @@ pub(crate) fn session_update(update: acp::SessionUpdate) -> Update {
         U::Notice(notice) => AgentEvent::HarnessLog {
             line: notice_line(&notice),
         },
-        U::UserMessageChunk(_) => return Update::Skipped(Skipped::UserMessage),
         U::AvailableCommandsUpdate(_) => return Update::Skipped(Skipped::AvailableCommands),
         U::CurrentModeUpdate(_) => return Update::Skipped(Skipped::CurrentMode),
         U::ConfigOptionUpdate(_) => return Update::Skipped(Skipped::ConfigOption),
@@ -128,9 +126,6 @@ pub(crate) fn tool_call(call: acp::ToolCall) -> ToolCall {
 }
 
 /// Map a tool call update.
-///
-/// ACP updates may also carry `raw_input`; Vessel's `ToolCallUpdate` has no
-/// such field, so it is dropped (see the crate docs).
 pub(crate) fn tool_call_update(update: acp::ToolCallUpdate) -> ToolCallUpdate {
     let fields = update.fields;
     ToolCallUpdate {
@@ -144,6 +139,7 @@ pub(crate) fn tool_call_update(update: acp::ToolCallUpdate) -> ToolCallUpdate {
         locations: fields
             .locations
             .map(|locations| locations.into_iter().map(location).collect()),
+        raw_input: fields.raw_input.as_ref().and_then(raw_json),
         raw_output: fields.raw_output.as_ref().and_then(raw_json),
     }
 }
@@ -162,6 +158,7 @@ pub(crate) fn permission_tool_call(update: acp::ToolCallUpdate, known: bool) -> 
             || update.status.is_some()
             || update.content.is_some()
             || update.locations.is_some()
+            || update.raw_input.is_some()
             || update.raw_output.is_some();
         return changed.then_some(AgentEvent::ToolCallUpdate(update));
     }

@@ -50,9 +50,14 @@
     "expected": {"event": "harness_log", "line": "warning: Rate limited: retrying in 5s"}
   },
   {
-    "name": "replayed user message is skipped",
+    "name": "replayed user message is forwarded",
     "notification": {"sessionId": "s1", "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "hi"}}},
-    "skipped": "UserMessage"
+    "expected": {"event": "user_message_chunk", "content": {"type": "text", "text": "hi"}}
+  },
+  {
+    "name": "tool call update carrying the raw input",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_05", "rawInput": {"command": "cargo test", "timeout": 120}}},
+    "expected": {"event": "tool_call_update", "id": "toolu_05", "raw_input": {"command":"cargo test","timeout":120}}
   },
   {
     "name": "available commands are skipped",
