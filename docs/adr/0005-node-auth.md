@@ -40,3 +40,14 @@ Option 2:
 - Per-agent principals (so a harness calling back into the node is
   identified and limited) come in Phase 2, before agents get node tools.
 - Token rotation is "delete the file and restart" for now.
+
+## Amendment (2026-11-05): no TLS in milestone 1
+
+Milestone 1 nodes are reached on loopback or through an SSH tunnel, so the
+token travels over plain `ws://` only. The workspace builds no TLS stack:
+`tokio-tungstenite` was configured with `rustls` but no crypto provider,
+which would have panicked on the first `wss://` handshake.
+`vessel-client` refuses `wss://` with `ConnectError::TlsUnsupported`
+before any connection is attempted. TLS is chosen together with the relay
+(milestone 3), with an explicit crypto provider.
+

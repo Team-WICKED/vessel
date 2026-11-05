@@ -20,9 +20,9 @@ pub enum ConnectError {
         #[source]
         source: tungstenite::Error,
     },
-    /// `wss://` is not supported yet. The workspace builds `rustls` without
-    /// a crypto provider, and `tokio-tungstenite` would panic on the first
-    /// TLS handshake; remote nodes arrive with the relay and SSH transports.
+    /// `wss://` is not supported in milestone 1: no TLS stack is built
+    /// (ADR 0005, transport security). Remote nodes arrive with the SSH and
+    /// relay transports, which choose TLS with an explicit crypto provider.
     #[error(
         "TLS (wss://) connections are not supported yet; reach remote nodes through an SSH tunnel"
     )]
