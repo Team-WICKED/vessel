@@ -198,7 +198,7 @@ impl Handler for FakeNode {
                 (LOG_LEN, SubscriptionEnd::SessionEnded)
             };
             for seq in start..end {
-                if sink.send(record(seq)).await.is_err() {
+                if sink.send(Arc::new(record(seq))).await.is_err() {
                     return;
                 }
             }

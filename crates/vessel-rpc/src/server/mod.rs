@@ -13,6 +13,7 @@
 //! subscriptions and push their events.
 
 mod calls;
+mod encode;
 mod outbound;
 mod writer;
 
