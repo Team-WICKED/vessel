@@ -256,3 +256,20 @@ fn relative_search_entries_are_ignored() {
     let lookup = Lookup::new([PathBuf::from("relative/bin"), std::env::temp_dir()]);
     assert_eq!(lookup.dirs(), [std::env::temp_dir()]);
 }
+
+#[test]
+fn relative_working_directories_become_absolute() {
+    let bin = TempDir::new();
+    drop(install(bin.path(), HarnessKind::Codex, Role::Terminal, &fake_tui()).unwrap());
+    let command = launch(
+        &Lookup::new([bin.path().to_path_buf()]),
+        &terminal(HarnessKind::Codex, &[], Some(PathBuf::from("."))),
+    )
+    .unwrap();
+    let cwd = command.cwd.unwrap();
+    assert!(cwd.is_absolute(), "{}", cwd.display());
+    assert_eq!(
+        cwd.canonicalize().unwrap(),
+        std::env::current_dir().unwrap().canonicalize().unwrap()
+    );
+}
