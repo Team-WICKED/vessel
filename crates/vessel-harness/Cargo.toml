@@ -19,6 +19,9 @@ vessel-proto.workspace = true
 dirs.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
+# Telling "already linked" from "another file" in `link_session`, Windows
+# included (see the workspace manifest).
+same-file.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

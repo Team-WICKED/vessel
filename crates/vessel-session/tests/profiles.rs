@@ -793,17 +793,16 @@ async fn a_moved_session_continues_its_conversation_in_the_other_home() {
         assert!(from.join("memory").join("MEMORY.md").exists());
         assert!(!to.join("memory").exists(), "memory/ was linked");
 
-        // And back: on Unix the transcript is found already linked.
-        if cfg!(unix) {
-            let info = fixture
-                .runtime
-                .move_profile(id, fixture.request(&work, &alt, false))
-                .await
-                .unwrap();
-            assert_eq!(info.profile.as_ref(), Some(alt.name()));
-            reader.until_moved().await;
-            assert_eq!(reader.ask("loaded").await, format!("loaded {session}"));
-        }
+        // And back: the transcript is found already linked, on every
+        // system.
+        let info = fixture
+            .runtime
+            .move_profile(id, fixture.request(&work, &alt, false))
+            .await
+            .unwrap();
+        assert_eq!(info.profile.as_ref(), Some(alt.name()));
+        reader.until_moved().await;
+        assert_eq!(reader.ask("loaded").await, format!("loaded {session}"));
         fixture.runtime.shutdown().await;
     })
     .await;

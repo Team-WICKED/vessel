@@ -222,8 +222,11 @@ stands.
   symbolic link in either home's path is refused; symbolic links, special
   files and `memory` directories inside the session's directories are
   skipped and reported; a different file already in the target is a
-  conflict. On Windows an existing target file is always a conflict, since
-  `std` exposes no file id there to tell it is the same file.
+  conflict, and the same file (a hard link made before) counts as already
+  linked. File identity comes from `same-file` (device and inode on Unix,
+  volume serial and file index on Windows, which `std` exposes only on
+  nightly there); a target that is a symbolic link is refused before it is
+  compared, since the comparison follows links.
 - **Launch checks the profile.** The node resolves `spec.profile` (protocol
   5); `launch` refuses a profile of another harness (`ProfileMismatch`, the
   client's error) and a profile other than the one the spec names, or than
@@ -248,9 +251,7 @@ stands.
   `ProfileChanged`. If the new agent does not start, the previous command
   starts again on the same conversation and the move fails with
   `spawn_failed`. Trade-offs: the links made for a move whose agent did
-  not start stay in the target home (they are the same files; a retry on
-  Unix finds them already linked, on Windows it is a conflict, see
-  Linking), and the target home must exist, as it does once that profile
-  has logged in. Moving back to a profile the session came from works on
-  Unix (the transcript is found already linked) and is a conflict on
-  Windows, for the same reason.
+  not start stay in the target home (they are the same files, and a retry
+  finds them already linked), and the target home must exist, as it does
+  once that profile has logged in. Moving back to a profile the session
+  came from finds the transcript already linked, on every system.

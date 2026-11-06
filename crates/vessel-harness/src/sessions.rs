@@ -22,9 +22,12 @@
 //!   failed move changes nothing. A failure while linking (another file
 //!   system, a full disk) takes back the links and directories already
 //!   made, for the same reason.
-//! - Windows: hard links work on NTFS; telling "already linked" from "a
-//!   different file" needs a file id that `std` exposes only on Unix, so on
-//!   Windows any existing target file is reported as a conflict.
+//! - "Already linked" (a move back to a profile the session came from, or a
+//!   retry after a failed restart) is told from "a different file" by file
+//!   identity, through `same-file`: device and inode on Unix, the volume
+//!   serial and file index on Windows (where `std` exposes them only on
+//!   nightly). It follows symbolic links, so a target that is one is
+//!   refused before it is asked.
 
 use std::fs;
 use std::io;
@@ -242,7 +245,7 @@ pub fn link_session(files: &SessionFiles, from: &Path, to: &Path) -> Result<Link
         check_no_links(to, relative.parent().unwrap_or(Path::new("")))?;
         let target = to.join(relative);
         match fs::symlink_metadata(&target) {
-            Ok(_) if same_file(&from.join(relative), &target).map_err(io_error(&target))? => {
+            Ok(metadata) if already_linked(&from.join(relative), &target, &metadata)? => {
                 report.already = report.already.saturating_add(1);
             }
             Ok(_) => return Err(LinkError::Conflict { path: target }),
@@ -413,21 +416,19 @@ fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir(path)
 }
 
-/// Whether two paths are the same file (one inode).
-#[cfg(unix)]
-fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
-    use std::os::unix::fs::MetadataExt as _;
-    let (a, b) = (fs::symlink_metadata(a)?, fs::symlink_metadata(b)?);
-    Ok(a.dev() == b.dev() && a.ino() == b.ino())
-}
-
-/// Without a stable file id on Windows, an existing file is never assumed
-/// to be the same one.
-#[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the same signature as the Unix version"
-)]
-fn same_file(_a: &Path, _b: &Path) -> io::Result<bool> {
-    Ok(false)
+/// Whether `target` (which exists, with `metadata`) is `source` already:
+/// the same file, not a link to it. `source` is a regular file reached
+/// without a link (`collect`, `check_no_links`); `same-file` follows links,
+/// so a target that is one is refused first.
+fn already_linked(
+    source: &Path,
+    target: &Path,
+    metadata: &fs::Metadata,
+) -> Result<bool, LinkError> {
+    if metadata.file_type().is_symlink() {
+        return Err(LinkError::SymbolicLink {
+            path: target.to_owned(),
+        });
+    }
+    same_file::is_same_file(source, target).map_err(io_error(target))
 }
