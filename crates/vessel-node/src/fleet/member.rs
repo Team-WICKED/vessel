@@ -291,7 +291,7 @@ pub(crate) async fn run<C: Connector>(
         failures = 0;
         tracing::info!(home = %client.node().id, "connected to the fleet's home");
         links.connected_home(client.clone());
-        links.grant(&client, &membership).await;
+        links.grant(&client, &membership, &stop).await;
         session(&client, &local, pacing, &mut applied, &stop).await;
         links.lost_home();
     }
