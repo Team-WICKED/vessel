@@ -11,6 +11,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+use vessel_harness::HarnessEnv;
 use vessel_proto::{NodeId, NodeInfo, NodePublicKey, RelayToken, RouteUrl};
 use vessel_relay::{LinkState, NodeLink, TlsConfig, WsCarrier};
 use vessel_rpc::Server;
@@ -79,6 +80,7 @@ impl Node {
         // error at once rather than a node that is unreachable later.
         let relaying = relaying(&config)?;
         let dir = config.data_dir.clone();
+        let env = config.harness_env.clone();
         let Prepared {
             id,
             token,
@@ -86,7 +88,7 @@ impl Node {
             lock,
             profiles,
             mcp_dir,
-        } = tokio::task::spawn_blocking(move || prepare(&dir))
+        } = tokio::task::spawn_blocking(move || prepare(&dir, env))
             .await
             .map_err(NodeError::Task)??;
         let store = open_store(&config).await?;
@@ -294,6 +296,7 @@ fn core(
     let runtime = Arc::new(SessionRuntime::new(
         RuntimeConfig {
             harness_lookup: config.harness_lookup.clone(),
+            harness_env: config.harness_env.clone(),
             ring_capacity: config.ring_capacity,
             durable_capacity: config.durable_capacity,
             agent_handshake_timeout: config.agent_handshake_timeout,
@@ -463,7 +466,7 @@ fn link_relays(
 }
 
 /// The blocking part of start-up: directory, identity, token, key, lock.
-fn prepare(dir: &DataDir) -> Result<Prepared, NodeError> {
+fn prepare(dir: &DataDir, env: HarnessEnv) -> Result<Prepared, NodeError> {
     dir.prepare().map_err(NodeError::DataDir)?;
     let id = dir.load_or_create_node_id().map_err(NodeError::DataDir)?;
     let token = dir.load_or_create_token().map_err(NodeError::DataDir)?;
@@ -481,8 +484,7 @@ fn prepare(dir: &DataDir) -> Result<Prepared, NodeError> {
     // After the lock: the MCP directory is emptied, which only the node
     // owning the data directory may do.
     let mcp_dir = dir.prepare_mcp_dir().map_err(NodeError::McpDir)?;
-    let profiles =
-        NodeProfiles::load(dir.clone(), dirs::home_dir()).map_err(NodeError::Profiles)?;
+    let profiles = NodeProfiles::load(dir.clone(), env).map_err(NodeError::Profiles)?;
     Ok(Prepared {
         id,
         token,

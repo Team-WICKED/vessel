@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use bytes::Bytes;
+use vessel_harness::HarnessEnv;
 use vessel_node::{Config, Node, VesselMcp};
 use vessel_proto::{
     ContentBlock, EventSeq, HarnessKind, HarnessSessionId, ModelId, ProfileName, SessionInput,
@@ -147,7 +148,12 @@ async fn node_start(
     bind: SocketAddr,
     name: Option<String>,
 ) -> Result<(), CliError> {
-    let mut config = Config::new(data_dir(target)?);
+    // The binary, so the account it runs as comes from its own environment
+    // (`HarnessEnv`; the library never reads it).
+    let env = HarnessEnv::from_vars(dirs::home_dir().ok_or(CliError::NoHome)?, |name| {
+        std::env::var_os(name)
+    });
+    let mut config = Config::new(data_dir(target)?, env);
     config.bind = Some(bind);
     config.name = name;
     // Sessions' agents reach this node through this executable's `mcp`

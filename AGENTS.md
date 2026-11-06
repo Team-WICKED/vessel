@@ -145,6 +145,11 @@ ADR 0001 records why; `docs/plans/backend-m1.md` says who owns which crate.
   (real harness output, trimmed, with secrets removed).
 - Process-level tests use a small fake harness binary built from the
   workspace, never the real `claude`/`codex`, and never the network.
+- A node started in a test gets a temporary home and no harness home
+  variables (`HarnessEnv::new(temp)` in `Config::new`); library code never
+  reads the user's home or `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`HOME` from the
+  process. Only the binaries do. A test that must change the environment
+  runs a child process: the environment is shared by every test in it.
 - RPC is tested by round-tripping every method through encode/decode and
   through an in-memory transport.
 - Tests are deterministic: no wall-clock sleeps to wait for something; wait on

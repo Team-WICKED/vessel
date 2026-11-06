@@ -66,7 +66,14 @@ impl Fixture {
         drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
         let acp = Fake::Acp.path().unwrap();
         drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Structured, &acp).unwrap());
-        let mut config = Config::new(DataDir::new(data.path()));
+        // The node's harnesses run under a temporary home with no home
+        // variables: never the machine's own account.
+        let user_home = data.path().join("user-home");
+        std::fs::create_dir_all(&user_home).unwrap();
+        let mut config = Config::new(
+            DataDir::new(data.path()),
+            vessel_harness::HarnessEnv::new(user_home),
+        );
         config.bind = Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
         config.harness_lookup = Lookup::new([bin.path().to_path_buf()]);
         adjust(&mut config, data.path());

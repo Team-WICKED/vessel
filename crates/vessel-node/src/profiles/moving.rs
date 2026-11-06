@@ -16,7 +16,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use vessel_harness::{Lookup, Profile, home, login_check};
+use vessel_harness::{HarnessEnv, Lookup, Profile, login_check};
 use vessel_proto::{MoveProfile, SessionInfo, SessionMode};
 use vessel_session::{MoveError, ProfileMove, SessionError};
 
@@ -64,12 +64,13 @@ pub(crate) async fn plan(
             .get(name)
             .ok_or_else(|| ServiceError::ProfileGone(name.clone()))?,
     };
-    let user_home = profiles.user_home().ok_or(ServiceError::NoUserHome)?;
-    let from_home = home(&current, user_home, |name| std::env::var_os(name))
+    let from_home = profiles
+        .home(&current)
         .ok_or_else(|| ServiceError::HomeUnknown(current.name().clone()))?;
-    let to_home = home(&target, user_home, |name| std::env::var_os(name))
+    let to_home = profiles
+        .home(&target)
         .ok_or_else(|| ServiceError::HomeUnknown(target.name().clone()))?;
-    logged_in(lookup, &target).await?;
+    logged_in(lookup, profiles.env(), &target).await?;
     let (mcp_servers, notices) = launcher.mcp_servers(&info.spec);
     Ok(ProfileMove {
         mcp_servers,
@@ -82,10 +83,15 @@ pub(crate) async fn plan(
 }
 
 /// Run the target's login check; refuse unless it exits 0.
-async fn logged_in(lookup: &Lookup, target: &Profile) -> Result<(), ServiceError> {
+async fn logged_in(
+    lookup: &Lookup,
+    env: &HarnessEnv,
+    target: &Profile,
+) -> Result<(), ServiceError> {
     let lookup = lookup.clone();
+    let env = env.clone();
     let profile = target.clone();
-    let check = tokio::task::spawn_blocking(move || login_check(&lookup, &profile))
+    let check = tokio::task::spawn_blocking(move || login_check(&lookup, &env, &profile))
         .await
         .map_err(ServiceError::Task)?
         .map_err(SessionError::Launch)?;

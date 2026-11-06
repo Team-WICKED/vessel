@@ -40,6 +40,7 @@ impl Fixture {
         let runtime = Arc::new(SessionRuntime::new(
             RuntimeConfig {
                 harness_lookup: Lookup::new([bin.path().to_path_buf()]),
+                harness_env: vessel_harness::HarnessEnv::new(data.path().to_owned()),
                 ring_capacity: DEFAULT_RING_CAPACITY,
                 durable_capacity: DEFAULT_DURABLE_CAPACITY,
                 agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,

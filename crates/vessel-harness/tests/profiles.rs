@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use vessel_harness::fakes::{Role, install};
-use vessel_harness::{HarnessError, Launch, Lookup, McpError, Profile, login_check};
+use vessel_harness::{HarnessEnv, HarnessError, Launch, Lookup, McpError, Profile, login_check};
 use vessel_proc::EnvValue;
 use vessel_proto::{HarnessKind, McpTransport, ResolvedMcpServers, ResolvedValue, SessionSpec};
 
@@ -181,6 +181,12 @@ mod support {
     }
 }
 
+/// The account the tests' harnesses run as: a directory that exists and
+/// holds no account, with no home variables (never the machine's own).
+fn test_env() -> HarnessEnv {
+    HarnessEnv::new(std::env::temp_dir())
+}
+
 /// Launch `spec` asking for `profile` by name, as the node does, with the
 /// MCP file (if any) in the test's own directory (the lookup's).
 fn launch(
@@ -190,7 +196,14 @@ fn launch(
     mcp: &ResolvedMcpServers,
 ) -> Result<Launch, HarnessError> {
     let dir = lookup.dirs().first().map(PathBuf::as_path);
-    vessel_harness::launch(lookup, &asking(spec.clone(), profile), profile, mcp, dir)
+    vessel_harness::launch(
+        lookup,
+        &test_env(),
+        &asking(spec.clone(), profile),
+        profile,
+        mcp,
+        dir,
+    )
 }
 
 #[test]
@@ -460,7 +473,16 @@ fn harnesses_without_a_launch_form_report_the_servers_unattached() {
         .collect();
     assert_eq!(names, ["docs", "web"]);
     assert_eq!(launched.command.args, ["--yolo", "-p", "x"]);
-    assert!(launched.command.env.is_empty());
+    // No server's variables; only the account it runs as (Unix `HOME`).
+    assert!(
+        launched
+            .command
+            .env
+            .iter()
+            .all(|(name, _value)| name == "HOME"),
+        "{:?}",
+        launched.command.env
+    );
 }
 
 #[test]
@@ -525,7 +547,7 @@ fn login_checks_run_with_the_profile() {
     let _codex = install(bin.path(), HarnessKind::Codex, Role::Terminal, &tui).unwrap();
     let lookup = Lookup::new([bin.path().to_owned()]);
 
-    let check = login_check(&lookup, &profile("claude-alt"))
+    let check = login_check(&lookup, &test_env(), &profile("claude-alt"))
         .unwrap()
         .unwrap();
     assert_eq!(check.program, claude);
@@ -539,12 +561,12 @@ fn login_checks_run_with_the_profile() {
         Some(&EnvValue::Remove)
     );
 
-    let check = login_check(&lookup, &profile("codex-work"))
+    let check = login_check(&lookup, &test_env(), &profile("codex-work"))
         .unwrap()
         .unwrap();
     assert_eq!(check.args, ["login", "status"]);
     assert!(matches!(
-        login_check(&lookup, &profile("gemini-plain")),
+        login_check(&lookup, &test_env(), &profile("gemini-plain")),
         Ok(None)
     ));
 }
@@ -564,7 +586,7 @@ fn the_profile_must_be_the_one_the_spec_asks_for() {
     assert_eq!(
         format!(
             "{:?}",
-            vessel_harness::launch(&lookup, &spec, &alt, &none, None).unwrap_err()
+            vessel_harness::launch(&lookup, &test_env(), &spec, &alt, &none, None).unwrap_err()
         ),
         format!(
             "{:?}",
@@ -574,17 +596,20 @@ fn the_profile_must_be_the_one_the_spec_asks_for() {
             }
         )
     );
-    assert!(vessel_harness::launch(&lookup, &spec, &default, &none, None).is_ok());
+    assert!(vessel_harness::launch(&lookup, &test_env(), &spec, &default, &none, None).is_ok());
     // The default named explicitly is the default.
     let named_default = asking(spec.clone(), &default);
-    assert!(vessel_harness::launch(&lookup, &named_default, &default, &none, None).is_ok());
+    assert!(
+        vessel_harness::launch(&lookup, &test_env(), &named_default, &default, &none, None).is_ok()
+    );
     // A named profile: that one, not the default.
     let wants_alt = asking(spec, &alt);
-    assert!(vessel_harness::launch(&lookup, &wants_alt, &alt, &none, None).is_ok());
+    assert!(vessel_harness::launch(&lookup, &test_env(), &wants_alt, &alt, &none, None).is_ok());
     assert_eq!(
         format!(
             "{:?}",
-            vessel_harness::launch(&lookup, &wants_alt, &default, &none, None).unwrap_err()
+            vessel_harness::launch(&lookup, &test_env(), &wants_alt, &default, &none, None)
+                .unwrap_err()
         ),
         format!(
             "{:?}",
@@ -608,11 +633,12 @@ fn a_harness_that_needs_an_mcp_file_needs_a_directory() {
     assert_eq!(
         format!(
             "{:?}",
-            vessel_harness::launch(&lookup, &spec, &default, &servers(), None).unwrap_err()
+            vessel_harness::launch(&lookup, &test_env(), &spec, &default, &servers(), None)
+                .unwrap_err()
         ),
         format!("{:?}", HarnessError::NoMcpDirectory)
     );
     // Without servers, or for a harness without a file, none is needed.
     let none = ResolvedMcpServers::new();
-    assert!(vessel_harness::launch(&lookup, &spec, &default, &none, None).is_ok());
+    assert!(vessel_harness::launch(&lookup, &test_env(), &spec, &default, &none, None).is_ok());
 }

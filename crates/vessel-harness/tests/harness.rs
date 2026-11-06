@@ -52,7 +52,16 @@ mod support {
 #[expect(clippy::panic_in_result_fn, reason = "a test helper")]
 fn launch(lookup: &Lookup, spec: &SessionSpec) -> Result<CommandSpec, HarnessError> {
     let profile = Profile::default_for(spec.harness);
-    let launch = vessel_harness::launch(lookup, spec, &profile, &ResolvedMcpServers::new(), None)?;
+    // A directory that exists and holds no account, never the machine's.
+    let env = vessel_harness::HarnessEnv::new(std::env::temp_dir());
+    let launch = vessel_harness::launch(
+        lookup,
+        &env,
+        spec,
+        &profile,
+        &ResolvedMcpServers::new(),
+        None,
+    )?;
     assert!(launch.mcp_file.is_none() && launch.unattached.is_empty());
     Ok(launch.command)
 }
@@ -181,8 +190,10 @@ fn terminal_launch_passes_arguments_and_cwd() {
     assert_eq!(command.cwd.as_deref(), Some(work.path()));
 }
 
+/// The user home the launch was given, never the machine's own: a test's
+/// sessions stay out of the real home.
 #[test]
-fn working_directory_defaults_to_home() {
+fn working_directory_defaults_to_the_given_home() {
     let bin = TempDir::new();
     drop(install(bin.path(), HarnessKind::Codex, Role::Terminal, &fake_tui()).unwrap());
     let command = launch(
@@ -190,7 +201,22 @@ fn working_directory_defaults_to_home() {
         &terminal(HarnessKind::Codex, &[], None),
     )
     .unwrap();
-    assert_eq!(command.cwd, dirs::home_dir());
+    assert_eq!(
+        command.cwd,
+        Some(std::path::absolute(std::env::temp_dir()).unwrap())
+    );
+    // The harness inherits this account: its home variable removed (none
+    // here), and on Unix `HOME` set to the given home.
+    assert_eq!(
+        command.env_change("CODEX_HOME"),
+        Some(&vessel_proc::EnvValue::Remove)
+    );
+    if cfg!(unix) {
+        assert_eq!(
+            command.env_change("HOME"),
+            Some(&vessel_proc::EnvValue::Set(std::env::temp_dir().into()))
+        );
+    }
 }
 
 #[test]

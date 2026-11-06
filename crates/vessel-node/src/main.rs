@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
+use vessel_harness::HarnessEnv;
 use vessel_node::{Config, DataDir, Node, VesselMcp};
 use vessel_proto::RouteUrl;
 
@@ -223,7 +224,14 @@ async fn relay(args: RelayArgs) -> ExitCode {
 }
 
 async fn run(dir: DataDir, args: Run) -> ExitCode {
-    let mut config = Config::new(dir);
+    // The one place `vesseld` reads the account it runs as: the binary,
+    // never the library (`HarnessEnv`).
+    let Some(user_home) = dirs::home_dir() else {
+        tracing::error!("this user has no home directory; set HOME");
+        return ExitCode::FAILURE;
+    };
+    let env = HarnessEnv::from_vars(user_home, |name| std::env::var_os(name));
+    let mut config = Config::new(dir, env);
     config.bind = match args.bind {
         Bind::Tcp(address) => Some(address),
         Bind::None => None,

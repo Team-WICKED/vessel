@@ -29,7 +29,10 @@ use crate::{Config, Node};
 
 async fn node() -> (TempDir, Node) {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::new(DataDir::new(temp.path().join("data")));
+    let mut config = Config::new(
+        DataDir::new(temp.path().join("data")),
+        vessel_harness::HarnessEnv::new(temp.path().join("user")),
+    );
     config.bind = None;
     config.harness_lookup = Lookup::new(Vec::<PathBuf>::new());
     config.relays = vec!["wss://relay.example/vessel".parse().unwrap()];
@@ -155,7 +158,10 @@ async fn an_invitation_is_a_link_to_this_node_with_its_routes() {
 async fn the_node_key_comes_from_node_key_and_survives_a_restart() {
     let temp = tempfile::tempdir().unwrap();
     let start = || {
-        let mut config = Config::new(DataDir::new(temp.path()));
+        let mut config = Config::new(
+            DataDir::new(temp.path()),
+            vessel_harness::HarnessEnv::new(temp.path().join("user")),
+        );
         config.bind = None;
         Node::start(config)
     };

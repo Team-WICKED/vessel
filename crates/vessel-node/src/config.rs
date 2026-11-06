@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use vessel_harness::Lookup;
+use vessel_harness::{HarnessEnv, Lookup};
 use vessel_proto::{DEFAULT_PORT, RouteUrl};
 use vessel_relay::Keepalive;
 use vessel_rpc::ServerConfig;
@@ -27,6 +27,9 @@ pub struct Config {
     pub name: Option<String>,
     /// Identity, token and event log.
     pub data_dir: DataDir,
+    /// The account harnesses run as: the user's home and the harness home
+    /// variables (`Config::new` says why it is required).
+    pub harness_env: HarnessEnv,
     /// Where harness binaries are looked up (`PATH` by default).
     pub harness_lookup: Lookup,
     /// Event log limits and retention.
@@ -89,13 +92,20 @@ impl VesselMcp {
 }
 
 impl Config {
-    /// Defaults for a node keeping its state in `data_dir`.
+    /// Defaults for a node keeping its state in `data_dir`, running
+    /// harnesses as `harness_env`'s account.
+    ///
+    /// `harness_env` has no default on purpose: `vesseld` and the CLI make
+    /// it from their own environment (`HarnessEnv::from_vars`), and a test
+    /// gives a temporary home (`HarnessEnv::new`), so no in-process node
+    /// reaches the machine's real harness homes by an argument forgotten.
     #[must_use]
-    pub fn new(data_dir: DataDir) -> Self {
+    pub fn new(data_dir: DataDir, harness_env: HarnessEnv) -> Self {
         Self {
             bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT))),
             name: None,
             data_dir,
+            harness_env,
             harness_lookup: Lookup::from_env(),
             store: StoreConfig::default(),
             ring_capacity: DEFAULT_RING_CAPACITY,

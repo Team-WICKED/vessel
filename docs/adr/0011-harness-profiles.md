@@ -202,10 +202,24 @@ stands.
   environment: a profile that neither sets nor removes the home variable
   (the default one included) runs in whatever home the node was started
   with, as the harness itself would. A relative value is reported as
-  unknown. Gemini CLI and `OpenCode` have no confirmed variable that moves
+  unknown.
+- **Whose environment (2026-11-06).** "The node's own" is a value, not the
+  process: `HarnessEnv { user_home, vars }` (the harness home variables
+  only) is part of `vessel_node::Config::new`, required, with no default.
+  `vesseld` and the CLI fill it from their environment; every in-process
+  node a test starts gets a temporary home and no variables. `NodeProfiles`
+  owns it and is the one place node code resolves a home
+  (`NodeProfiles::home`: moving a session, the fleet's targets,
+  transfers), and `vessel_harness::launch` and `login_check` take it, so a
+  launched harness inherits that account (its home variable as there or
+  removed, and `HOME` on Unix) before the profile's changes. Why: a test
+  once wrote into a real `~/.claude` because node code resolved the
+  default profile's home from the process; now forgetting is a compile
+  error, and a child-process guard test (`vessel-node` e2e `isolation`)
+  fails if anything reaches the account the tests run under. Gemini CLI and `OpenCode` have no confirmed variable that moves
   their whole home; their homes are the defaults (`~/.gemini`,
   `~/.config/opencode`).
-- **Login check.** `login_check(lookup, profile)` runs with the profile's
+- **Login check.** `login_check(lookup, env, profile)` runs with the profile's
   environment, so it checks that profile's account (`claude auth status`,
   `codex login status`; none for Gemini CLI and `OpenCode` yet). The
   commands come from `--help` only; whether a logged-out check exits

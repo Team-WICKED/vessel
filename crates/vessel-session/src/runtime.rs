@@ -243,6 +243,7 @@ impl SessionRuntime {
         record: Record,
     ) -> Result<Created, SessionError> {
         let lookup = self.config.harness_lookup.clone();
+        let env = self.config.harness_env.clone();
         let launch_spec = spec.clone();
         let window = WindowSize {
             cols: size.cols,
@@ -252,6 +253,7 @@ impl SessionRuntime {
         let (pty, output, mcp_file) = tokio::task::spawn_blocking(move || {
             let launch = vessel_harness::launch(
                 &lookup,
+                &env,
                 &launch_spec,
                 &profile,
                 &mcp.servers,
@@ -301,13 +303,14 @@ impl SessionRuntime {
         record: Record,
     ) -> Result<Created, SessionError> {
         let lookup = self.config.harness_lookup.clone();
+        let env = self.config.harness_env.clone();
         let launch_spec = spec.clone();
         // Lookup and directory checks block.
         let (command, cwd) = tokio::task::spawn_blocking(move || {
             // Structured sessions get their MCP servers over ACP, not here.
             let none = ResolvedMcpServers::new();
             let command =
-                vessel_harness::launch(&lookup, &launch_spec, &profile, &none, None)?.command;
+                vessel_harness::launch(&lookup, &env, &launch_spec, &profile, &none, None)?.command;
             // ACP needs an explicit directory; the launch defaults it to
             // the home directory, and the node's own is the last resort.
             let cwd = command
@@ -395,11 +398,13 @@ impl SessionRuntime {
         let to = (!profile.is_default()).then(|| profile.name().clone());
         let spec = info.spec.with_profile(profile.name().clone());
         let lookup = self.config.harness_lookup.clone();
+        let env = self.config.harness_env.clone();
         let session = harness_session.clone();
         let from = from_home.clone();
         let (command, cwd, files) = tokio::task::spawn_blocking(move || {
             let none = ResolvedMcpServers::new();
-            let command = vessel_harness::launch(&lookup, &spec, &profile, &none, None)?.command;
+            let command =
+                vessel_harness::launch(&lookup, &env, &spec, &profile, &none, None)?.command;
             let cwd = command
                 .cwd
                 .clone()

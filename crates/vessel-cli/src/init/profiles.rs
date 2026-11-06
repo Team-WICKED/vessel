@@ -12,8 +12,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use vessel_harness::{
-    AccountHome, InstallPart, Profile, Profiles, account_homes, add_profile, home, home_variable,
-    login_check, login_command, missing, parse_profiles,
+    AccountHome, HarnessEnv, InstallPart, Profile, Profiles, account_homes, add_profile,
+    home_variable, login_check, login_command, missing, parse_profiles,
 };
 use vessel_proto::{HarnessKind, ProfileName};
 
@@ -58,8 +58,7 @@ pub(super) async fn run(init: &mut Init) -> Result<(), CliError> {
         let shown_dir = shown(init, &account.dir);
         let existing = profiles.defined().find(|profile| {
             profile.harness() == account.harness
-                && home(profile, &home_dir, |name| std::env::var_os(name)).as_deref()
-                    == Some(account.dir.as_path())
+                && own_env(&home_dir).home(profile).as_deref() == Some(account.dir.as_path())
         });
         if let Some(profile) = existing {
             let step = format!("profile {}", profile.name());
@@ -166,9 +165,16 @@ fn home_value(dir: &Path, home_dir: &Path) -> String {
     }
 }
 
+/// The account `vessel init` sets up: this binary's own environment (the
+/// library is never handed the process's, `HarnessEnv`), under `home`.
+fn own_env(home: &Path) -> HarnessEnv {
+    HarnessEnv::from_vars(home.to_owned(), |name| std::env::var_os(name))
+}
+
 /// Run each installed harness's login check, per profile; print how to log
 /// in where one fails. Never logs in itself.
 async fn check_logins(init: &mut Init, profiles: &Profiles) -> Result<(), CliError> {
+    let env = own_env(&init.options.home);
     // Harnesses that are not installed were reported already.
     let absent: Vec<HarnessKind> = missing(&init.lookup)
         .into_iter()
@@ -180,7 +186,7 @@ async fn check_logins(init: &mut Init, profiles: &Profiles) -> Result<(), CliErr
             continue;
         }
         let step = format!("login {}", profile.name());
-        let check = match login_check(&init.lookup, profile) {
+        let check = match login_check(&init.lookup, &env, profile) {
             Ok(Some(check)) => check,
             Ok(None) => {
                 init.report(
@@ -238,7 +244,7 @@ fn login_hint(init: &Init, profile: &Profile) -> Option<String> {
     let Some(variable) = home_set else {
         return Some(command);
     };
-    let dir = home(profile, &init.options.home, |name| std::env::var_os(name))?;
+    let dir = own_env(&init.options.home).home(profile)?;
     Some(if cfg!(windows) {
         format!("$env:{variable}='{}'; {command}", dir.display())
     } else {

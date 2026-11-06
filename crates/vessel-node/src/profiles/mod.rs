@@ -25,7 +25,7 @@ pub(crate) mod moving;
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use vessel_harness::{Profile, Profiles, ProfilesError, parse_profiles};
+use vessel_harness::{HarnessEnv, Profile, Profiles, ProfilesError, parse_profiles};
 use vessel_proto::{HarnessKind, ProfileInfo, ProfileName};
 use vessel_store::{DataDir, StoreError};
 
@@ -44,8 +44,10 @@ pub enum ProfilesFileError {
 #[derive(Debug)]
 pub(crate) struct NodeProfiles {
     dir: DataDir,
-    /// What `~/` expands to; `None` if the node user has no home.
-    user_home: Option<PathBuf>,
+    /// The account harnesses run as: what `~/` expands to, where default
+    /// homes are, and the home variables profiles inherit. Given by whoever
+    /// started the node (`Config::harness_env`), never read here.
+    env: HarnessEnv,
     current: RwLock<Arc<Profiles>>,
 }
 
@@ -55,15 +57,12 @@ impl NodeProfiles {
     ///
     /// # Errors
     /// The file cannot be read or does not parse.
-    pub(crate) fn load(
-        dir: DataDir,
-        user_home: Option<PathBuf>,
-    ) -> Result<Self, ProfilesFileError> {
-        let profiles = read(&dir, user_home.as_deref())?;
+    pub(crate) fn load(dir: DataDir, env: HarnessEnv) -> Result<Self, ProfilesFileError> {
+        let profiles = read(&dir, env.user_home())?;
         log_loaded(&profiles);
         Ok(Self {
             dir,
-            user_home,
+            env,
             current: RwLock::new(Arc::new(profiles)),
         })
     }
@@ -84,7 +83,7 @@ impl NodeProfiles {
     /// # Errors
     /// The file cannot be read or does not parse.
     pub(crate) fn reload(&self) -> Result<Vec<ProfileInfo>, ProfilesFileError> {
-        let profiles = read(&self.dir, self.user_home.as_deref())?;
+        let profiles = read(&self.dir, self.env.user_home())?;
         log_loaded(&profiles);
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(profiles);
         Ok(self.list(None))
@@ -96,8 +95,21 @@ impl NodeProfiles {
     }
 
     /// What `~/` expands to, and where default homes are.
-    pub(crate) fn user_home(&self) -> Option<&std::path::Path> {
-        self.user_home.as_deref()
+    pub(crate) fn user_home(&self) -> &std::path::Path {
+        self.env.user_home()
+    }
+
+    /// The account harnesses run as on this node.
+    pub(crate) const fn env(&self) -> &HarnessEnv {
+        &self.env
+    }
+
+    /// Where `profile`'s harness keeps its configuration, logins and
+    /// sessions on this node: the one place node code resolves a home
+    /// (moving a session, the fleet's targets, transfers). `None` when the
+    /// profile's home variable is relative.
+    pub(crate) fn home(&self, profile: &Profile) -> Option<PathBuf> {
+        self.env.home(profile)
     }
 
     fn snapshot(&self) -> Arc<Profiles> {
@@ -105,9 +117,9 @@ impl NodeProfiles {
     }
 }
 
-fn read(dir: &DataDir, user_home: Option<&std::path::Path>) -> Result<Profiles, ProfilesFileError> {
+fn read(dir: &DataDir, user_home: &std::path::Path) -> Result<Profiles, ProfilesFileError> {
     match dir.read_profiles().map_err(ProfilesFileError::Read)? {
-        Some(file) => Ok(parse_profiles(&file.text, user_home)?),
+        Some(file) => Ok(parse_profiles(&file.text, Some(user_home))?),
         None => Ok(Profiles::default()),
     }
 }

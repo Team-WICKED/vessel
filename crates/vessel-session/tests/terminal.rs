@@ -72,6 +72,8 @@ mod support {
             let runtime = SessionRuntime::new(
                 RuntimeConfig {
                     harness_lookup: Lookup::new([bin.clone()]),
+                    // Never the machine's own account.
+                    harness_env: vessel_harness::HarnessEnv::new(std::env::temp_dir()),
                     ring_capacity,
                     durable_capacity,
                     agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,

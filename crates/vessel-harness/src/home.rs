@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use vessel_proc::CommandSpec;
 use vessel_proto::EnvName;
 
+use crate::env::HarnessEnv;
 use crate::error::HarnessError;
 use crate::harnesses::descriptor;
 use crate::launch::with_profile;
@@ -62,8 +63,9 @@ fn default(user_home: &Path, parts: &[&str]) -> PathBuf {
 
 /// The command that reports whether `profile`'s harness is logged in,
 /// without changing anything (`claude auth status`, `codex login status`),
-/// run with the profile's environment so it checks that profile's account;
-/// `None` if the harness has no such command.
+/// run with `env`'s account and then the profile's environment, so it
+/// checks that profile's account; `None` if the harness has no such
+/// command.
 ///
 /// The commands were confirmed from `--help` only. Whether a failed check
 /// exits non-zero was not tried (that would touch an account), so callers
@@ -74,6 +76,7 @@ fn default(user_home: &Path, parts: &[&str]) -> PathBuf {
 /// [`HarnessError::NotInstalled`] if the harness is missing.
 pub fn login_check(
     lookup: &Lookup,
+    env: &HarnessEnv,
     profile: &Profile,
 ) -> Result<Option<CommandSpec>, HarnessError> {
     let harness = profile.harness();
@@ -88,7 +91,7 @@ pub fn login_check(
             binary: descriptor.binary,
         })?;
     Ok(Some(with_profile(
-        CommandSpec::new(program).args(args.iter()),
+        env.apply(CommandSpec::new(program).args(args.iter()), harness),
         profile,
     )))
 }
@@ -179,7 +182,10 @@ mod tests {
             "alt",
         );
         assert_eq!(
-            format!("{:?}", login_check(&lookup, &alt).unwrap_err()),
+            format!(
+                "{:?}",
+                login_check(&lookup, &HarnessEnv::new(dir.clone()), &alt).unwrap_err()
+            ),
             format!(
                 "{:?}",
                 HarnessError::NotInstalled {
@@ -189,7 +195,10 @@ mod tests {
             )
         );
         let gemini = Profile::default_for(HarnessKind::Gemini);
-        assert!(matches!(login_check(&lookup, &gemini), Ok(None)));
+        assert!(matches!(
+            login_check(&lookup, &HarnessEnv::new(dir.clone()), &gemini),
+            Ok(None)
+        ));
         drop(std::fs::remove_dir(&dir));
     }
 
