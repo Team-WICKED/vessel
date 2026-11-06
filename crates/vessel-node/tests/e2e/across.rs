@@ -68,12 +68,13 @@ pub(crate) async fn home(relay: &Relay, sources: &std::path::Path) -> Member {
 
 /// A member named `label` that joined `home` with a link of `scopes`,
 /// granting the home the default (`read`, `operate`); returned once the
-/// home lists it.
+/// home can call it.
 async fn member(relay: &Relay, home: &Member, label: &str, scopes: Vec<Scope>) -> Member {
     member_granting(relay, home, label, scopes, DEFAULT_GRANT.to_vec()).await
 }
 
-/// A member as [`member`] makes one, granting the home `grant`.
+/// A member as [`member`] makes one, granting the home `grant`; returned
+/// once the home can call it.
 pub(crate) async fn member_granting(
     relay: &Relay,
     home: &Member,
@@ -101,9 +102,17 @@ pub(crate) async fn member_granting(
         .await
         .unwrap();
     let id = node.info().id;
+    // Usable once both sides recorded the grant: the home lists it, and the
+    // member wrote down which device is its home's (it takes deliveries
+    // only from that one). The member records after the home does, so
+    // the home's list alone was not enough (CI saw a delivered call
+    // refused in between).
+    let granted = FleetFiles::new(&fixture.data_dir())
+        .dir()
+        .join("granted.json");
     for _ in 0..800 {
         let peers = home.owner.call(ListPeers).await.unwrap();
-        if peers.iter().any(|peer| peer.node == id) {
+        if peers.iter().any(|peer| peer.node == id) && granted.is_file() {
             let owner = fixture.connect(&node).await;
             return Member {
                 fixture,

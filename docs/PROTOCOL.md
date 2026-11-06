@@ -40,13 +40,17 @@ yet", after the scope check like every method.)
   only one the member takes `fleet.deliver` from, and leaving revokes it).
   A member grants once per join: if its owner revokes the home's device,
   the home stays cut off until the node joins again.
-  The home binds a member device to the node id and key of its first
-  grant and answers `conflict` to a grant that would rebind it, that
-  names an id or key another member device's grant holds, the home's own
-  id, or a name the home or another member uses (the same id and key
-  through another device is the node joined again, and replaces the older
-  grant); `invalid_request` to a link with no route or more than 8; and
-  `unavailable`, without details, when it cannot pair; `fleet.peers`
+  The home keeps a record of every node id it bound to a key and of the
+  node every member device granted for, revoked and replaced devices
+  included, and answers `conflict` to a grant that would rebind a device,
+  bind an id to another key or a key to another id, name the home's own
+  id, or a name the home or another live member uses (the same id and
+  key through another device is the node joined again, and replaces the
+  older grant; an id goes to a new key only after the home's owner runs
+  `vessel fleet forget <node>`); `conflict` also while the same device
+  has a grant in progress; `invalid_request` to a link with no route or
+  more than 8; and `unavailable`, without details, when it cannot pair
+  (within 30 s); `fleet.peers`
   (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
   `protocol`, `reachable`), the home included.
 - Transfers (F4): `session.export { session, force? }` (operate,
@@ -104,8 +108,10 @@ yet", after the scope check like every method.)
   nothing at `from` yet, the node answers as soon as a record lands there
   or the session ends, or when the wait ends (an empty page). An ended or
   stored session answers at once. Waiting reads may hold at most half of a
-  connection's calls (32 of 64), and one origin at most 8 on a node; a
-  read past either answers at once, as without `wait` (passed on to
+  connection's calls (32 of 64); one origin at most 8 on a node; all
+  origins of one other node at most 16 there; and on the home, the reads
+  one relaying member device passes on at most 16, whatever origins they
+  name. A read past any of these answers at once, as without `wait` (passed on to
   another node, it goes without its wait). A client that gets an empty
   page before its wait could have ended should pause before asking again.
 - `SessionInfo` takes `via?` (the home a creating call came through) and

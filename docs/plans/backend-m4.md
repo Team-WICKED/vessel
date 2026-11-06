@@ -291,7 +291,10 @@ member vesseld                         home vesseld
   Windows only inside the user's profile); Codex rollouts match the whole
   id and two are an error; one case rule for variable names (Windows
   ignores case); `EPERM` from an exited leader's group counts as gone only
-  once the group is (`vessel-proc`, `vessel-pty`); typed errors and
+  once the group is, through one rule for every group signal
+  (`ProcessGroup::signal_with_leader`: wait up to 500 ms for the leader's
+  reap, then signal again; a second `EPERM` is returned), since macOS
+  refuses a leader that has begun exiting before `try_wait` sees it; typed errors and
   config; links taken back on a failure partway; `memory` in any case.
 - **H1 on the node (done):** `profiles.toml` in the data directory, read
   at start (a broken file stops the node) and on `profile.reload` (a
@@ -572,6 +575,48 @@ reproduced problems, fixed in this order:
 - **6 (low): a grant made the home dial any routes.** A link names at most
   8 routes, and a failure to pair answers in general terms; the details go
   to the home's log (`e2e/grants.rs`).
+- **Round 2 (2026-11-06, the reviewer's proofs of concept run again
+  against 9bb68e6).** Items 2, 5 and 6 held; these were fixed next:
+  - **A (item 1, still open): a revoked member's id was free.** The home
+    checked grants only against live member devices, so after its owner
+    revoked a member's device a `sync` device bound that id to an
+    impostor, and the member's own grant was refused when it joined again.
+    The home now keeps `fleet/bindings.json` for good: every node id it
+    bound to a key, and the node every member device granted for, revoked
+    and replaced devices included (`fleet/bindings.rs`; a home from before
+    starts it from the grants it keeps). An id goes to a new key only
+    after the owner's `vessel fleet forget <node>` on the home, which is
+    recorded. Tests: `e2e/grants.rs` (the proof of concept as a refusal,
+    then the member joining again; a reinstalled node refused until the
+    home forgets it) and the `fleet::links` and `fleet::bindings` unit
+    tests. The trust-on-first-grant window stays until ids come from keys
+    (proposed above).
+  - **B (item 3, partly): a relaying device names its own origins.** It
+    named a new agent session per read and took the home's whole waiting
+    half on its connection to a member (40 reads, 32 waits; the owner's
+    own waits came back at once). Every origin of one other node now
+    shares 16 waiting reads on a node, and the reads one relaying device
+    passes on through the home share 16, on top of 8 per origin and half a
+    connection (`waits.rs`; `e2e/waiting.rs`, which fails without them).
+  - **C (new): the member's grant lock could stick.** `grant` held the
+    lock while it waited on the home, unbounded and deaf to the stop
+    signal, so a home that never answered stopped `reconcile` (a member
+    that left kept the home's device). The lock now covers only the local
+    decision and the record; the call is bounded (45 s) and the redemption
+    wait (30 s), both give way to the stop signal; the result is recorded
+    only if the same join is still the node's; the sweep waits while a
+    grant is in flight (`e2e/grants.rs`: stopping a member does not wait
+    for a grant its home cannot complete).
+  - **D (new): the home held its grant lock while pairing.** A `sync`
+    device whose link named eight silent routes held it for 80 s and every
+    other member's grant waited. Pairing is now outside the lock, within
+    30 s; the claim is checked before and again after it under the lock;
+    one grant per device at a time (`e2e/grants.rs`).
+  - The reviewer found the re-join rule sound, noting that an admin of a
+    member who also holds a `sync` device on the home could move that
+    member's binding to their own device: a denial of service and a change
+    of provenance, with no scope gained; the record keeps the old device
+    from claiming anything else.
 - **Documented, not changed** (ADR 0013, "Known limits"): an agent's
   limits are per node, so 8 live sessions on each node it reaches (8 × N);
   and a relaying member's own scopes on the home do not cap the calls it

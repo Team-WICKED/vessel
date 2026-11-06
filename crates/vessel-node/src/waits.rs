@@ -1,5 +1,7 @@
 //! Shares of waiting reads (`session.read` with `wait`, protocol 6): at most
-//! half of each connection's calls, and a few per origin on this node.
+//! half of each connection's calls, a few per origin on this node, and a
+//! few more for everything one other node, or one relaying member device,
+//! asks.
 //!
 //! [Decision Log] (the review of Track X, 2026-11-06, item 3)
 //! - Problem: a waiting read holds one of its connection's calls for up to
@@ -16,6 +18,13 @@
 //!   goes without its wait, so it holds no call on any hop for long. The
 //!   other half of every connection is always there for everything else,
 //!   and one busy origin cannot take a shared connection's half alone.
+//! - Round 2 of the review: an origin's agent session is whatever the
+//!   delivering node says it is, so a relaying member could name a new
+//!   session for every read and take a shared connection's whole half
+//!   alone (40 reads made 32 waits, and the home's owner's own waits came
+//!   back at once). So every origin of one other node shares [`PER_NODE`]
+//!   on this node, and every call one relaying member device passes on
+//!   through the home shares [`PER_RELAY`], whatever origins they name.
 //! - Alternatives: a connection (or a pool) of its own for long polls
 //!   between nodes: one more authenticated link per pair to keep up, and
 //!   the caller's own connection to its node would still fill. Refusing a
@@ -40,6 +49,35 @@ pub(crate) const PER_CONNECTION: usize = 32;
 
 /// Waiting reads one origin may hold on this node at once.
 pub(crate) const PER_ORIGIN: usize = 8;
+
+/// Waiting reads every origin of one other node may hold on this node.
+pub(crate) const PER_NODE: usize = 16;
+
+/// Waiting reads one relaying member device may pass on through the home.
+pub(crate) const PER_RELAY: usize = 16;
+
+/// A share of waiting reads, counted on this node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Share {
+    /// One origin.
+    Origin(Waiter),
+    /// Every origin of another node (a delivered call names its session as
+    /// the delivering node says).
+    Node(NodeId),
+    /// Every call one relaying member device passes on, whatever origins
+    /// they name.
+    Relay(DeviceId),
+}
+
+impl Share {
+    const fn cap(self) -> usize {
+        match self {
+            Self::Origin(_) => PER_ORIGIN,
+            Self::Node(_) => PER_NODE,
+            Self::Relay(_) => PER_RELAY,
+        }
+    }
+}
 
 /// Who waits, for the share of each origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,6 +114,16 @@ impl Waiter {
         }
     }
 
+    /// The shares a read of this waiter counts against on node `here`: its
+    /// own, and, for an origin on another node, that node's.
+    pub(crate) fn shares(self, here: NodeId) -> Vec<Share> {
+        let mut shares = vec![Share::Origin(self)];
+        if self.node != here {
+            shares.push(Share::Node(self.node));
+        }
+        shares
+    }
+
     /// The waiter a call from `origin` speaks for.
     pub(crate) const fn origin(origin: &Origin) -> Self {
         Self {
@@ -92,23 +140,26 @@ impl Waiter {
 /// One connection's waiting reads (shared by its clones, `acting_as`).
 pub(crate) type ConnectionWaits = Arc<AtomicUsize>;
 
-/// This node's waiting reads, by origin.
+/// This node's waiting reads, by share.
 #[derive(Debug, Default)]
 pub(crate) struct Waits {
-    origins: Mutex<HashMap<Waiter, usize>>,
+    held: Mutex<HashMap<Share, usize>>,
 }
 
 impl Waits {
-    /// A place for one more waiting read of `waiter` on `connection`, if
-    /// both shares have room; given back when the slot is dropped.
+    /// A place for one more waiting read on `connection` in each of
+    /// `shares`, if the connection's half and every share have room; given
+    /// back when the slot is dropped.
     pub(crate) fn take(
         self: &Arc<Self>,
         connection: &ConnectionWaits,
-        waiter: Waiter,
+        shares: Vec<Share>,
     ) -> Option<WaitSlot> {
-        let mut origins = self.origins.lock().unwrap_or_else(PoisonError::into_inner);
-        let held = origins.get(&waiter).copied().unwrap_or(0);
-        if held >= PER_ORIGIN {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if shares
+            .iter()
+            .any(|share| held.get(share).copied().unwrap_or(0) >= share.cap())
+        {
             return None;
         }
         let _taken = connection
@@ -116,31 +167,36 @@ impl Waits {
                 taken.checked_add(1).filter(|&next| next <= PER_CONNECTION)
             })
             .ok()?;
-        let _previous = origins.insert(waiter, held.saturating_add(1));
+        for share in &shares {
+            let count = held.entry(*share).or_insert(0);
+            *count = count.saturating_add(1);
+        }
         Some(WaitSlot {
             waits: Arc::clone(self),
             connection: Arc::clone(connection),
-            waiter,
+            shares,
         })
     }
 
-    fn give_back(&self, waiter: Waiter) {
-        let mut origins = self.origins.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(held) = origins.get_mut(&waiter) {
-            *held = held.saturating_sub(1);
-            if *held == 0 {
-                let _gone = origins.remove(&waiter);
+    fn give_back(&self, shares: &[Share]) {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        for share in shares {
+            if let Some(count) = held.get_mut(share) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    let _gone = held.remove(share);
+                }
             }
         }
     }
 }
 
-/// A waiting read's place in its connection's and its origin's share.
+/// A waiting read's place in its connection's half and in its shares.
 #[derive(Debug)]
 pub(crate) struct WaitSlot {
     waits: Arc<Waits>,
     connection: ConnectionWaits,
-    waiter: Waiter,
+    shares: Vec<Share>,
 }
 
 impl Drop for WaitSlot {
@@ -150,7 +206,7 @@ impl Drop for WaitSlot {
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |taken| {
                     taken.checked_sub(1)
                 });
-        self.waits.give_back(self.waiter);
+        self.waits.give_back(&self.shares);
     }
 }
 
@@ -158,39 +214,68 @@ impl Drop for WaitSlot {
 mod tests {
     use super::*;
 
-    fn agent(session: SessionId) -> Waiter {
+    fn agent(node: NodeId) -> Waiter {
         Waiter {
-            node: NodeId::random(),
-            by: By::Agent(session),
+            node,
+            by: By::Agent(SessionId::random()),
         }
     }
 
     #[test]
     fn an_origin_holds_a_few_waits_and_a_connection_half_its_calls() {
+        let here = NodeId::random();
         let waits = Arc::new(Waits::default());
         let connection = ConnectionWaits::default();
-        let busy = agent(SessionId::random());
-        let mut held: Vec<WaitSlot> = (0..PER_ORIGIN)
-            .map(|_| waits.take(&connection, busy).unwrap())
-            .collect();
-        assert!(waits.take(&connection, busy).is_none(), "past its share");
+        let take = |waiter: Waiter| waits.take(&connection, waiter.shares(here));
+        let busy = agent(here);
+        let mut held: Vec<WaitSlot> = (0..PER_ORIGIN).map(|_| take(busy).unwrap()).collect();
+        assert!(take(busy).is_none(), "past its share");
         // Others share the rest of the connection's half.
         while held.len() < PER_CONNECTION {
-            held.push(waits.take(&connection, agent(SessionId::random())).unwrap());
+            held.push(take(agent(here)).unwrap());
         }
-        assert!(
-            waits
-                .take(&connection, agent(SessionId::random()))
-                .is_none()
-        );
+        assert!(take(agent(here)).is_none());
         // Another connection has its own half.
         let other = ConnectionWaits::default();
-        assert!(waits.take(&other, agent(SessionId::random())).is_some());
+        assert!(waits.take(&other, agent(here).shares(here)).is_some());
         // A slot given back is free again, for its origin too.
         drop(held.remove(0));
-        assert!(waits.take(&connection, busy).is_some());
+        assert!(take(busy).is_some());
         drop(held);
         assert_eq!(connection.load(Ordering::Acquire), 0);
-        assert!(waits.origins.lock().unwrap().is_empty());
+        assert!(waits.held.lock().unwrap().is_empty());
+    }
+
+    /// Round 2 of the review: a node (or a relaying device) naming a new
+    /// origin for every read still has one share on this node.
+    #[test]
+    fn a_node_or_a_relaying_device_has_one_share_whatever_origins_it_names() {
+        let here = NodeId::random();
+        let waits = Arc::new(Waits::default());
+        let (from_member, from_home) = (ConnectionWaits::default(), ConnectionWaits::default());
+        let member = NodeId::random();
+        let held: Vec<WaitSlot> = (0..PER_NODE)
+            .map(|_| waits.take(&from_home, agent(member).shares(here)).unwrap())
+            .collect();
+        assert!(waits.take(&from_home, agent(member).shares(here)).is_none());
+        // Another node's origins still wait on the same connection.
+        assert!(
+            waits
+                .take(&from_home, agent(NodeId::random()).shares(here))
+                .is_some()
+        );
+        drop(held);
+
+        // The home passing reads on for one relaying device.
+        let device = DeviceId::random();
+        let relayed = |waits: &Arc<Waits>| {
+            let mut shares = agent(member).shares(here);
+            shares.push(Share::Relay(device));
+            waits.take(&from_member, shares)
+        };
+        let held: Vec<WaitSlot> = (0..PER_RELAY).map(|_| relayed(&waits).unwrap()).collect();
+        assert!(relayed(&waits).is_none());
+        drop(held);
+        assert!(waits.held.lock().unwrap().is_empty());
     }
 }

@@ -41,6 +41,7 @@
 //!   topology); a subscription frame for `fleet.watch` (a long poll needs
 //!   no new frame type).
 
+mod bindings;
 mod chunks;
 mod config;
 mod files;
@@ -63,6 +64,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_proto::HarnessKind;
 
+pub use bindings::{Forgot, forget};
 pub(crate) use chunks::{fetch, serve};
 pub use config::{FleetInit, InitError, SourcesError, init};
 pub use files::{FileError, FleetFiles};
