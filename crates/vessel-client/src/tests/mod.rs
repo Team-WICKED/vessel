@@ -91,6 +91,9 @@ fn client_info() -> ClientInfo {
 
 /// A node with one session whose log is `oldest..LOG_LEN`.
 struct FakeNode {
+    /// The id new connections are welcomed with (change it to play a
+    /// reinstalled machine).
+    id: Mutex<NodeId>,
     /// Records below this were pruned.
     oldest: u64,
     subscribes: AtomicUsize,
@@ -106,6 +109,7 @@ struct FakeNode {
 impl FakeNode {
     fn new(oldest: u64) -> Self {
         Self {
+            id: Mutex::new(NodeId::random()),
             oldest,
             subscribes: AtomicUsize::new(0),
             reads: AtomicUsize::new(0),
@@ -240,9 +244,11 @@ impl Handler for FakeNode {
 }
 
 fn server(fake: Arc<FakeNode>) -> Arc<Server<FakeNode>> {
+    let mut info = node();
+    info.id = *fake.id.lock().unwrap();
     Arc::new(Server::new(
         fake,
-        tokio::sync::watch::channel(node()).1,
+        tokio::sync::watch::channel(info).1,
         ServerConfig::default(),
         CancellationToken::new(),
     ))

@@ -160,8 +160,13 @@ depend on the node, so there is no cycle).
     Milestone 2 (Track C, in progress): `Connector` (`WsConnector` here,
     the SSH one in `vessel-remote`), `follow_resuming`/`ResumingStream`
     (redials with 0.5–30 s jittered backoff and follows again from its
-    cursor; never repeats a call), `NodeClient::stop_node` (protocol 3
-    only), and the plain-data `NodeAddress`/`SshTarget`/`RemotePath`.
+    cursor; never repeats a call), `Pinned` (refuses a node whose id is
+    not the pinned one, so a reconnect cannot land on another machine),
+    `NodeClient::stop_node` (protocol 3 only), the plain-data
+    `NodeAddress`/`SshTarget`/`RemotePath`, and the node `book`
+    (`<config_dir>/vessel/nodes.toml`, a project's `.vessel/config.toml`
+    that may only pick one of the user's nodes, `resolve` for `--node`;
+    edited with `toml_edit`, keeping comments).
   - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
     the `Handler` routing to `sessions` (live runtime sessions plus stored
     ones; a session whose log is complete, final status included, is

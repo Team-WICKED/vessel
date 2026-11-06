@@ -12,8 +12,10 @@
 //! [`WsConnector`] for a websocket, and `vessel-remote`'s SSH connector
 //! (ADR 0007). [`follow_resuming`] builds on it: a [`ResumingStream`] that
 //! dials again when the connection drops and continues from its cursor,
-//! reporting the loss and the resume as non-fatal items. Where a node is
-//! comes as a [`NodeAddress`]: a websocket URL or an [`SshTarget`].
+//! reporting the loss and the resume as non-fatal items; [`Pinned`] makes
+//! sure it is the same node each time. Where a node is comes as a
+//! [`NodeAddress`]: a websocket URL or an [`SshTarget`], by name from the
+//! user's node [`book`].
 //!
 //! No command-line parsing and no printing: the CLI, a web backend or an
 //! editor plugin all build on this the same way.
@@ -32,9 +34,11 @@
 //!   [`NodeClient::over`].
 
 mod address;
+pub mod book;
 mod client;
 mod connector;
 mod error;
+mod pinned;
 mod resume;
 mod stream;
 #[cfg(test)]
@@ -49,6 +53,7 @@ pub use address::{
 pub use client::NodeClient;
 pub use connector::{Connector, WsConnector};
 pub use error::{ConnectError, StreamError};
+pub use pinned::{Pinned, PinnedError};
 pub use resume::{Backoff, ResumingStream, follow_resuming};
 pub use stream::SessionStream;
 pub use token::{BearerToken, InvalidToken};
