@@ -194,26 +194,37 @@ async fn dropping_an_unwaited_child_kills_its_group() {
 /// group (`EPERM`: every member is a zombie). That must count as "already
 /// gone", and the exit code must survive for `wait`.
 ///
-/// No portable call shows an exited child without reaping it, so this
-/// signals in a loop across the moment the fake exits (it has closed its
-/// stdout by then): on macOS some of these signals land on the zombie.
-/// Elsewhere the group simply accepts them.
-#[cfg(unix)]
+/// macOS only: Linux signals a group of zombies without complaint, so the
+/// test could not fail there. `kqueue`'s `NOTE_EXIT` reports the exit
+/// without reaping, so the signal lands on the zombie every time.
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn signalling_a_leader_that_exited_unreaped_succeeds() {
+    use nix::errno::Errno;
+    use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent, Kqueue};
+
     within(async {
         let Spawned {
             mut child, stdout, ..
         } = spawn(&fake_tui().arg("--version")).unwrap();
         let printed = drain(BufReader::new(stdout).lines()).await;
         assert!(printed.contains("fake-tui"), "{printed}");
-        for _ in 0..100 {
-            child.signal(Signal::Terminate).unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let watch = KEvent::new(
+            usize::try_from(child.pid()).unwrap(),
+            EventFilter::EVFILT_PROC,
+            EvFlags::EV_ADD | EvFlags::EV_ONESHOT,
+            FilterFlag::NOTE_EXIT,
+            0,
+            0,
+        );
+        let mut seen = [watch];
+        // Blocks until the exit; `ESRCH` if it had exited already.
+        match Kqueue::new().unwrap().kevent(&[watch], &mut seen, None) {
+            Ok(_) | Err(Errno::ESRCH) => {}
+            Err(error) => panic!("cannot watch the child: {error}"),
         }
-        // Exited by itself (0) or ended by an early signal (no code).
-        let code = child.wait().await.unwrap();
-        assert!(matches!(code, Some(0) | None), "{code:?}");
+        child.signal(Signal::Terminate).unwrap();
+        assert_eq!(child.wait().await.unwrap(), Some(0));
     })
     .await;
 }
