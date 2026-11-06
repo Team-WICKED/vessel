@@ -194,6 +194,33 @@ mod support {
             }
         }
 
+        /// Read until a whole line (its newline arrived) starts with
+        /// `prefix`, and return the rest of it, trimmed. Output comes in
+        /// chunks of any size, so text that merely contains `prefix` may
+        /// still lack the end of its line. (Unix: only the escape test,
+        /// which needs process groups, reads a line's value.)
+        #[cfg(unix)]
+        pub(super) async fn until_line(&mut self, prefix: &str) -> String {
+            loop {
+                let complete = self
+                    .text
+                    .rfind('\n')
+                    .and_then(|end| self.text.get(..end))
+                    .unwrap_or_default();
+                if let Some(rest) = complete
+                    .lines()
+                    .find_map(|line| line.trim().strip_prefix(prefix))
+                {
+                    return rest.trim().to_owned();
+                }
+                assert!(
+                    self.next().await.is_some(),
+                    "session ended before a line {prefix:?}; output: {:?}",
+                    self.text
+                );
+            }
+        }
+
         /// Read to the end; returns the final status.
         pub(super) async fn until_end(&mut self) -> SessionStatus {
             while self.next().await.is_some() {}
@@ -571,16 +598,10 @@ async fn a_process_that_escaped_the_group_does_not_keep_the_session_open() {
         let mut follower = Follower::new(&handle, EventSeq::ZERO);
         follower.until_text("ready").await;
         handle.send(keys("escape\r")).await.unwrap();
-        follower.until_text("escaped ").await;
-        follower.until_text("\n").await;
-        let escapee: u32 = follower
-            .text
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("escaped "))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        // The whole line: a chunk can end right after "escaped " or in
+        // the middle of the pid (`until_text("\n")` was satisfied at once
+        // by earlier lines, CI run 42201738385).
+        let escapee: u32 = follower.until_line("escaped ").await.parse().unwrap();
 
         handle.send(keys("exit 3\r")).await.unwrap();
         assert_eq!(
