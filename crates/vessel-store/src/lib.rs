@@ -51,7 +51,7 @@ mod token;
 mod writer;
 
 pub use config::{ByteCount, Retention, StoreConfig};
-pub use data_dir::DataDir;
+pub use data_dir::{DataDir, ProfilesFile};
 pub use devices::{CredentialHash, StoredDevice};
 pub use error::{Column, Quantity, StoreError};
 pub use lock::{NodeLock, NodeOwner, StartLock};

@@ -6,7 +6,7 @@
 //! a failure.
 
 use vessel_harness::{HarnessError, Profile, home};
-use vessel_proto::{ErrorCode, HarnessKind, HarnessSessionId, SessionStatus};
+use vessel_proto::{Creator, DeviceId, ErrorCode, HarnessKind, HarnessSessionId, SessionStatus};
 use vessel_session::{LaunchOptions, SessionError};
 
 use support::{
@@ -460,6 +460,7 @@ async fn a_terminal_session_reads_its_servers_from_a_file_removed_with_it() {
                     profile: Some(named(&profiles(fixture.homes()), "claude-alt")),
                     mcp_servers: servers(),
                     mcp_dir: Some(fixture.homes().to_owned()),
+                    ..LaunchOptions::default()
                 },
             )
             .await
@@ -540,16 +541,24 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
         let fixture = Fixture::new();
         let profiles = profiles(fixture.homes());
         let alt = named(&profiles, "claude-alt");
+        let device = Creator::Device {
+            id: DeviceId::random(),
+        };
         let options = LaunchOptions {
             profile: Some(alt.clone()),
             mcp_servers: servers(),
             mcp_dir: None,
+            created_by: device.clone(),
         };
         let created = fixture
             .create(structured(None), options.clone())
             .await
             .unwrap();
         drop(created.durable);
+        // Recorded as asked: the profile and who created it.
+        let info = created.handle.info();
+        assert_eq!(info.created_by, device);
+        assert_eq!(info.profile.as_ref(), Some(alt.name()));
         let mut reader = Reader::new(created.handle);
         reader.until_status(&SessionStatus::Running).await;
 

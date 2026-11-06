@@ -60,6 +60,22 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             let text = render::harnesses(&client.harnesses().await?);
             Ok(io::out(text.as_bytes()).await?)
         }
+        Command::Profiles { harness, reload } => {
+            let client = connect(target).await?.client;
+            let profiles = if reload {
+                let reloaded = client.reload_profiles().await?;
+                match harness {
+                    Some(harness) => reloaded
+                        .into_iter()
+                        .filter(|profile| profile.harness == harness)
+                        .collect(),
+                    None => reloaded,
+                }
+            } else {
+                client.profiles(harness).await?
+            };
+            Ok(io::out(render::profiles(&profiles).as_bytes()).await?)
+        }
         Command::Sessions => {
             let client = connect(target).await?.client;
             let text = render::sessions(&client.sessions().await?);
@@ -122,6 +138,7 @@ async fn run_session(target: &Target, run: Run) -> Result<(), CliError> {
     let (resolved, book) = nodes::resolve(target)?;
     let mut spec = SessionSpec::new(run.harness, mode);
     spec.cwd = run.cwd.map(|cwd| node_cwd(&resolved, cwd)).transpose()?;
+    spec.profile = run.profile;
     let connected = connect_to(target, &resolved, &book).await?;
     let info = connected.client.create_session(spec).await?;
     if run.detach {

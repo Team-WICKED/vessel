@@ -12,6 +12,10 @@
 //!   vesseld.sock     the node's local socket (Unix; ADR 0007)
 //!   bin/             installed `vesseld-<version>` binaries (ADR 0008)
 //!   logs/            the log of a node started by `vesseld attach`
+//!   profiles.toml    harness profiles (ADR 0011), written by the owner;
+//!                    read at start and on `profile.reload`
+//!   mcp/             terminal sessions' MCP configuration files (ADR
+//!                    0012), one per live session, emptied at start
 //! ```
 //!
 //! Every file is owner-only (0600 on Unix); see `files` for why and for
@@ -47,6 +51,29 @@ const OWNER_FILE: &str = "vesseld.owner";
 const SOCKET_FILE: &str = "vesseld.sock";
 const BIN_DIR: &str = "bin";
 const LOG_DIR: &str = "logs";
+const PROFILES_FILE: &str = "profiles.toml";
+const MCP_DIR: &str = "mcp";
+
+/// `profiles.toml` as read: its text, and whether other users can read it
+/// (it may hold secrets, so the node warns).
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProfilesFile {
+    /// The file's text.
+    pub text: String,
+    /// Whether users other than the owner can read it (Unix; always
+    /// `false` on Windows, see `files`).
+    pub readable_by_others: bool,
+}
+
+/// The text may hold secrets: only its length is shown.
+impl std::fmt::Debug for ProfilesFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProfilesFile")
+            .field("bytes", &self.text.len())
+            .field("readable_by_others", &self.readable_by_others)
+            .finish()
+    }
+}
 
 /// A node's data directory. Constructing one does no I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +149,67 @@ impl DataDir {
     #[must_use]
     pub fn log_dir(&self) -> PathBuf {
         self.root.join(LOG_DIR)
+    }
+
+    /// The node's harness profiles (ADR 0011).
+    #[must_use]
+    pub fn profiles_path(&self) -> PathBuf {
+        self.root.join(PROFILES_FILE)
+    }
+
+    /// Where terminal sessions' MCP configuration files go (ADR 0012).
+    #[must_use]
+    pub fn mcp_dir(&self) -> PathBuf {
+        self.root.join(MCP_DIR)
+    }
+
+    /// `profiles.toml`, or `None` if there is none (the node then has only
+    /// the default profiles). Logs a warning when other users can read it,
+    /// as for `token`; the owner decides, since the node did not write it.
+    ///
+    /// # Errors
+    /// The file exists but cannot be read, or is not UTF-8.
+    pub fn read_profiles(&self) -> Result<Option<ProfilesFile>, StoreError> {
+        let path = self.profiles_path();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(StoreError::io(&path)(error)),
+        };
+        let readable_by_others = files::readable_by_others(&path).unwrap_or_else(|error| {
+            tracing::debug!(path = %path.display(), %error, "could not check the profiles file's mode");
+            false
+        });
+        if readable_by_others {
+            tracing::warn!(
+                path = %path.display(),
+                "profiles.toml is readable by other users and may hold secrets; run `chmod 600` on it"
+            );
+        }
+        Ok(Some(ProfilesFile {
+            text,
+            readable_by_others,
+        }))
+    }
+
+    /// Create the MCP directory owner-only, and remove the files a previous
+    /// run left in it: they belonged to sessions that are over, and may
+    /// hold secrets. Returns the directory.
+    ///
+    /// # Errors
+    /// The directory cannot be created or listed.
+    pub fn prepare_mcp_dir(&self) -> Result<PathBuf, StoreError> {
+        let dir = self.mcp_dir();
+        files::create_private_dir(&dir).map_err(StoreError::io(&dir))?;
+        for entry in std::fs::read_dir(&dir).map_err(StoreError::io(&dir))? {
+            let path = entry.map_err(StoreError::io(&dir))?.path();
+            if path.is_file()
+                && let Err(error) = std::fs::remove_file(&path)
+            {
+                tracing::warn!(path = %path.display(), %error, "could not remove a stale MCP configuration file");
+            }
+        }
+        Ok(dir)
     }
 
     /// Create the directory if it does not exist, owner-only on Unix. An

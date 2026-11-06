@@ -1,7 +1,7 @@
 //! Starting a node and stopping it.
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -25,9 +25,11 @@ use crate::guard::Guarded;
 use crate::identity;
 use crate::ipc::{self, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
+use crate::profiles::NodeProfiles;
+use crate::profiles::launch::Launcher;
 use crate::secure::{MAX_UNADMITTED, SecureGateway};
 use crate::server::{self, Gateway};
-use crate::service::NodeService;
+use crate::service::{NodeService, Parts};
 use crate::sessions::Sessions;
 use crate::shutdown::Teardown;
 
@@ -55,6 +57,10 @@ struct Prepared {
     /// From `node.key` (ADR 0009).
     keypair: NodeKeypair,
     lock: NodeLock,
+    /// From `profiles.toml` (ADR 0011).
+    profiles: NodeProfiles,
+    /// Owner-only, emptied of a previous run's files (ADR 0012).
+    mcp_dir: PathBuf,
 }
 
 impl Node {
@@ -76,10 +82,16 @@ impl Node {
             token,
             keypair,
             lock,
+            profiles,
+            mcp_dir,
         } = tokio::task::spawn_blocking(move || prepare(&dir))
             .await
             .map_err(NodeError::Task)??;
         let store = open_store(&config).await?;
+        let session_setup = SessionSetup {
+            profiles: Arc::new(profiles),
+            launcher: Launcher { mcp_dir },
+        };
 
         let Core {
             runtime,
@@ -89,7 +101,7 @@ impl Node {
             forwarders,
             devices,
             service,
-        } = core(&config, id, &store, keypair.public());
+        } = core(&config, id, &store, keypair.public(), session_setup);
         let closing = CancellationToken::new();
         let rpc = Arc::new(Server::new(
             Arc::clone(&service),
@@ -242,8 +254,20 @@ struct Core {
     service: Arc<Guarded>,
 }
 
+/// What sessions are created with: the node's profiles and the launch seam.
+struct SessionSetup {
+    profiles: Arc<NodeProfiles>,
+    launcher: Launcher,
+}
+
 /// Build the session runtime, the lifecycle, the devices and the service.
-fn core(config: &Config, id: NodeId, store: &Store, key: &NodePublicKey) -> Core {
+fn core(
+    config: &Config,
+    id: NodeId,
+    store: &Store,
+    key: &NodePublicKey,
+    setup: SessionSetup,
+) -> Core {
     let runtime = Arc::new(SessionRuntime::new(
         RuntimeConfig {
             harness_lookup: config.harness_lookup.clone(),
@@ -275,13 +299,15 @@ fn core(config: &Config, id: NodeId, store: &Store, key: &NodePublicKey) -> Core
             direct: config.public.clone(),
         },
     ));
-    let service = Arc::new(Guarded(NodeService::new(
-        lifecycle.clone(),
-        config.harness_lookup.clone(),
+    let service = Arc::new(Guarded(NodeService::new(Parts {
+        lifecycle: lifecycle.clone(),
+        lookup: config.harness_lookup.clone(),
         sessions,
-        Arc::clone(&devices),
-        forwarders.clone(),
-    )));
+        devices: Arc::clone(&devices),
+        forwarders: forwarders.clone(),
+        profiles: setup.profiles,
+        launcher: setup.launcher,
+    })));
     Core {
         runtime,
         lifecycle,
@@ -406,11 +432,18 @@ fn prepare(dir: &DataDir) -> Result<Prepared, NodeError> {
         started_at: Utc::now(),
     };
     let lock = NodeLock::acquire(dir, &owner).map_err(NodeError::AlreadyRunning)?;
+    // After the lock: the MCP directory is emptied, which only the node
+    // owning the data directory may do.
+    let mcp_dir = dir.prepare_mcp_dir().map_err(NodeError::McpDir)?;
+    let profiles =
+        NodeProfiles::load(dir.clone(), dirs::home_dir()).map_err(NodeError::Profiles)?;
     Ok(Prepared {
         id,
         token,
         keypair,
         lock,
+        profiles,
+        mcp_dir,
     })
 }
 

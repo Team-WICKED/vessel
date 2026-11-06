@@ -36,6 +36,7 @@ async fn main() -> ExitCode {
         Command::Nodes { .. }
         | Command::Status
         | Command::Harnesses
+        | Command::Profiles { .. }
         | Command::Sessions
         | Command::Run(_)
         | Command::Attach { .. }

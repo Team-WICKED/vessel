@@ -26,6 +26,10 @@ pub enum Column {
     Status,
     /// `events.event` (a `SessionEvent`).
     Event,
+    /// `sessions.profile` (a `ProfileName`, schema 3).
+    Profile,
+    /// `sessions.created_by` (a `Creator`, schema 3).
+    CreatedBy,
 }
 
 /// Anything that can go wrong in the store.
