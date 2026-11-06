@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, CreateSession, DeviceInfo, EventPage, GetNode, GetSession, Handler, Harness, Invitation,
+    Ack, CreateSession, DeviceInfo, EventPage, GetNode, GetSession, Harness, Invitation,
     InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions, NodeInfo, ReadEvents,
     RevokeDevice, SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WireError,
 };
@@ -87,14 +87,23 @@ fn wire(error: &ServiceError) -> WireError {
     error.to_wire()
 }
 
-impl Handler for NodeService {
-    type Context = Connection;
-
-    async fn node_info(&self, _: &Connection, _: GetNode) -> Result<NodeInfo, WireError> {
+/// The calls, one per protocol method. Inherent, not a `Handler`: only
+/// [`Guarded`](crate::guard::Guarded) implements `Handler`, so the service
+/// cannot be served without the scope check.
+impl NodeService {
+    #[expect(
+        clippy::unused_async,
+        reason = "every call has the same async shape, so the guard's rows are uniform"
+    )]
+    pub(crate) async fn node_info(
+        &self,
+        _: &Connection,
+        _: GetNode,
+    ) -> Result<NodeInfo, WireError> {
         Ok(self.lifecycle.info())
     }
 
-    async fn list_harnesses(
+    pub(crate) async fn list_harnesses(
         &self,
         _: &Connection,
         _: ListHarnesses,
@@ -102,7 +111,7 @@ impl Handler for NodeService {
         Ok(vessel_harness::discover(&self.lookup).await)
     }
 
-    async fn list_sessions(
+    pub(crate) async fn list_sessions(
         &self,
         _: &Connection,
         _: ListSessions,
@@ -110,7 +119,7 @@ impl Handler for NodeService {
         self.sessions.list().await.map_err(|error| wire(&error))
     }
 
-    async fn get_session(
+    pub(crate) async fn get_session(
         &self,
         _: &Connection,
         request: GetSession,
@@ -121,7 +130,7 @@ impl Handler for NodeService {
             .map_err(|error| wire(&error))
     }
 
-    async fn create_session(
+    pub(crate) async fn create_session(
         &self,
         _: &Connection,
         request: CreateSession,
@@ -135,7 +144,11 @@ impl Handler for NodeService {
             .map_err(|error| wire(&error))
     }
 
-    async fn send_input(&self, _: &Connection, request: SendInput) -> Result<Ack, WireError> {
+    pub(crate) async fn send_input(
+        &self,
+        _: &Connection,
+        request: SendInput,
+    ) -> Result<Ack, WireError> {
         self.sessions
             .send(request.session, request.input)
             .await
@@ -143,7 +156,11 @@ impl Handler for NodeService {
             .map_err(|error| wire(&error))
     }
 
-    async fn kill_session(&self, _: &Connection, request: KillSession) -> Result<Ack, WireError> {
+    pub(crate) async fn kill_session(
+        &self,
+        _: &Connection,
+        request: KillSession,
+    ) -> Result<Ack, WireError> {
         self.sessions
             .kill(request.session)
             .await
@@ -151,7 +168,7 @@ impl Handler for NodeService {
             .map_err(|error| wire(&error))
     }
 
-    async fn read_events(
+    pub(crate) async fn read_events(
         &self,
         _: &Connection,
         request: ReadEvents,
@@ -162,7 +179,7 @@ impl Handler for NodeService {
             .map_err(|error| wire(&error))
     }
 
-    async fn subscribe(
+    pub(crate) async fn subscribe(
         &self,
         connection: &Connection,
         request: Subscribe,
@@ -177,7 +194,7 @@ impl Handler for NodeService {
         .map_err(|error| wire(&error))
     }
 
-    async fn unsubscribe(
+    pub(crate) async fn unsubscribe(
         &self,
         connection: &Connection,
         request: Unsubscribe,
@@ -194,13 +211,25 @@ impl Handler for NodeService {
     /// idle. The `Ack` reaches the client even though `now` starts the
     /// shutdown inside this call: a closing connection still answers the
     /// calls already running (`vessel-rpc`, `server::calls`).
-    async fn stop_node(&self, _: &Connection, request: StopNode) -> Result<Ack, WireError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "every call has the same async shape, so the guard's rows are uniform"
+    )]
+    pub(crate) async fn stop_node(
+        &self,
+        _: &Connection,
+        request: StopNode,
+    ) -> Result<Ack, WireError> {
         self.lifecycle.stop(request.when);
         Ok(Ack)
     }
 
     /// `device.invite` (ADR 0010): a single-use pairing link.
-    async fn invite_device(
+    #[expect(
+        clippy::unused_async,
+        reason = "every call has the same async shape, so the guard's rows are uniform"
+    )]
+    pub(crate) async fn invite_device(
         &self,
         _: &Connection,
         request: InviteDevice,
@@ -208,7 +237,7 @@ impl Handler for NodeService {
         self.devices.invite(&request).map_err(|error| wire(&error))
     }
 
-    async fn list_devices(
+    pub(crate) async fn list_devices(
         &self,
         _: &Connection,
         _: ListDevices,
@@ -218,7 +247,11 @@ impl Handler for NodeService {
 
     /// `device.revoke`: also closes the device's open connections, this
     /// one included if a device revokes itself (after its `ack`).
-    async fn revoke_device(&self, _: &Connection, request: RevokeDevice) -> Result<Ack, WireError> {
+    pub(crate) async fn revoke_device(
+        &self,
+        _: &Connection,
+        request: RevokeDevice,
+    ) -> Result<Ack, WireError> {
         self.devices
             .revoke(request.device)
             .await

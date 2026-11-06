@@ -22,6 +22,7 @@ use vessel_secure::{MemoryCarrier, NodeKeypair, SecureChannel, SecureError, memo
 use vessel_store::{CredentialHash, DataDir};
 
 use super::*;
+use crate::secure::{MAX_UNADMITTED, NotServed};
 use crate::{Config, Node};
 
 async fn node() -> (TempDir, Node) {
@@ -237,7 +238,7 @@ async fn secure(
     key: &NodePublicKey,
 ) -> (
     Result<SecureChannel<MemoryCarrier>, SecureError>,
-    tokio::task::JoinHandle<Result<(), SecureError>>,
+    tokio::task::JoinHandle<Result<(), NotServed>>,
     Arc<Mutex<Option<NodeClose>>>,
 ) {
     let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
@@ -303,7 +304,7 @@ async fn a_client_with_another_key_gets_no_channel() {
     assert!(channel.is_err());
     assert!(matches!(
         accepted.await.unwrap(),
-        Err(SecureError::Handshake(_))
+        Err(NotServed::Handshake(SecureError::Handshake(_)))
     ));
     assert_eq!(*closed.lock().unwrap(), Some(NodeClose::HandshakeFailed));
     node.stop().await.unwrap();
@@ -447,4 +448,60 @@ async fn a_channel_without_a_preamble_is_dropped_unanswered() {
     let refused = Connection::connect(channel, client(), &ClientConfig::default()).await;
     assert!(refused.is_err(), "{refused:?}");
     node.stop().await.unwrap();
+}
+
+/// Anyone who reaches the node can open channels; at most
+/// `MAX_UNADMITTED` wait for their preamble, one more is dropped at once,
+/// and a slot comes back when a waiting one leaves.
+#[tokio::test]
+async fn channels_waiting_for_their_preamble_are_capped() {
+    let (_temp, node) = node().await;
+    let permits = || node.secure.unadmitted.available_permits();
+    let mut waiting: Vec<MemoryTransport> = (0..MAX_UNADMITTED).map(|_| channel(&node)).collect();
+    while permits() > 0 {
+        tokio::task::yield_now().await;
+    }
+    let mut extra = channel(&node);
+    assert!(extra.next().await.is_none(), "dropped at once");
+
+    drop(waiting.pop());
+    while permits() == 0 {
+        tokio::task::yield_now().await;
+    }
+    let (_device, _secret, connection) = pair(&node, invite(&node, None)).await;
+    assert_eq!(connection.call(ListDevices).await.unwrap().len(), 1);
+    drop(waiting);
+    node.stop().await.unwrap();
+}
+
+/// Pairing registers its connection under the new device's id before the
+/// device is stored (the order `DeviceAuth` uses), so a revocation that
+/// finds the device also finds the connection.
+#[tokio::test]
+async fn a_pairing_connection_is_registered_under_the_device_it_stores() {
+    let (_temp, node) = node().await;
+    let devices = &node.secure.devices;
+    let closing = CancellationToken::new();
+    let registration = devices.connect(DeviceId::random(), &closing);
+    let offer = invite(&node, None);
+    let (_secret, scopes) = devices
+        .pair(&registration, &offer.invite, "laptop")
+        .await
+        .unwrap();
+    assert_eq!(scopes, Scope::ALL.to_vec());
+    let stored = devices.list().await.unwrap();
+    assert_eq!(stored[0].id, registration.device());
+    devices.revoke(registration.device()).await.unwrap();
+    assert!(registration.closing().is_cancelled());
+    node.stop().await.unwrap();
+}
+
+#[test]
+fn labels_lose_control_and_invisible_formatting_characters() {
+    // A right-to-left override would show "laptop\u{202E}exe.txt" as
+    // "laptoptxt.exe"; zero-width and isolate characters hide in names.
+    assert_eq!(label("lap\u{202E}top\u{200B}\u{2066}\u{2069}"), "laptop");
+    assert_eq!(label("\u{FEFF}work\u{00AD}\u{E0041}\tlaptop"), "worklaptop");
+    assert_eq!(label("\u{200D}\u{2060} \n"), "device");
+    assert_eq!(label("Pixel 9 (José)"), "Pixel 9 (José)");
 }

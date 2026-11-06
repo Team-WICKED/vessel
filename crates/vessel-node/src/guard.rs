@@ -16,6 +16,8 @@
 //!   (`Request::METHOD`), so a row cannot check the wrong scope. A method
 //!   added to the protocol is a new `Handler` method, which does not compile
 //!   here until it gets its row, and the row cannot leave the check out.
+//! - `NodeService`'s calls are inherent methods, not a `Handler`, so the
+//!   service cannot be handed to a `Server` without this wrapper.
 //! - Cost: the rows repeat the protocol table's handler names and types;
 //!   the compiler keeps them in step.
 
@@ -67,4 +69,41 @@ guarded! {
     invite_device: InviteDevice => Invitation;
     list_devices: ListDevices => Vec<DeviceInfo>;
     revoke_device: RevokeDevice => Ack;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::marker::PhantomData;
+
+    use super::*;
+
+    /// Method resolution on a concrete type picks `IsHandler` when the
+    /// type implements `Handler`, and falls back to `NotHandler` (one
+    /// autoref further) when it does not: a test of a missing impl that
+    /// stable Rust can write.
+    struct Probe<T>(PhantomData<T>);
+
+    trait IsHandler {
+        fn is_handler(&self) -> bool {
+            true
+        }
+    }
+
+    impl<T: Handler> IsHandler for Probe<T> {}
+
+    trait NotHandler {
+        fn is_handler(&self) -> bool {
+            false
+        }
+    }
+
+    impl<T> NotHandler for &Probe<T> {}
+
+    /// Only the guarded service can be handed to a `Server`; the service
+    /// itself has no `Handler` impl to serve without the scope check.
+    #[test]
+    fn only_the_guarded_service_is_a_handler() {
+        assert!(Probe::<Guarded>(PhantomData).is_handler());
+        assert!(!(&Probe::<NodeService>(PhantomData)).is_handler());
+    }
 }

@@ -20,9 +20,19 @@
 //!   carrier with `NodeClose::HandshakeFailed` (4401) when it fails: with
 //!   NK only the node can tell that a client pinned another key, and the
 //!   code is how the client learns it (final: pair again).
+//! - Unadmitted channels are capped ([`MAX_UNADMITTED`]): anyone who can
+//!   reach `/secure` or a relay can open channels, and each one may sit
+//!   in the handshake (10 s) and the preamble (10 s) before it is known
+//!   to be a device. A permit is taken before the handshake and given
+//!   back once the preamble is answered; past the cap a new carrier is
+//!   dropped at once, which a client sees as a transient failure. Admitted
+//!   connections are not counted: they belong to devices, which can be
+//!   revoked. The alternative, a cap per source address, has no address to
+//!   go by behind a relay.
 
 use std::sync::Arc;
 
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_relay::NodeCarrier;
@@ -34,6 +44,21 @@ use crate::devices::preamble::{self, Admitted, NotAdmitted};
 use crate::guard::Guarded;
 use crate::lifecycle::Lifecycle;
 use crate::service::Connection;
+
+/// How many secure channels may be in their handshake or preamble at once.
+pub(crate) const MAX_UNADMITTED: usize = 64;
+
+/// Why a carrier was not served.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NotServed {
+    /// Too many channels are waiting to be admitted; dropped at once.
+    #[error("too many secure connections are waiting to be admitted")]
+    Busy,
+    /// The handshake failed; the carrier was closed with 4401 if it was
+    /// the handshake itself.
+    #[error(transparent)]
+    Handshake(#[from] SecureError),
+}
 
 /// What serving a device connection needs.
 #[derive(Debug, Clone)]
@@ -50,6 +75,8 @@ pub(crate) struct SecureGateway {
     pub(crate) closing: CancellationToken,
     /// Tracked so shutdown waits for these connections too.
     pub(crate) connections: TaskTracker,
+    /// Permits for channels not yet admitted ([`MAX_UNADMITTED`]).
+    pub(crate) unadmitted: Arc<Semaphore>,
 }
 
 impl SecureGateway {
@@ -57,13 +84,17 @@ impl SecureGateway {
     /// until it ends.
     ///
     /// # Errors
-    /// The handshake failed (another key or version, a timeout, or the
-    /// carrier); the carrier was closed with 4401 if it was the handshake
-    /// itself.
-    pub(crate) async fn accept<C: NodeCarrier>(&self, carrier: C) -> Result<(), SecureError> {
+    /// Too many channels are waiting to be admitted, or the handshake
+    /// failed (another key or version, a timeout, or the carrier).
+    pub(crate) async fn accept<C: NodeCarrier>(&self, carrier: C) -> Result<(), NotServed> {
+        let permit = self.permit().ok_or(NotServed::Busy)?;
         let channel = vessel_relay::respond(carrier, &self.keypair, &self.channel).await?;
-        self.serve(channel).await;
+        self.serve_with(channel, permit).await;
         Ok(())
+    }
+
+    fn permit(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.unadmitted).try_acquire_owned().ok()
     }
 
     /// [`accept`](Self::accept) for a carrier from a transport task: the
@@ -75,11 +106,25 @@ impl SecureGateway {
     }
 
     /// Serve one established secure channel until it ends: the preamble,
-    /// then the protocol as the admitted device.
-    pub(crate) async fn serve<T: FrameTransport>(&self, mut channel: T) {
+    /// then the protocol as the admitted device. Dropped at once past
+    /// [`MAX_UNADMITTED`].
+    #[cfg(test)]
+    pub(crate) async fn serve<T: FrameTransport>(&self, channel: T) {
+        if let Some(permit) = self.permit() {
+            self.serve_with(channel, permit).await;
+        } else {
+            tracing::info!("dropped a secure connection: too many waiting");
+        }
+    }
+
+    async fn serve_with<T: FrameTransport>(&self, mut channel: T, permit: OwnedSemaphorePermit) {
         let _tracked = self.connections.token();
-        let admitted =
-            preamble::admit(&mut channel, &self.devices, &self.lifecycle, &self.closing).await;
+        // Shutdown does not wait out a silent client's preamble timeout.
+        let admitted = tokio::select! {
+            admitted = preamble::admit(&mut channel, &self.devices, &self.lifecycle, &self.closing) => admitted,
+            () = self.closing.cancelled() => return,
+        };
+        drop(permit);
         let Admitted {
             principal,
             registration,
