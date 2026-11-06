@@ -111,8 +111,7 @@ impl Supervisor {
         };
         self.use_secrets(secrets).await;
         // A grant to a home this node no longer follows is revoked.
-        let following = membership.as_ref().ok().and_then(Option::as_ref);
-        self.links.reconcile(following).await;
+        self.links.reconcile().await;
         let in_fleet = matches!(sources, Ok(Some(_))) || matches!(membership, Ok(Some(_)));
         if !self.started {
             self.started = true;
