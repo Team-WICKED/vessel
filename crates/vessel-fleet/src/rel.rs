@@ -163,8 +163,10 @@ mod tests {
             Rel::parse("a/b").unwrap().with_suffix(".x").unwrap(),
             Rel::parse("a/b.x").unwrap()
         );
-        assert!(plain_absolute(Path::new("/home/u/.claude")));
-        assert!(!plain_absolute(Path::new("/home/u/.claude/../.ssh")));
+        // An absolute path on every OS (`/home/u` is not one on Windows).
+        let home = std::env::current_dir().unwrap();
+        assert!(plain_absolute(&home.join(".claude")));
+        assert!(!plain_absolute(&home.join(".claude").join("..").join(".ssh")));
         assert!(!plain_absolute(Path::new("home")));
     }
 
