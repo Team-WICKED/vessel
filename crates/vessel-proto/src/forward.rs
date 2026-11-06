@@ -151,14 +151,66 @@ pub struct FleetNode {
 
 impl Method {
     /// Whether a call of this method can travel in `fleet.forward`,
-    /// `fleet.relay` and `fleet.deliver`: every one-reply call but the
-    /// envelope's own (a hop is never wrapped twice) and subscriptions
-    /// (their events would need a stream across hops).
+    /// `fleet.relay` and `fleet.deliver`. Deny by default: the `match` names
+    /// every method, so a new row does not compile until someone decides.
+    /// A forwarded call still runs with the target's grant to its home
+    /// intersected with the origin's scopes.
+    ///
+    /// - Forwardable, the work agents and people do on another node: node
+    ///   and harness info, sessions (list, read, create, send, kill, move
+    ///   between profiles), profiles to choose from, and the transfers F4
+    ///   pulls through the home (export, import, read, close), with
+    ///   `secret.set`, which `secret.copy` sends to its target.
+    /// - Not forwardable, administration of a node done there: stopping it,
+    ///   its devices, re-reading its profiles, listing, deleting or copying
+    ///   its secrets.
+    /// - Not forwardable, the fleet's own plumbing: an envelope is never
+    ///   wrapped in another (at most two hops, no loops), and the bundle,
+    ///   grant and membership calls belong to the hop between a member and
+    ///   its home.
+    /// - Not forwardable, streams: a subscription's events would need a
+    ///   stream across hops (`session.read` with `wait` serves instead).
     #[must_use]
     pub const fn forwardable(self) -> bool {
-        !matches!(
-            self,
-            Self::Forward | Self::Relay | Self::Deliver | Self::Subscribe | Self::Unsubscribe
-        )
+        match self {
+            Self::NodeInfo
+            | Self::ListHarnesses
+            | Self::ListSessions
+            | Self::GetSession
+            | Self::CreateSession
+            | Self::SendInput
+            | Self::KillSession
+            | Self::ReadEvents
+            | Self::MoveProfile
+            | Self::ListProfiles
+            | Self::ExportSession
+            | Self::ImportSession
+            | Self::ExportMemory
+            | Self::ImportMemory
+            | Self::ReadTransfer
+            | Self::CloseTransfer
+            | Self::SetSecret => true,
+            Self::StopNode
+            | Self::InviteDevice
+            | Self::ListDevices
+            | Self::RevokeDevice
+            | Self::ReloadProfiles
+            | Self::ListSecrets
+            | Self::DeleteSecret
+            | Self::CopySecret
+            | Self::Forward
+            | Self::Relay
+            | Self::Deliver
+            | Self::GrantHome
+            | Self::ListPeers
+            | Self::ListNodes
+            | Self::GetManifest
+            | Self::ReadBlob
+            | Self::WatchFleet
+            | Self::ReportApplied
+            | Self::ListMembers
+            | Self::Subscribe
+            | Self::Unsubscribe => false,
+        }
     }
 }
