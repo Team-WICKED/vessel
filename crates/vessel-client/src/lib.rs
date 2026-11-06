@@ -42,6 +42,7 @@ mod error;
 pub mod pairing;
 mod pinned;
 mod resume;
+pub mod secure;
 mod stream;
 #[cfg(test)]
 mod tests;
@@ -63,4 +64,6 @@ pub use stream::SessionStream;
 pub use token::{BearerToken, InvalidToken};
 pub use url::{InvalidNodeUrl, NodeUrl};
 pub use vessel_rpc::{CallError, ClientConfig, Subscription, SubscriptionItem};
+/// The short fingerprint people compare to recognise a node's key.
+pub use vessel_secure::fingerprint;
 pub use ws::WsTransportError;

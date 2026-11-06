@@ -59,6 +59,10 @@ pub(crate) fn node_status(node: &NodeInfo, sessions: &[SessionInfo], client: &st
         .count();
     let mut text = self::node(node);
     let _infallible = writeln!(text, "state     {state}");
+    if let Some(key) = &node.public_key {
+        // What a person compares with the fingerprint shown when pairing.
+        let _infallible = writeln!(text, "key       {}", vessel_client::fingerprint(key));
+    }
     let _infallible = writeln!(text, "sessions  {live} live, {} in all", sessions.len());
     if node.version != client {
         let _infallible = writeln!(

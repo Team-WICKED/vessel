@@ -34,8 +34,8 @@ vessel-pty      -> proc
 vessel-agent    -> proto, proc
 vessel-session  -> proto, harness, pty, agent
 vessel-store    -> proto
-vessel-node     -> proto, rpc, harness, session, store
-vessel-client   -> proto, rpc
+vessel-node     -> proto, rpc, harness, session, store, secure
+vessel-client   -> proto, rpc, secure
 vessel-remote   -> proto, rpc, client      (milestone 2)
 vessel-secure   -> proto                   (milestone 3)
 vessel-cli      -> proto, client, node, remote
@@ -54,7 +54,9 @@ that travel on the wire (`NodePublicKey`, `RoutingId`, the relay's
 `HandshakeMessage`); everything computed from them with cryptography stays
 in `vessel-secure`, so `vessel-proto` stays free of it. `vessel-relay`
 (`-> proto, secure`) and the node's and client's edges to both come with
-the changes that add them.
+the changes that add them. Track P added `vessel-node -> secure` (answering
+handshakes with the node's key pair) and `vessel-client -> secure`
+(initiating them to a pinned key, and fingerprints).
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.

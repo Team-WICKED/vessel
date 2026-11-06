@@ -1,10 +1,10 @@
 //! Who this node is, as told to clients.
 
 use chrono::Utc;
-use vessel_proto::{NodeId, NodeInfo, NodeState, ProtocolRange};
+use vessel_proto::{NodeId, NodeInfo, NodePublicKey, NodeState, ProtocolRange};
 
 /// The node's self-description for this run.
-pub(crate) fn node_info(id: NodeId, name: Option<String>) -> NodeInfo {
+pub(crate) fn node_info(id: NodeId, name: Option<String>, key: NodePublicKey) -> NodeInfo {
     let hostname = hostname::get()
         .ok()
         .and_then(|name| name.into_string().ok())
@@ -19,8 +19,8 @@ pub(crate) fn node_info(id: NodeId, name: Option<String>) -> NodeInfo {
         protocol: ProtocolRange::CURRENT,
         started_at: Utc::now(),
         state: NodeState::Serving,
-        // Set once the node has a key: secure channels arrive with M3
-        // Track P (`docs/plans/backend-m3.md`).
-        public_key: None,
+        // Shown by `vessel node status`, and how a client already
+        // connected (token or SSH) learns the key (ADR 0009).
+        public_key: Some(key),
     }
 }

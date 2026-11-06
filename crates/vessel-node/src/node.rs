@@ -9,8 +9,9 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use vessel_proto::{NodeId, NodeInfo, RelayToken};
+use vessel_proto::{NodeId, NodeInfo, NodePublicKey, RelayToken};
 use vessel_rpc::Server;
+use vessel_secure::NodeKeypair;
 use vessel_session::{RuntimeConfig, SessionRuntime};
 use vessel_store::{DataDir, NodeLock, NodeOwner, NodeToken, Opened, Store};
 
@@ -52,6 +53,8 @@ pub struct Node {
 struct Prepared {
     id: NodeId,
     token: NodeToken,
+    /// From `node.key` (ADR 0009).
+    keypair: NodeKeypair,
     lock: NodeLock,
 }
 
@@ -69,7 +72,12 @@ impl Node {
         // error at once rather than a node that is unreachable later.
         let _relay_token = relay_token(&config)?;
         let dir = config.data_dir.clone();
-        let Prepared { id, token, lock } = tokio::task::spawn_blocking(move || prepare(&dir))
+        let Prepared {
+            id,
+            token,
+            keypair,
+            lock,
+        } = tokio::task::spawn_blocking(move || prepare(&dir))
             .await
             .map_err(NodeError::Task)??;
         let Opened { store, interrupted } = Store::open(&config.data_dir, config.store)
@@ -90,7 +98,7 @@ impl Node {
             forwarders,
             devices,
             service,
-        } = core(&config, id, &store);
+        } = core(&config, id, &store, keypair.public());
         let closing = CancellationToken::new();
         let rpc = Arc::new(Server::new(
             Arc::clone(&service),
@@ -106,6 +114,7 @@ impl Node {
         let address = tcp.as_ref().map(|(_, address)| *address);
 
         let secure = SecureGateway {
+            keypair: Arc::new(keypair),
             service,
             lifecycle: lifecycle.clone(),
             devices,
@@ -215,7 +224,7 @@ struct Core {
 }
 
 /// Build the session runtime, the lifecycle, the devices and the service.
-fn core(config: &Config, id: NodeId, store: &Store) -> Core {
+fn core(config: &Config, id: NodeId, store: &Store, key: &NodePublicKey) -> Core {
     let runtime = Arc::new(SessionRuntime::new(
         RuntimeConfig {
             harness_lookup: config.harness_lookup.clone(),
@@ -227,7 +236,7 @@ fn core(config: &Config, id: NodeId, store: &Store) -> Core {
     ));
     let stop = CancellationToken::new();
     let lifecycle = Lifecycle::new(
-        identity::node_info(id, config.name.clone()),
+        identity::node_info(id, config.name.clone(), *key),
         stop.clone(),
         Arc::clone(&runtime),
     );
@@ -238,13 +247,10 @@ fn core(config: &Config, id: NodeId, store: &Store) -> Core {
         tasks.clone(),
     ));
     let forwarders = TaskTracker::new();
-    // The public key comes from `node.key` through `vessel-secure`; until
-    // that crate is wired in, the node has none (pairing links then answer
-    // `unavailable`).
     let devices = Arc::new(Devices::new(
         store.clone(),
         id,
-        None,
+        *key,
         Routes {
             relays: config.relays.clone(),
             direct: config.public.clone(),
@@ -312,9 +318,9 @@ fn prepare(dir: &DataDir) -> Result<Prepared, NodeError> {
     let id = dir.load_or_create_node_id().map_err(NodeError::DataDir)?;
     let token = dir.load_or_create_token().map_err(NodeError::DataDir)?;
     // Created on the first start of every node, new or existing (ADR 0009),
-    // so its identity exists before any device pairs. Kept by
-    // `vessel-secure` once that is wired in.
-    let _key = dir.load_or_create_node_key().map_err(NodeError::DataDir)?;
+    // so its identity exists before any device pairs.
+    let key = dir.load_or_create_node_key().map_err(NodeError::DataDir)?;
+    let keypair = NodeKeypair::from_secret(*key.expose());
     let owner = NodeOwner {
         pid: std::process::id(),
         executable: std::env::current_exe().unwrap_or_default(),
@@ -322,7 +328,12 @@ fn prepare(dir: &DataDir) -> Result<Prepared, NodeError> {
         started_at: Utc::now(),
     };
     let lock = NodeLock::acquire(dir, &owner).map_err(NodeError::AlreadyRunning)?;
-    Ok(Prepared { id, token, lock })
+    Ok(Prepared {
+        id,
+        token,
+        keypair,
+        lock,
+    })
 }
 
 /// Bind the TCP listen address.

@@ -13,7 +13,7 @@ file references.
 
 ## State (2026-11-06)
 
-- **Track P, first part (needs no secure channel), on `backend/m3-pair`:**
+- **Track P, on `backend/m3-pair`:**
   - store: `node.key` (32 bytes, 0600, created on every start, never
     replaced); the `devices` table (schema version 2) with SHA-256
     credential hashes compared in constant time, revoked devices kept as
@@ -27,15 +27,16 @@ file references.
     `credential`), credential files, `pairing::pair`/`authenticate`, and
     `NodeClient` device calls.
   - CLI: `vessel node pair` (link and QR code), `vessel node devices
-    [revoke]`.
-- **Waiting for Track S (`vessel-secure`, `vessel-relay`):** deriving the
-  public key from `node.key` (until then `NodeInfo.public_key` is absent
-  and `device.invite` answers `unavailable`); `/secure` and relay links
-  into `SecureGateway`; `SecureConnector` (route order, timeouts,
-  transient and final errors) and the `wss://` TLS client; `vessel nodes
-  add --pair` (fingerprint, confirmation, pairing over a route) and
-  connecting to paired nodes; the key fingerprint and routes in `vessel
-  node status`; resume over the relay (P5).
+    [revoke]`, the key fingerprint in `node status` and `nodes show`.
+  - With `vessel-secure` (936dd9d): the node's key pair from `node.key`,
+    `NodeInfo.public_key`, real pairing links, `SecureGateway::accept`
+    (respond, preamble, protocol); the client's `secure::open`/`pair` over
+    any carrier. Tested over `memory_pair` against a real node.
+- **Waiting for `vessel-relay`:** `AxumCarrier` for `/secure` (closing
+  with 4401 on a failed handshake) and relay data connections into
+  `SecureGateway::accept`; `SecureConnector` (route order, the websocket
+  dial, 4401 as final) and the `wss://` TLS client; `vessel nodes add
+  --pair` and connecting to paired nodes; resume over the relay (P5).
 
 ## Goal
 

@@ -92,9 +92,6 @@ pub(crate) enum ServiceError {
     /// A task the call depended on failed.
     #[error("a node task failed")]
     Task(#[source] tokio::task::JoinError),
-    /// The node has no public key yet, so it cannot make a pairing link.
-    #[error("this node has no key for secure channels yet, so it cannot pair devices")]
-    NoNodeKey,
     /// `device.invite` with a lifetime of zero.
     #[error("an invitation must be valid for at least one second")]
     InvalidTtl,
@@ -116,7 +113,7 @@ impl ServiceError {
         let code = match self {
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Ended(_) => ErrorCode::Conflict,
-            Self::Draining | Self::NoNodeKey | Self::TooManyInvitations => ErrorCode::Unavailable,
+            Self::Draining | Self::TooManyInvitations => ErrorCode::Unavailable,
             Self::Ahead { .. } | Self::InvalidTtl => ErrorCode::InvalidRequest,
             Self::Session(error) => error.code(),
             Self::Store(error) => error.code(),

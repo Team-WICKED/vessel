@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tempfile::TempDir;
 use vessel_client::pairing::{self, PreambleError};
+use vessel_client::secure;
 use vessel_harness::Lookup;
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, HarnessKind,
@@ -17,12 +18,11 @@ use vessel_proto::{
 };
 use vessel_rpc::memory::{self, MemoryTransport};
 use vessel_rpc::{CallError, ClientConfig, Connection};
+use vessel_secure::{MemoryCarrier, NodeKeypair, SecureChannel, SecureError, memory_pair};
 use vessel_store::{CredentialHash, DataDir};
 
 use super::*;
 use crate::{Config, Node};
-
-const KEY: NodePublicKey = NodePublicKey::from_bytes([7; 32]);
 
 async fn node() -> (TempDir, Node) {
     let temp = tempfile::tempdir().unwrap();
@@ -34,7 +34,6 @@ async fn node() -> (TempDir, Node) {
     std::fs::write(temp.path().join("relay-token"), "shared").unwrap();
     config.public = vec!["ws://203.0.113.5:7077".parse().unwrap()];
     let node = Node::start(config).await.unwrap();
-    node.secure.devices.set_key(KEY);
     (temp, node)
 }
 
@@ -117,7 +116,7 @@ async fn an_invitation_is_a_link_to_this_node_with_its_routes() {
     let (_temp, node) = node().await;
     let offer = invite(&node, Some("phone"));
     assert_eq!(offer.node, node.info().id);
-    assert_eq!(offer.key, KEY);
+    assert_eq!(Some(offer.key), node.info().public_key);
     assert_eq!(offer.relays[0].as_str(), "wss://relay.example/vessel");
     assert_eq!(offer.direct[0].as_str(), "ws://203.0.113.5:7077");
     let ttl = offer.expires - Utc::now();
@@ -142,24 +141,96 @@ async fn an_invitation_is_a_link_to_this_node_with_its_routes() {
     node.stop().await.unwrap();
 }
 
+/// The node's key is `node.key`'s: the same across restarts, and published
+/// in `NodeInfo` for clients already connected (token or SSH).
 #[tokio::test]
-async fn without_a_key_there_is_no_link() {
+async fn the_node_key_comes_from_node_key_and_survives_a_restart() {
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::new(DataDir::new(temp.path()));
-    config.bind = None;
-    let node = Node::start(config).await.unwrap();
-    assert!(node.info().public_key.is_none());
+    let start = || {
+        let mut config = Config::new(DataDir::new(temp.path()));
+        config.bind = None;
+        Node::start(config)
+    };
+    let node = start().await.unwrap();
+    let key = node.info().public_key.unwrap();
+    let secret = DataDir::new(temp.path()).read_node_key().unwrap();
+    assert_eq!(&key, NodeKeypair::from_secret(*secret.expose()).public());
+    node.stop().await.unwrap();
+    let again = start().await.unwrap();
+    assert_eq!(again.info().public_key, Some(key));
+    again.stop().await.unwrap();
+}
+
+/// A secure channel to the node: a carrier the gateway answers with the
+/// node's key, and the client's end after its handshake to `key`.
+async fn secure(
+    node: &Node,
+    key: &NodePublicKey,
+) -> (
+    Result<SecureChannel<MemoryCarrier>, SecureError>,
+    tokio::task::JoinHandle<Result<(), SecureError>>,
+) {
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let gateway = node.secure.clone();
+    let accepted = tokio::spawn(async move { gateway.accept(node_end).await });
+    (vessel_secure::initiate(client_end, key).await, accepted)
+}
+
+/// Pairing and authenticating through the real Noise channel, as `/secure`
+/// and relays will carry it, with the client's own `secure::pair` and
+/// `secure::open`.
+#[tokio::test]
+async fn devices_pair_and_authenticate_over_the_secure_channel() {
+    let (_temp, node) = node().await;
+    let offer = invite(&node, None);
+    let config = ClientConfig::default();
+
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let (paired, connection) = secure::pair(client_end, &offer, "laptop", client(), &config)
+        .await
+        .unwrap();
+    assert_eq!(paired.node.id, node.info().id);
+    assert_eq!(connection.devices().await.unwrap().len(), 1);
+
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let connection = secure::open(
+        client_end,
+        &offer.key,
+        &paired.credential,
+        client(),
+        &config,
+    )
+    .await
+    .unwrap();
+    assert!(connection.sessions().await.unwrap().is_empty());
+
+    // Spent: the same link again is refused, and that is final.
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let error = secure::pair(client_end, &offer, "again", client(), &config)
+        .await
+        .unwrap_err();
+    assert!(error.is_final(), "{error}");
+    node.stop().await.unwrap();
+}
+
+/// A client that pinned another key never gets a channel, and the node
+/// reports the failed handshake to its caller (which closes with 4401).
+#[tokio::test]
+async fn a_client_with_another_key_gets_no_channel() {
+    let (_temp, node) = node().await;
+    let other = *NodeKeypair::generate().unwrap().public();
+    let (channel, accepted) = secure(&node, &other).await;
+    assert!(channel.is_err());
     assert!(matches!(
-        node.secure.devices.invite(&InviteDevice {
-            label: None,
-            ttl_secs: 60
-        }),
-        Err(ServiceError::NoNodeKey)
+        accepted.await.unwrap(),
+        Err(SecureError::Handshake(_))
     ));
-    assert!(
-        DataDir::new(temp.path()).read_node_key().is_ok(),
-        "created on start"
-    );
     node.stop().await.unwrap();
 }
 

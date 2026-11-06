@@ -15,7 +15,7 @@ mod connected;
 mod invitations;
 pub(crate) mod preamble;
 
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{TimeDelta, Utc};
 use tokio_util::sync::CancellationToken;
@@ -49,46 +49,29 @@ pub(crate) struct Routes {
 pub(crate) struct Devices {
     store: Store,
     node: NodeId,
-    /// The node's public key, needed for pairing links. Set at start once
-    /// the key can be derived (`identity::public_key`).
-    key: OnceLock<NodePublicKey>,
+    /// The node's public key, which pairing links carry.
+    key: NodePublicKey,
     routes: Routes,
     invitations: Mutex<Invitations>,
     connected: Arc<Connected>,
 }
 
 impl Devices {
-    pub(crate) fn new(
-        store: Store,
-        node: NodeId,
-        key: Option<NodePublicKey>,
-        routes: Routes,
-    ) -> Self {
-        let cell = OnceLock::new();
-        if let Some(key) = key {
-            let _set = cell.set(key);
-        }
+    pub(crate) fn new(store: Store, node: NodeId, key: NodePublicKey, routes: Routes) -> Self {
         Self {
             store,
             node,
-            key: cell,
+            key,
             routes,
             invitations: Mutex::new(Invitations::default()),
             connected: Arc::new(Connected::default()),
         }
     }
 
-    /// Give the node its public key, for a node built before secure channels
-    /// could derive it (tests stand in for `vessel-secure` with this).
-    #[cfg(test)]
-    pub(crate) fn set_key(&self, key: NodePublicKey) {
-        let _set = self.key.set(key);
-    }
-
     /// `device.invite`: a single-use pairing link valid for `ttl_secs`
     /// (capped at a day).
     pub(crate) fn invite(&self, request: &InviteDevice) -> Result<Invitation, ServiceError> {
-        let key = *self.key.get().ok_or(ServiceError::NoNodeKey)?;
+        let key = self.key;
         if request.ttl_secs == 0 {
             return Err(ServiceError::InvalidTtl);
         }
