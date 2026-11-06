@@ -58,7 +58,9 @@ pub(super) async fn connect(
     Query(query): Query<ConnectQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let client = relay.client_address(peer, &headers);
+    let Ok(client) = relay.client_address(peer, &headers) else {
+        return relay.bad_address_header(peer);
+    };
     let admitted = relay.admit(client);
     relay
         .limit(upgrade)
@@ -123,8 +125,11 @@ fn new_conn() -> Option<ConnId> {
 }
 
 /// Announce `client` to `node`, wait for the node's data connection, then
-/// splice them. Paired, the client's socket has authenticated
-/// (`socket_place`): the node took it.
+/// splice them. Once the splice has lasted `client_settle`, the node has
+/// admitted the client (a node drops a relayed channel it has not within
+/// `RELAYED_ADMISSION`): only then is the client out of
+/// `max_node_clients_per_address`, its socket among those that
+/// authenticated (`socket_place`), and its rate token given back.
 async fn pair(
     relay: &Relay,
     node: RoutingId,
@@ -143,7 +148,7 @@ async fn pair(
         return;
     };
     // Held until this function returns: through the wait and the splice.
-    let Some(_client) = relay.client(node, from.address) else {
+    let Some(slot) = relay.client(node, from.address) else {
         close_with(&mut client, RelayClose::Full).await;
         return;
     };
@@ -175,9 +180,17 @@ async fn pair(
     drop(place);
     match accepted {
         Some(node_socket) => {
-            socket_place.promote();
-            relay.refund(from);
-            splice(relay, client, node_socket).await;
+            let settle = async {
+                sleep(relay.limits.client_settle).await;
+                slot.settle();
+                socket_place.promote();
+                relay.refund(from);
+                std::future::pending::<std::convert::Infallible>().await
+            };
+            tokio::select! {
+                () = splice(relay, client, node_socket) => {}
+                never = settle => match never {},
+            }
         }
         None => close_with(&mut client, RelayClose::NotAccepted).await,
     }

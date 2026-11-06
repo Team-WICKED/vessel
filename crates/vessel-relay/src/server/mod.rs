@@ -21,13 +21,14 @@ mod throttle;
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::http::{HeaderMap, HeaderName};
+use axum::http::{HeaderMap, HeaderName, StatusCode};
+use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use futures_util::SinkExt as _;
 use tokio::net::TcpListener;
@@ -97,6 +98,13 @@ use crate::{ACCEPT_PATH, CONNECT_PATH, HEALTH_PATH, NODE_PATH};
 ///   could hold half of a pool or more (`balance`), so the bar holds
 ///   whatever the operator sets; the defaults pass (registering per
 ///   address 7, `max_unauthenticated` 400).
+/// - Round 9: a client spliced to its node is not yet one the node
+///   admitted (the review held a node's whole budget of unadmitted
+///   channels with one `/48`'s clients). Clients of one node from one
+///   address count against `max_node_clients_per_address` until
+///   `client_settle`, after which a node that keeps `RELAYED_ADMISSION`
+///   has admitted them; only then do they count as authenticated and
+///   give back their rate token (`pairing`).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Limits {
@@ -170,6 +178,16 @@ pub struct Limits {
     /// How long a stopping relay waits for open connections to finish
     /// before it drops them.
     pub shutdown_grace: Duration,
+    /// Relayed clients to one node at once from one address (scaled as
+    /// `max_connections_per_address`) that the node may not have admitted
+    /// yet: waiting, or spliced for less than `client_settle`.
+    pub max_node_clients_per_address: usize,
+    /// How long a spliced client counts as being admitted by its node: a
+    /// splice still open after this was admitted (a node drops one it has
+    /// not within `RELAYED_ADMISSION`). Then the client leaves
+    /// `max_node_clients_per_address`, moves into the share kept for
+    /// sockets that authenticated, and gives back its rate token.
+    pub client_settle: Duration,
 }
 
 impl Default for Limits {
@@ -197,6 +215,8 @@ impl Default for Limits {
             max_clients_per_address: 16,
             first_message_timeout: Duration::from_secs(2),
             shutdown_grace: Duration::from_secs(5),
+            max_node_clients_per_address: 4,
+            client_settle: crate::RELAYED_ADMISSION.saturating_add(Duration::from_secs(2)),
         }
     }
 }
@@ -204,8 +224,9 @@ impl Default for Limits {
 impl Limits {
     /// Whether these limits keep the bar: one IPv6 `/48` (at four times
     /// each per-address limit) holds less than half of the registering
-    /// places, of the client places and of the unauthenticated share, and
-    /// that share is less than half of `max_connections` (`balance`).
+    /// places, of the client places, of the unauthenticated share and of a
+    /// node's relayed admissions (`RELAYED_UNADMITTED`), and that share is
+    /// less than half of `max_connections` (`balance`).
     /// The defaults pass; `serve` and `vesseld relay` refuse limits that
     /// do not.
     ///
@@ -341,6 +362,9 @@ struct Load {
     clients_per_node: HashMap<RoutingId, usize>,
     /// Relayed clients per block.
     clients_per_block: HashMap<Block, usize>,
+    /// Relayed clients per node and block that their node may not have
+    /// admitted yet (`ClientSlot::settle`).
+    node_clients_per_block: HashMap<(RoutingId, Block), usize>,
 }
 
 /// One more for `key`.
@@ -365,6 +389,19 @@ fn fits(counts: &HashMap<Block, usize>, blocks: &[Block], limit: usize) -> bool 
     blocks
         .iter()
         .all(|block| counts.get(block).copied().unwrap_or(0) < block.limit(limit))
+}
+
+/// Whether one more client of `node` fits in every one of `blocks` under
+/// `limit` (scaled per block).
+fn fits_node(
+    counts: &HashMap<(RoutingId, Block), usize>,
+    node: RoutingId,
+    blocks: &[Block],
+    limit: usize,
+) -> bool {
+    blocks
+        .iter()
+        .all(|block| counts.get(&(node, *block)).copied().unwrap_or(0) < block.limit(limit))
 }
 
 /// One more in every one of `blocks`.
@@ -476,10 +513,27 @@ pub(crate) struct ClientSlot<'a> {
     relay: &'a Relay,
     node: RoutingId,
     blocks: Vec<Block>,
+    /// Out of `max_node_clients_per_address` (`settle`).
+    settled: AtomicBool,
+}
+
+impl ClientSlot<'_> {
+    /// The client's node admitted it, as far as the relay can tell: it is
+    /// no longer counted against `max_node_clients_per_address`. Once.
+    pub(crate) fn settle(&self) {
+        if self.settled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let mut load = lock(&self.relay.load);
+        for block in &self.blocks {
+            count_down(&mut load.node_clients_per_block, &(self.node, *block));
+        }
+    }
 }
 
 impl Drop for ClientSlot<'_> {
     fn drop(&mut self) {
+        self.settle();
         let mut load = lock(&self.relay.load);
         load.clients = load.clients.saturating_sub(1);
         count_down(&mut load.clients_per_node, &self.node);
@@ -505,8 +559,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Where a request counts: the client's address, and whether it came from
-/// a trusted proxy's header (`Relay::client_address`).
+/// A trusted proxy's client address header that is not one bare address
+/// (`Relay::client_address`).
+#[derive(Debug)]
+pub(crate) struct BadAddressHeader;
+
+/// Where a request counts: the client's address, and whether it came
+/// through a trusted proxy, by its header or as the proxy itself
+/// (`Relay::client_address`).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Client {
     pub(crate) address: IpAddr,
@@ -615,29 +675,60 @@ impl Relay {
 
     /// Where a request counts: the trusted proxy's header when the peer is
     /// one and the header holds an address, else the peer itself.
-    fn client_address(&self, peer: SocketAddr, headers: &HeaderMap) -> Client {
-        let from_header = self
+    ///
+    /// From a trusted proxy the header must hold one bare address, IPv4
+    /// (`192.0.2.7`) or IPv6 (`2001:db8::7`), with spaces around it at
+    /// most: anything else (a list, a port, brackets, the header twice) is
+    /// refused (`BadAddressHeader`, answered `400`), since guessing which
+    /// part the proxy wrote would let a client choose. A request from a
+    /// trusted proxy without the header counts as the proxy itself, rate
+    /// included (`admit`).
+    fn client_address(
+        &self,
+        peer: SocketAddr,
+        headers: &HeaderMap,
+    ) -> Result<Client, BadAddressHeader> {
+        let Some(name) = self
             .client_address_header
             .as_ref()
             .filter(|_name| self.is_trusted_proxy(peer.ip()))
-            .and_then(|name| headers.get(name))
-            .and_then(|value| value.to_str().ok())
-            .and_then(|text| text.trim().parse::<IpAddr>().ok());
-        match from_header {
-            Some(address) => Client {
-                address,
-                proxied: true,
-            },
-            None => Client {
+        else {
+            return Ok(Client {
                 address: peer.ip(),
                 proxied: false,
-            },
-        }
+            });
+        };
+        let mut values = headers.get_all(name).iter();
+        let address = match (values.next(), values.next()) {
+            (None, _) => peer.ip(),
+            (Some(value), None) => value
+                .to_str()
+                .ok()
+                .and_then(|text| text.trim().parse::<IpAddr>().ok())
+                .ok_or(BadAddressHeader)?,
+            (Some(_first), Some(_second)) => return Err(BadAddressHeader),
+        };
+        Ok(Client {
+            address,
+            proxied: true,
+        })
+    }
+
+    /// The answer to a request whose trusted proxy sent a client address
+    /// header that is not one bare address (`client_address`).
+    fn bad_address_header(&self, peer: SocketAddr) -> Response {
+        self.refused(Refusal::AddressHeader, None, Some(peer.ip()));
+        (
+            StatusCode::BAD_REQUEST,
+            "the client address header is not one address",
+        )
+            .into_response()
     }
 
     /// Whether a request from `client` is admitted by the rate of new
     /// connections: one through a trusted proxy is charged here, by its
-    /// header's address (its socket was not); any other was at `accept`.
+    /// header's address or, without the header, the proxy's own (its
+    /// socket was not); any other was at `accept`.
     fn admit(&self, client: Client) -> bool {
         if !client.proxied {
             return true;
@@ -723,14 +814,25 @@ impl Relay {
                 limits.max_clients_per_address,
             ) {
                 Refusal::AddressClients
+            } else if !fits_node(
+                &load.node_clients_per_block,
+                node,
+                &blocks,
+                limits.max_node_clients_per_address,
+            ) {
+                Refusal::NodeAddressClients
             } else {
                 load.clients = load.clients.saturating_add(1);
                 count_up(&mut load.clients_per_node, node);
                 count_up_all(&mut load.clients_per_block, &blocks);
+                for block in &blocks {
+                    count_up(&mut load.node_clients_per_block, (node, *block));
+                }
                 return Some(ClientSlot {
                     relay: self,
                     node,
                     blocks,
+                    settled: AtomicBool::new(false),
                 });
             }
         };
@@ -798,6 +900,15 @@ impl Relay {
                 %address, limit = limits.max_connections_per_address, more,
                 "connection refused at accept: this address holds its most connections not \
                  authenticated yet (max_connections_per_address)"
+            ),
+            Refusal::NodeAddressClients => tracing::info!(
+                %node, %address, limit = limits.max_node_clients_per_address, more,
+                "client refused: as many clients as allowed come to this node from this address \
+                 while it admits them (max_node_clients_per_address)"
+            ),
+            Refusal::AddressHeader => tracing::info!(
+                proxy = %address, more,
+                "request refused: the trusted proxy's client address header is not one address"
             ),
             Refusal::AcceptRate => tracing::info!(
                 %address, burst = limits.connect_burst, more,

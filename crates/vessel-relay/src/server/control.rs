@@ -39,7 +39,9 @@ pub(super) async fn upgrade(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let client = relay.client_address(peer, &headers);
+    let Ok(client) = relay.client_address(peer, &headers) else {
+        return relay.bad_address_header(peer);
+    };
     let admitted = relay.admit(client);
     relay
         .limit(upgrade)

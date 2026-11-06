@@ -76,6 +76,19 @@ pub const CONNECT_PATH: &str = "/v1/connect";
 /// Liveness for load balancers and monitors.
 pub const HEALTH_PATH: &str = "/health";
 
+/// How long a node gives a channel a relay spliced to it to be admitted:
+/// the Noise handshake and the device preamble, together. A node drops a
+/// relayed channel it has not admitted by then, so a relay takes a splice
+/// still open somewhat later as admitted (`Limits::client_settle`).
+pub const RELAYED_ADMISSION: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How many relayed channels a node lets wait for admission at once: a
+/// budget of their own, apart from the direct route's, so a crowd through
+/// a relay never takes the direct route's room. A relay's startup check
+/// keeps one IPv6 `/48`'s share of one node's clients under half of it
+/// (`Limits::check`).
+pub const RELAYED_UNADMITTED: usize = 40;
+
 /// The URL of `path` (with its query) on `relay`, which may carry a path
 /// prefix of its own (a relay behind a reverse proxy at
 /// `wss://example.com/vessel`).
