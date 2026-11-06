@@ -42,10 +42,10 @@ use vessel_client::{
 };
 use vessel_fleet::BlobStore;
 use vessel_proto::{
-    BlobChunk, ClientInfo, Generation, Manifest, NodeId, NodeInfo, NodePublicKey, PairingOffer,
-    RouteUrl,
+    ClientInfo, Generation, Manifest, NodeId, NodeInfo, NodePublicKey, PairingOffer, RouteUrl,
 };
 
+use super::chunks::{self, FetchError};
 use super::files::{self, FileError, FleetFiles};
 use super::local::Local;
 
@@ -378,44 +378,16 @@ async fn fetch(
     manifest: &Manifest,
     blobs: &BlobStore,
 ) -> Result<(), PullError> {
-    let mut wanted: Vec<_> = manifest.files.values().collect();
-    wanted.sort_by_key(|file| file.hash);
-    wanted.dedup_by_key(|file| file.hash);
-    for file in wanted {
-        if blobs.contains(&file.hash) {
-            continue;
-        }
-        let mut writer = Some(blobs.writer(file.hash).map_err(PullError::Blob)?);
-        let mut offset = 0_u64;
-        loop {
-            let BlobChunk { data, total } = client.fleet_blob(file.hash, offset).await?;
-            let length = u64::try_from(data.len()).unwrap_or(u64::MAX);
-            offset = offset.saturating_add(length);
-            if offset > file.size || offset > total {
-                return Err(PullError::Oversized(offset));
-            }
-            let mut chunk_writer = writer.take().ok_or(PullError::Oversized(offset))?;
-            chunk_writer = tokio::task::spawn_blocking(move || {
-                std::io::Write::write_all(&mut chunk_writer, &data).map(|()| chunk_writer)
-            })
-            .await?
-            .map_err(PullError::Blob)?;
-            if data_done(offset, total, length) {
-                let _stored = tokio::task::spawn_blocking(move || chunk_writer.finish())
-                    .await?
-                    .map_err(PullError::Blob)?;
-                break;
-            }
-            writer = Some(chunk_writer);
-        }
-    }
-    Ok(())
-}
-
-/// Whether a blob is complete: all of it arrived, or the home sent an
-/// empty chunk (nothing more will come).
-const fn data_done(offset: u64, total: u64, length: u64) -> bool {
-    offset >= total || length == 0
+    chunks::fetch(manifest.files.values(), blobs, |hash, offset| {
+        client.fleet_blob(hash, offset)
+    })
+    .await
+    .map_err(|error| match error {
+        FetchError::Read(error) => PullError::Call(error),
+        FetchError::Oversized(size) => PullError::Oversized(size),
+        FetchError::Blob(error) => PullError::Blob(error),
+        FetchError::Task(error) => PullError::Task(error),
+    })
 }
 
 async fn note_error(local: &Arc<Local>, message: String) {
