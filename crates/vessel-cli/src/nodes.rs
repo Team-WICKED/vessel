@@ -14,9 +14,9 @@ use vessel_client::book::{
 use vessel_client::{CredentialSource, NodeAddress, NodeUrl, RemotePath};
 use vessel_proto::DEFAULT_PORT;
 
-use crate::args::{NodesCommand, Target};
+use crate::args::{FromStdin, NodesCommand, Target};
 use crate::error::CliError;
-use crate::io;
+use crate::{io, pair};
 
 /// The user's book file: `<config_dir>/vessel/nodes.toml`.
 pub(crate) fn book_path(target: &Target) -> Result<PathBuf, CliError> {
@@ -85,6 +85,16 @@ pub(crate) async fn pin(book: &Path, name: &NodeName, id: vessel_proto::NodeId) 
 
 /// `vessel nodes ...`.
 pub(crate) async fn command(target: &Target, command: NodesCommand) -> Result<(), CliError> {
+    if let NodesCommand::Add {
+        name,
+        pair: Some(FromStdin),
+        yes,
+        default,
+        ..
+    } = command
+    {
+        return pair::add(target, name, yes, default).await;
+    }
     let path = book_path(target)?;
     let text = tokio::task::spawn_blocking(move || edit(&path, command)).await??;
     Ok(io::out(text.as_bytes()).await?)
@@ -99,8 +109,18 @@ fn edit(path: &Path, command: NodesCommand) -> Result<String, CliError> {
             address,
             token_file,
             remote_data_dir,
+            pair: _,
+            yes,
             default,
         } => {
+            // `--pair` was taken by `command`; clap requires an address
+            // without it.
+            if yes {
+                return Err(CliError::Usage(
+                    "--yes confirms a pairing; it goes with --pair",
+                ));
+            }
+            let address = address.ok_or(CliError::Usage("an address is required"))?;
             let entry = entry(&address, token_file, remote_data_dir)?;
             file.add(&name, &entry)?;
             if default {

@@ -7,11 +7,12 @@ use std::sync::Arc;
 use chrono::Utc;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_proto::{NodeId, NodeInfo, NodePublicKey, RelayToken, RouteUrl};
-use vessel_relay::{NodeLink, TlsConfig, WsCarrier};
+use vessel_relay::{LinkState, NodeLink, TlsConfig, WsCarrier};
 use vessel_rpc::Server;
 use vessel_secure::NodeKeypair;
 use vessel_session::{RuntimeConfig, SessionRuntime};
@@ -41,6 +42,8 @@ pub struct Node {
     /// directly with in-memory carriers.
     #[cfg(test)]
     pub(crate) secure: SecureGateway,
+    /// Each relay link's state.
+    relays: Vec<(RouteUrl, watch::Receiver<LinkState>)>,
     stop: CancellationToken,
     task: JoinHandle<Result<(), NodeError>>,
 }
@@ -76,15 +79,7 @@ impl Node {
         } = tokio::task::spawn_blocking(move || prepare(&dir))
             .await
             .map_err(NodeError::Task)??;
-        let Opened { store, interrupted } = Store::open(&config.data_dir, config.store)
-            .await
-            .map_err(NodeError::Store)?;
-        if !interrupted.is_empty() {
-            tracing::info!(
-                sessions = interrupted.len(),
-                "sessions from the previous run are now interrupted"
-            );
-        }
+        let store = open_store(&config).await?;
 
         let Core {
             runtime,
@@ -139,7 +134,7 @@ impl Node {
                 }),
             )
         });
-        link_relays(relaying, &config.relays, &secure, &connections, &stop);
+        let relays = link_relays(relaying, &config.relays, &secure, &connections, &stop);
         let gateway = LocalGateway {
             rpc,
             token,
@@ -164,6 +159,7 @@ impl Node {
             lifecycle,
             #[cfg(test)]
             secure,
+            relays,
             stop,
             task,
         })
@@ -182,6 +178,13 @@ impl Node {
     #[must_use]
     pub fn local_endpoint(&self) -> &Path {
         self.local.path()
+    }
+
+    /// Each configured relay and where the node's link to it stands
+    /// (connecting, registered, refused), to read or wait on.
+    #[must_use]
+    pub fn relay_links(&self) -> Vec<(RouteUrl, watch::Receiver<LinkState>)> {
+        self.relays.clone()
     }
 
     /// The node's current description.
@@ -207,6 +210,20 @@ impl Node {
         self.stop.cancel();
         self.task.await.map_err(NodeError::Task)?
     }
+}
+
+/// Open the event log, closing sessions a previous run left live.
+async fn open_store(config: &Config) -> Result<Store, NodeError> {
+    let Opened { store, interrupted } = Store::open(&config.data_dir, config.store)
+        .await
+        .map_err(NodeError::Store)?;
+    if !interrupted.is_empty() {
+        tracing::info!(
+            sessions = interrupted.len(),
+            "sessions from the previous run are now interrupted"
+        );
+    }
+    Ok(store)
 }
 
 /// The node's parts below its transports.
@@ -345,10 +362,11 @@ fn link_relays(
     gateway: &SecureGateway,
     connections: &TaskTracker,
     stop: &CancellationToken,
-) {
+) -> Vec<(RouteUrl, watch::Receiver<LinkState>)> {
     let Some((token, tls)) = relaying else {
-        return;
+        return Vec::new();
     };
+    let mut states = Vec::with_capacity(relays.len());
     for relay in relays {
         let link = NodeLink::new(
             relay.clone(),
@@ -364,9 +382,11 @@ fn link_relays(
                 gateway.accept_logged(carrier, "relay").await;
             }));
         };
+        states.push((relay.clone(), link.state()));
         tracing::info!(%relay, "linking to a relay");
         drop(connections.spawn(link.run(accept, stop.clone())));
     }
+    states
 }
 
 /// The blocking part of start-up: directory, identity, token, key, lock.

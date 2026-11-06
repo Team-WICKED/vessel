@@ -18,9 +18,15 @@ vessel-proto.workspace = true
 vessel-remote.workspace = true
 
 bytes.workspace = true
+# The pairing link's expiry (`vessel nodes add --pair`); already in the
+# workspace.
+chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
+# The name a paired device gives itself (`vessel nodes add --pair`); as
+# vesseld names its node.
+hostname.workspace = true
 qrcode.workspace = true
 # A scratch directory for a release download (`vessel node install`).
 tempfile.workspace = true

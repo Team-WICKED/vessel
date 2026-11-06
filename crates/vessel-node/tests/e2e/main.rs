@@ -11,6 +11,8 @@ mod local;
 #[cfg(unix)]
 mod remote;
 #[cfg(test)]
+mod secure;
+#[cfg(test)]
 mod structured;
 #[cfg(test)]
 mod support;

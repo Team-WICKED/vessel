@@ -10,9 +10,10 @@
 use std::sync::Arc;
 
 use vessel_client::book::{Resolved, TokenSource};
+use vessel_client::secure::{DialError, ReachError, SecureConnector, WsDialer};
 use vessel_client::{
-    BearerToken, ConnectError, Connector, NodeAddress, NodeClient, NodeUrl, Pinned, PinnedError,
-    WsConnector,
+    BearerToken, ConnectError, Connector, DeviceCredential, NodeAddress, NodeClient, NodeUrl,
+    Pinned, PinnedError, SecureTarget, WsConnector,
 };
 use vessel_node::DataDir;
 use vessel_proto::ClientInfo;
@@ -55,6 +56,8 @@ pub(crate) enum NodeConnector {
     /// Boxed: an SSH connector is a few hundred bytes (its `ssh` command
     /// line, data dir, provisioner), several times a websocket one.
     Ssh(Box<Pinned<SshConnector>>),
+    /// A paired node over its routes (boxed for the same reason).
+    Secure(Box<Pinned<SecureConnector<WsDialer>>>),
 }
 
 /// Why [`NodeConnector`] could not connect.
@@ -64,6 +67,8 @@ pub(crate) enum NodeConnectError {
     Ws(PinnedError<ConnectError>),
     #[error(transparent)]
     Ssh(PinnedError<SshConnectError>),
+    #[error(transparent)]
+    Secure(PinnedError<ReachError<DialError>>),
 }
 
 impl Connector for NodeConnector {
@@ -79,6 +84,10 @@ impl Connector for NodeConnector {
                 .connect(client)
                 .await
                 .map_err(NodeConnectError::Ssh),
+            Self::Secure(connector) => connector
+                .connect(client)
+                .await
+                .map_err(NodeConnectError::Secure),
         }
     }
 
@@ -86,10 +95,13 @@ impl Connector for NodeConnector {
         match (self, error) {
             (Self::Ws(connector), NodeConnectError::Ws(error)) => connector.is_transient(error),
             (Self::Ssh(connector), NodeConnectError::Ssh(error)) => connector.is_transient(error),
-            // A connector only returns its own errors.
-            (Self::Ws(_), NodeConnectError::Ssh(_)) | (Self::Ssh(_), NodeConnectError::Ws(_)) => {
-                false
+            (Self::Secure(connector), NodeConnectError::Secure(error)) => {
+                connector.is_transient(error)
             }
+            // A connector only returns its own errors.
+            (Self::Ws(_), NodeConnectError::Ssh(_) | NodeConnectError::Secure(_))
+            | (Self::Ssh(_), NodeConnectError::Ws(_) | NodeConnectError::Secure(_))
+            | (Self::Secure(_), NodeConnectError::Ws(_) | NodeConnectError::Ssh(_)) => false,
         }
     }
 }
@@ -105,8 +117,10 @@ fn report(error: NodeConnectError, book: &std::path::Path) -> CliError {
     match error {
         NodeConnectError::Ws(PinnedError::Connect(error)) => CliError::Connect(error),
         NodeConnectError::Ssh(PinnedError::Connect(error)) => CliError::Remote(error),
+        NodeConnectError::Secure(PinnedError::Connect(error)) => CliError::Reach(error),
         NodeConnectError::Ws(PinnedError::Changed { expected, found })
-        | NodeConnectError::Ssh(PinnedError::Changed { expected, found }) => {
+        | NodeConnectError::Ssh(PinnedError::Changed { expected, found })
+        | NodeConnectError::Secure(PinnedError::Changed { expected, found }) => {
             changed(expected, found)
         }
     }
@@ -137,12 +151,7 @@ pub(crate) async fn connect_to(
             remote::connector(target, node).await?,
             resolved.pinned,
         ))),
-        // `SecureConnector` arrives with `vessel-secure` (plan, Track P).
-        NodeAddress::Secure(_) => {
-            return Err(CliError::NoSecureChannel {
-                node: nodes::label(resolved),
-            });
-        }
+        NodeAddress::Secure(node) => NodeConnector::Secure(Box::new(secure(resolved, node).await?)),
     };
     let client = connector
         .connect(client_info())
@@ -157,6 +166,29 @@ pub(crate) async fn connect_to(
         client,
         connector: Arc::new(connector),
     })
+}
+
+/// The connector for a paired node: its credential file, bound to the
+/// node's key and id (the book's pinned id, or else the credential's own),
+/// checked before anything is dialled.
+async fn secure(
+    resolved: &Resolved,
+    node: &SecureTarget,
+) -> Result<Pinned<SecureConnector<WsDialer>>, CliError> {
+    let source = resolved
+        .credential
+        .as_ref()
+        .ok_or_else(|| CliError::NoCredential {
+            node: nodes::label(resolved),
+        })?;
+    let path = source.path(dirs::home_dir().as_deref());
+    let credential = tokio::task::spawn_blocking(move || DeviceCredential::read(&path))
+        .await?
+        .map_err(CliError::Credential)?;
+    let id = resolved.pinned.unwrap_or(credential.node);
+    let dialer = WsDialer::for_routes(node.routes()).map_err(CliError::Tls)?;
+    let connector = SecureConnector::new(dialer, node.clone(), id, credential)?;
+    Ok(Pinned::new(connector, Some(id)))
 }
 
 /// Whether `resolved` is the node on this machine: a loopback websocket
