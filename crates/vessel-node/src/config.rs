@@ -69,6 +69,16 @@ pub struct Config {
     /// Fleet sync (ADR 0012): where bundles are written and how often the
     /// node looks; the defaults suit a real node.
     pub fleet: FleetConfig,
+    /// Behind a reverse proxy every direct client comes from the proxy:
+    /// the header in which it passes the client's address (`X-Real-IP`),
+    /// so `/secure`'s per-address budget is per client
+    /// (`vesseld --client-address-header`). Believed only from
+    /// [`trusted_proxies`](Self::trusted_proxies), which it needs.
+    pub client_address_header: Option<axum::http::HeaderName>,
+    /// The peers whose [`client_address_header`](Self::client_address_header)
+    /// is believed (`vesseld --trusted-proxy`); anyone else is counted by
+    /// its own address.
+    pub trusted_proxies: Vec<vessel_relay::TrustedProxy>,
 }
 
 /// A command that runs `vessel mcp` ([`Config::vessel_mcp`]).
@@ -118,6 +128,8 @@ impl Config {
             keepalive: Keepalive::DEFAULT,
             vessel_mcp: None,
             fleet: FleetConfig::default(),
+            client_address_header: None,
+            trusted_proxies: Vec::new(),
         }
     }
 }

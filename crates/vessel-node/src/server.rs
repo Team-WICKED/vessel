@@ -19,6 +19,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use tokio_util::task::TaskTracker;
+use vessel_relay::address::ClientAddress;
 use vessel_relay::{AxumCarrier, Keepalive};
 use vessel_rpc::Server;
 use vessel_store::NodeToken;
@@ -43,6 +44,9 @@ pub(crate) struct Gateway {
     /// Pings and the silence limit for `/secure` connections.
     pub(crate) keepalive: Keepalive,
     pub(crate) connections: TaskTracker,
+    /// Where a `/secure` client counts: behind a trusted reverse proxy, by
+    /// its header (`Config::client_address_header`); else the peer.
+    pub(crate) clients: ClientAddress,
 }
 
 pub(crate) fn router(gateway: Gateway) -> Router {
@@ -96,11 +100,23 @@ pub(crate) const SECURE_PATH: &str = "/secure";
 /// pings a direct connection, so the node does: a half-open one (a client
 /// that slept, a NAT mapping that expired) is dropped after the silence
 /// limit, as a relay drops relayed ones.
+///
+/// Behind a trusted reverse proxy the per-address budget counts the client
+/// its header names (one bare address, else `400`; without it, the proxy
+/// itself), as a relay does (`vessel_relay::address::ClientAddress`).
 async fn secure(
     State(gateway): State<Gateway>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
+    let client = match gateway.clients.of(peer.ip(), &headers) {
+        Ok(client) => client,
+        Err(bad) => {
+            tracing::info!(proxy = %peer.ip(), "refused a secure connection: {bad}");
+            return (StatusCode::BAD_REQUEST, bad.to_string()).into_response();
+        }
+    };
     let connection = gateway.connections.token();
     upgrade
         .max_message_size(vessel_secure::MAX_RECORD)
@@ -111,7 +127,7 @@ async fn secure(
                 .secure
                 .accept_logged(
                     AxumCarrier::new(socket, Some(gateway.keepalive)),
-                    Route::Direct(peer.ip()),
+                    Route::Direct(client.address),
                 )
                 .await;
         })

@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_harness::HarnessEnv;
 use vessel_proto::{NodeId, NodeInfo, RelayToken, RouteUrl};
+use vessel_relay::address::ClientAddress;
 use vessel_relay::{LinkState, TlsConfig};
 use vessel_rpc::Server;
 use vessel_secure::NodeKeypair;
@@ -79,8 +80,10 @@ impl Node {
     /// The data directory or event log is unusable, another node holds the
     /// data directory, or the local socket or the address cannot be bound.
     pub async fn start(config: Config) -> Result<Self, NodeError> {
-        // Checked before anything starts, so a misconfigured relay is an
-        // error at once rather than a node that is unreachable later.
+        // Checked before anything starts, so a misconfigured relay or
+        // proxy is an error at once rather than a node that is unreachable
+        // (or limited as one client) later.
+        let clients = client_address(&config)?;
         let relaying = relaying(&config)?;
         let dir = config.data_dir.clone();
         let env = config.harness_env.clone();
@@ -151,6 +154,7 @@ impl Node {
                     secure: secure.clone(),
                     keepalive: config.keepalive,
                     connections: connections.clone(),
+                    clients,
                 }),
             )
         });
@@ -416,6 +420,19 @@ async fn bind(
         None => None,
     };
     Ok((local, tcp))
+}
+
+/// Where a direct client counts: behind a trusted reverse proxy, by its
+/// header (`--client-address-header`, `--trusted-proxy`), as a relay does.
+fn client_address(config: &Config) -> Result<ClientAddress, NodeError> {
+    let clients = ClientAddress::new(
+        config.client_address_header.clone(),
+        config.trusted_proxies.clone(),
+    )?;
+    if config.client_address_header.is_none() && !config.trusted_proxies.is_empty() {
+        tracing::warn!("trusted proxies are ignored without a client address header");
+    }
+    Ok(clients)
 }
 
 /// The relays' registration token and the TLS setup for them, if any

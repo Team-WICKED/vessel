@@ -55,8 +55,11 @@
 //!   direct budget is held per address too, [`MAX_UNADMITTED_PER_ADDRESS`]
 //!   for an IPv4 address or an IPv6 `/64`, scaled for `/56` and `/48` as a
 //!   relay counts (`vessel_relay::address`, shared): one host held all 64
-//!   direct places for 20 s at a time. The address is the socket's peer;
-//!   the node has no proxy mode, so there is no header to believe.
+//!   direct places for 20 s at a time. The address is the socket's peer,
+//!   or, behind a reverse proxy the operator named (round 11,
+//!   `--trusted-proxy`), the client its header names, read by the
+//!   relay's own parser (`vessel_relay::address::ClientAddress`, in
+//!   `server`): otherwise every client of a proxied node was the proxy.
 //! - Until the preamble is answered, frames are limited to
 //!   [`PREAMBLE_MAX_FRAME`] (64 KiB) both ways: a preamble is a few hundred
 //!   bytes, and a stranger must not make the node buffer 16 MiB per

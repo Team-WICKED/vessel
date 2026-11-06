@@ -37,6 +37,10 @@ pub enum NodeError {
     /// Another node already uses this data directory.
     #[error("another node already uses this data directory")]
     AlreadyRunning(#[source] StoreError),
+    /// A client address header is set without a trusted proxy
+    /// (`--client-address-header` needs `--trusted-proxy`).
+    #[error(transparent)]
+    NoTrustedProxy(#[from] vessel_relay::address::NoTrustedProxy),
     /// Relays are configured without `--relay-token-file`.
     #[error("a relay needs its registration token: pass --relay-token-file")]
     NoRelayToken,

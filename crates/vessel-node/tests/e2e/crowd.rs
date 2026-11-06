@@ -205,16 +205,33 @@ impl Sink<Bytes> for Proxied {
 async fn handshake_from(url: &RouteUrl, key: &NodePublicKey, address: &str) -> Option<impl Sized> {
     let routing = vessel_secure::routing_id(key);
     let target = format!("{url}{}?node={routing}", vessel_relay::CONNECT_PATH);
+    handshake_at(&target, key, address).await.ok()
+}
+
+/// A channel to the node of `key` at the websocket URL `target`, its
+/// handshake done and no preamble, saying in [`HEADER`] that it comes from
+/// `address`; when refused, the HTTP status it was refused with, if any.
+async fn handshake_at(
+    target: &str,
+    key: &NodePublicKey,
+    address: &str,
+) -> Result<impl Sized + use<>, Option<u16>> {
     let mut request = target.into_client_request().unwrap();
     let _previous = request
         .headers_mut()
         .insert(HEADER, address.parse().unwrap());
-    let (socket, _response) = tokio_tungstenite::connect_async(request).await.ok()?;
+    let socket = match tokio_tungstenite::connect_async(request).await {
+        Ok((socket, _response)) => socket,
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            return Err(Some(response.status().as_u16()));
+        }
+        Err(_) => return Err(None),
+    };
     let handshake = vessel_secure::initiate(Proxied(socket), key);
-    tokio::time::timeout(Duration::from_secs(3), handshake)
-        .await
-        .ok()?
-        .ok()
+    match tokio::time::timeout(Duration::from_secs(3), handshake).await {
+        Ok(Ok(channel)) => Ok(channel),
+        Ok(Err(_)) | Err(_) => Err(None),
+    }
 }
 
 /// One IPv6 /48's share of one node's clients at a relay's defaults: four
@@ -302,6 +319,59 @@ async fn one_host_holds_few_of_a_nodes_direct_places() {
         );
         drop(held);
         node.stop().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_behind_a_proxy_counts_its_direct_clients_by_the_proxys_header() {
+    within(async {
+        let fixture = Fixture::new();
+        let node = fixture
+            .start_with(|config| {
+                config.client_address_header = Some(HEADER.parse().unwrap());
+                config.trusted_proxies = vec!["127.0.0.1".parse().unwrap()];
+            })
+            .await;
+        let key = node.info().public_key.unwrap();
+        let secure = format!("{}/secure", direct_route(&node));
+        // One client behind the proxy holds its share of the direct places...
+        let mut held = Vec::new();
+        for _ in 0..16 {
+            if let Ok(channel) = handshake_at(&secure, &key, "203.0.113.1").await {
+                held.push(channel);
+            }
+        }
+        assert!(held.len() < 16, "{} held by one client", held.len());
+        // ...and another behind the same proxy still gets in.
+        let other = handshake_at(&secure, &key, "203.0.113.2").await;
+        assert!(other.is_ok(), "another client behind the proxy");
+        // A header that is not one bare address is refused before the
+        // upgrade.
+        let listed = handshake_at(&secure, &key, "203.0.113.3, 10.0.0.1").await;
+        assert_eq!(listed.err(), Some(Some(400)));
+        drop((held, other));
+        node.stop().await.unwrap();
+
+        // The header alone, with no proxy to believe it from: the node does
+        // not start.
+        let fixture = Fixture::new();
+        let mut config = vessel_node::Config::new(fixture.data_dir(), fixture.harness_env());
+        config.bind = Some(std::net::SocketAddr::from((
+            std::net::Ipv4Addr::LOCALHOST,
+            0,
+        )));
+        config.client_address_header = Some(HEADER.parse().unwrap());
+        let refused = Node::start(config)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(
+            refused
+                .as_deref()
+                .is_some_and(|text| text.contains("--trusted-proxy")),
+            "{refused:?}"
+        );
     })
     .await;
 }
