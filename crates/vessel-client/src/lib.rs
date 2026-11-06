@@ -37,7 +37,9 @@ mod address;
 pub mod book;
 mod client;
 mod connector;
+mod credential;
 mod error;
+pub mod pairing;
 mod pinned;
 mod resume;
 mod stream;
@@ -48,10 +50,12 @@ mod url;
 mod ws;
 
 pub use address::{
-    InvalidAddress, InvalidRemotePath, InvalidSshTarget, NodeAddress, RemotePath, SshTarget,
+    InvalidAddress, InvalidRemotePath, InvalidSshTarget, NodeAddress, RemotePath, SecureTarget,
+    SshTarget,
 };
 pub use client::NodeClient;
 pub use connector::{Connector, WsConnector};
+pub use credential::{CredentialError, CredentialSource, DeviceCredential};
 pub use error::{ConnectError, StreamError};
 pub use pinned::{Pinned, PinnedError};
 pub use resume::{Backoff, ResumingStream, follow_resuming};

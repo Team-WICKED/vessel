@@ -137,6 +137,12 @@ pub(crate) async fn connect_to(
             remote::connector(target, node).await?,
             resolved.pinned,
         ))),
+        // `SecureConnector` arrives with `vessel-secure` (plan, Track P).
+        NodeAddress::Secure(_) => {
+            return Err(CliError::NoSecureChannel {
+                node: nodes::label(resolved),
+            });
+        }
     };
     let client = connector
         .connect(client_info())

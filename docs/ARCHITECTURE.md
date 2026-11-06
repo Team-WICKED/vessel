@@ -176,6 +176,16 @@ they started.
     (`<config_dir>/vessel/nodes.toml`, a project's `.vessel/config.toml`
     that may only pick one of the user's nodes, `resolve` for `--node`;
     edited with `toml_edit`, keeping comments).
+    Milestone 3 (Track P, in progress): a third kind of book entry, a
+    paired node (`key`, `relay`, `direct`, `credential = { file }`; exactly
+    one of `ssh`, `url` and `key` per node, and a `key` node needs a
+    credential and a route), as `NodeAddress::Secure(SecureTarget)`;
+    `DeviceCredential` files (`<config_dir>/vessel/credentials/<node
+    id>.secret`, directory 0700, file 0600, replaced atomically); and
+    `pairing::pair`/`authenticate`, the device preamble over any frame
+    transport, with typed refusals that say whether retrying can help. The
+    connector that dials routes and runs the handshake comes with
+    `vessel-secure`.
   - `vessel-remote` (milestone 2, Track C): `ssh` (the system
     client with fixed options, `ControlMaster` sharing on Unix, commands
     built from fixed words and single-quoted values, the last 64 stderr

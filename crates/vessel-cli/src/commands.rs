@@ -192,6 +192,7 @@ mod tests {
             name: None,
             address: node.parse().unwrap(),
             token: None,
+            credential: None,
             pinned: None,
             origin: Origin::Named,
         }

@@ -1,4 +1,5 @@
-//! Where a node is: [`NodeAddress`], [`SshTarget`], [`RemotePath`].
+//! Where a node is: [`NodeAddress`], [`SshTarget`], [`RemotePath`],
+//! [`SecureTarget`].
 //!
 //! Plain data: parsing and checking only, no connecting. The websocket
 //! side connects through [`WsConnector`](crate::WsConnector); the SSH side
@@ -26,6 +27,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use tokio_tungstenite::tungstenite::http::Uri;
+use vessel_proto::{NodePublicKey, RouteUrl};
 
 use crate::url::NodeUrl;
 
@@ -37,6 +39,51 @@ pub enum NodeAddress {
     /// `ssh` to the machine, then `vesseld attach` (ADR 0007); no client
     /// token.
     Ssh(SshTarget),
+    /// A secure channel to the node's pinned key, directly or through a
+    /// relay, authenticated by a device credential (ADR 0009, ADR 0010).
+    /// Only the book makes these: they come from pairing, never from text.
+    Secure(SecureTarget),
+}
+
+/// A node reached over a secure channel: the key pinned at pairing, and the
+/// routes to try (direct addresses first, then relays, plan decision 6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecureTarget {
+    /// The node's static key; every handshake checks it.
+    pub key: NodePublicKey,
+    /// Relays, in the order to try them.
+    pub relays: Vec<RouteUrl>,
+    /// Addresses to dial directly, tried before the relays.
+    pub direct: Vec<RouteUrl>,
+}
+
+impl SecureTarget {
+    /// Every route, in the order to try them.
+    pub fn routes(&self) -> impl Iterator<Item = &RouteUrl> {
+        self.direct.iter().chain(&self.relays)
+    }
+}
+
+impl fmt::Display for SecureTarget {
+    /// The key, shortened, and the first route: enough to tell nodes apart
+    /// in a list.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let key = self.key.to_string();
+        let short = key.get(..15).unwrap_or(&key);
+        write!(formatter, "{short}… ")?;
+        let mut routes = self.routes();
+        match routes.next() {
+            Some(first) => {
+                write!(formatter, "via {first}")?;
+                let more = routes.count();
+                if more > 0 {
+                    write!(formatter, " (+{more})")?;
+                }
+                Ok(())
+            }
+            None => formatter.write_str("(no route)"),
+        }
+    }
 }
 
 /// Text that names no node address.
@@ -71,6 +118,7 @@ impl fmt::Display for NodeAddress {
         match self {
             Self::Ws(url) => url.fmt(formatter),
             Self::Ssh(target) => write!(formatter, "{SSH_SCHEME}{}", target.authority()),
+            Self::Secure(target) => target.fmt(formatter),
         }
     }
 }
