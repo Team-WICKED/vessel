@@ -176,8 +176,10 @@ depend on the node, so there is no cycle).
     (one remote script: upload through stdin into a `.vesseld-*.tmp`,
     SHA-256 check, `tar -xzO` for release archives, run its `version`
     there, then `mv -f` onto `vesseld-<version>` or
-    `vesseld-<version>-dev-<hash>`; then `cleanup`). Tested against a
-    temporary home through an `ssh` stand-in (Unix only).
+    `vesseld-<version>-dev-<hash>`; then `cleanup`), `release` (the
+    archive and `SHA256SUMS` fetched locally with `gh release download`
+    and checked). Tested against a temporary home through `ssh` and `gh`
+    stand-ins (Unix only).
   - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
     the `Handler` routing to `sessions` (live runtime sessions plus stored
     ones; a session whose log is complete, final status included, is

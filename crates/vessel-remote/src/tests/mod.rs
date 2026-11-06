@@ -8,6 +8,7 @@
 //! home with `HOME` set to it).
 
 mod install;
+mod release;
 mod ssh;
 
 use std::os::unix::fs::PermissionsExt as _;

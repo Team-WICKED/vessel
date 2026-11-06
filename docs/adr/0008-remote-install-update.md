@@ -164,7 +164,13 @@ Plan decision 1 replaces steps 3 and 4 for milestone 2: nothing is
 downloaded on the remote.
 
 - `vessel` gets the release archive and `SHA256SUMS` locally through the
-  authenticated GitHub API, or uses a local build. It then streams the
+  authenticated GitHub API, or uses a local build. The API is reached with
+  the GitHub CLI (`gh release download v<version> --repo Team-WICKED/vessel
+  --pattern <archive> --pattern SHA256SUMS`), using the login the user
+  already has. `vessel` therefore holds no token and builds no TLS stack.
+  The archive is checked against `SHA256SUMS` locally, and again on the
+  remote after the upload. Without `gh`, the error points to `--from
+  local`. It then streams the
   bytes into the remote's temporary file over `ssh` stdin.
 - One fixed `sh -c` script does steps 5 and 6 on the remote, with the
   paths, the expected digest and the expected version as quoted
