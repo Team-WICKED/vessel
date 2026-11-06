@@ -499,7 +499,7 @@ Envelope (Track X):
 `owner`, `device { id }` or `agent { session, depth }`. `scopes` is what the
 origin principal holds on its own node; `depth` is its session's agent
 depth. `call` is boxed (`Box<Call>`), and must be forwardable
-(`Method::forwardable`): not a subscription, not an envelope row.
+(`Method::forwardable`, deny by default: an exhaustive match, so a new row is decided before it compiles; the set is pinned by a test).
 `Forwarded { reply: Box<Reply> }`; an inner call that fails fails the
 envelope with its error.
 
