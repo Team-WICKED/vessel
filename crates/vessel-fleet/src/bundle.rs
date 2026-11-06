@@ -11,6 +11,10 @@
 //!   A directory without a usable name, or with a name another directory
 //!   already took (the first in name order wins), is left out and
 //!   reported, never guessed at.
+//! - Dot entries inside a skill (`.env`, `.git/`, editor swap files) are
+//!   left out and reported: they are rarely meant for every machine and
+//!   easily hold a secret. At the top of the skills directory they are a
+//!   harness's own and left out silently.
 //! - `skip` globs (`*` and `?`, within one name) leave out anything whose
 //!   name matches: a skill directory or its `SKILL.md` name (skills another
 //!   tool manages, such as `paseo*`), or any file or directory inside a
@@ -155,6 +159,10 @@ pub enum SourceProblem {
         /// The directory bundled.
         kept: PathBuf,
     },
+    /// A dot file or directory inside a skill (`.env`, `.git`), left out
+    /// unless a `skip` glob names it (then it is left out silently).
+    #[error("{}: a dot entry inside a skill", .0.display())]
+    Hidden(PathBuf),
     /// A symlink leading out of the skills directory.
     #[error("{}: a symlink out of the skills directory", .0.display())]
     Symlink(PathBuf),
@@ -367,6 +375,12 @@ impl Builder<'_> {
         }
         for (name, path) in sorted_entries(dir)? {
             if self.skipped(&name) {
+                continue;
+            }
+            // `.env`, `.git/`, an editor's swap file: never meant for
+            // every machine, and too easily a secret.
+            if name.starts_with('.') {
+                self.problems.push(SourceProblem::Hidden(path));
                 continue;
             }
             let joined = format!("{prefix}/{name}");
