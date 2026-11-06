@@ -1,13 +1,16 @@
 //! [`NodeClient`]: one typed method per protocol call.
 
+use std::path::PathBuf;
 use vessel_proto::{
-    BlobChunk, BlobHash, BundlePath, ClientInfo, CreateSession, DeleteSecret, DeviceId, DeviceInfo,
-    EventPage, EventSeq, FleetMember, Generation, GetManifest, GetNode, GetSession, Harness,
-    HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers,
-    ListProfiles, ListSecrets, ListSessions, Manifest, MoveProfile, NodeInfo, ProfileInfo,
-    ProfileName, ProtocolVersion, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied,
-    RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId, SessionInfo, SessionInput,
-    SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, WatchFleet,
+    BlobChunk, BlobHash, BundleFile, BundlePath, ClientInfo, CloseTransfer, CreateSession,
+    DeleteSecret, DeviceId, DeviceInfo, EventPage, EventSeq, ExportMemory, ExportSession,
+    FleetMember, Generation, GetManifest, GetNode, GetSession, Harness, HarnessKind, ImportMemory,
+    ImportSession, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers,
+    ListProfiles, ListSecrets, ListSessions, MAX_TRANSFER_FILE, Manifest, MemoryImported,
+    MoveProfile, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion, ReadBlob, ReadEvents,
+    ReadTransfer, ReloadProfiles, ReportApplied, RevokeDevice, Scope, SecretName, SecretValue,
+    SendInput, SessionId, SessionImported, SessionInfo, SessionInput, SessionSpec, SetSecret,
+    StopNode, StopWhen, Subscribe, TransferId, TransferManifest, WatchFleet,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 
@@ -362,6 +365,142 @@ impl NodeClient {
         self.connection.call(DeleteSecret { name }).await.map(drop)
     }
 
+    /// `session.export` (protocol 6): snapshot a structured session's
+    /// files into a transfer only this caller may read. Needs `operate`
+    /// (an agent: a session it started).
+    ///
+    /// # Errors
+    /// `Conflict` while a turn runs unless `force`, or while the session
+    /// is still starting; `Unsupported` for a terminal session;
+    /// `InvalidRequest` over a transfer limit; `Unavailable` while too many
+    /// transfers are open; otherwise see [`CallError`].
+    pub async fn export_session(
+        &self,
+        session: SessionId,
+        force: bool,
+    ) -> Result<TransferManifest, CallError> {
+        self.connection.call(ExportSession { session, force }).await
+    }
+
+    /// `memory.export` (protocol 6): snapshot a profile's memory (Claude
+    /// Code's default profile without one), one project's or all of it.
+    /// Needs `admin`.
+    ///
+    /// # Errors
+    /// As [`export_session`](Self::export_session); `InvalidRequest` for an
+    /// unknown profile or a relative project.
+    pub async fn export_memory(
+        &self,
+        profile: Option<ProfileName>,
+        project: Option<PathBuf>,
+    ) -> Result<TransferManifest, CallError> {
+        self.connection
+            .call(ExportMemory { profile, project })
+            .await
+    }
+
+    /// `transfer.read` (protocol 6): a chunk of one file of a transfer this
+    /// caller opened. Needs `read`.
+    ///
+    /// # Errors
+    /// `NotFound` for a transfer that is closed, expired or someone
+    /// else's, or a hash it does not hold; otherwise see [`CallError`].
+    pub async fn read_transfer(
+        &self,
+        transfer: TransferId,
+        hash: BlobHash,
+        offset: u64,
+    ) -> Result<BlobChunk, CallError> {
+        self.connection
+            .call(ReadTransfer {
+                transfer,
+                hash,
+                offset,
+            })
+            .await
+    }
+
+    /// One file of a transfer this caller opened, read whole and checked
+    /// against its hash: the transfer reader. Held in memory, so at most
+    /// `MAX_TRANSFER_FILE` bytes.
+    ///
+    /// # Errors
+    /// See [`TransferReadError`].
+    pub async fn read_transfer_file(
+        &self,
+        transfer: TransferId,
+        file: &BundleFile,
+    ) -> Result<Vec<u8>, TransferReadError> {
+        use sha2::Digest as _;
+        if file.size > MAX_TRANSFER_FILE {
+            return Err(TransferReadError::Oversized(file.size));
+        }
+        let mut data = Vec::new();
+        let mut hasher = sha2::Sha256::new();
+        loop {
+            let offset = u64::try_from(data.len()).unwrap_or(u64::MAX);
+            let chunk = self.read_transfer(transfer, file.hash, offset).await?;
+            let received =
+                offset.saturating_add(u64::try_from(chunk.data.len()).unwrap_or(u64::MAX));
+            if received > file.size {
+                return Err(TransferReadError::Oversized(received));
+            }
+            hasher.update(&chunk.data);
+            data.extend_from_slice(&chunk.data);
+            if received >= chunk.total || chunk.data.is_empty() {
+                break;
+            }
+        }
+        let found = BlobHash::from_bytes(hasher.finalize().into());
+        if found != file.hash {
+            return Err(TransferReadError::Mismatch {
+                expected: file.hash,
+                found,
+            });
+        }
+        Ok(data)
+    }
+
+    /// `transfer.close` (protocol 6): drop a transfer this caller opened.
+    /// Needs `read`.
+    ///
+    /// # Errors
+    /// As [`read_transfer`](Self::read_transfer).
+    pub async fn close_transfer(&self, transfer: TransferId) -> Result<(), CallError> {
+        self.connection
+            .call(CloseTransfer { transfer })
+            .await
+            .map(drop)
+    }
+
+    /// `session.import` (protocol 6): the node pulls a session from
+    /// `request.from`, places it in one of its profiles for a working
+    /// directory, and with `start` resumes it. Needs `operate`.
+    ///
+    /// # Errors
+    /// `Conflict` when a different file is in the way (nothing is
+    /// written), or for the source's reasons (`session.export`);
+    /// `Unsupported` from another node until the fleet's envelope is built;
+    /// `InvalidRequest` for an unknown profile, one of another harness, or
+    /// a directory that is relative or (with `start`) missing; otherwise
+    /// see [`CallError`].
+    pub async fn import_session(
+        &self,
+        request: ImportSession,
+    ) -> Result<SessionImported, CallError> {
+        self.connection.call(request).await
+    }
+
+    /// `memory.import` (protocol 6): the node pulls a profile's memory
+    /// from `request.from` into one of its profiles, writing what differs
+    /// beside the existing files. Needs `admin`.
+    ///
+    /// # Errors
+    /// As [`import_session`](Self::import_session).
+    pub async fn import_memory(&self, request: ImportMemory) -> Result<MemoryImported, CallError> {
+        self.connection.call(request).await
+    }
+
     /// `device.invite` with explicit `scopes` (protocol 5): `[sync]` makes
     /// a link for a node joining this fleet's home.
     ///
@@ -428,4 +567,25 @@ impl NodeClient {
             subscription,
         ))
     }
+}
+
+/// Why a transfer's file could not be read whole
+/// ([`NodeClient::read_transfer_file`]).
+#[derive(Debug, thiserror::Error)]
+pub enum TransferReadError {
+    /// A call failed.
+    #[error(transparent)]
+    Call(#[from] CallError),
+    /// More arrived than the manifest says, or the manifest says more than
+    /// a transfer may hold.
+    #[error("the file is {0} bytes, more than its manifest or the limit allows")]
+    Oversized(u64),
+    /// What arrived is not the file the manifest names.
+    #[error("the file arrived hashing to {found}, not {expected}")]
+    Mismatch {
+        /// The manifest's hash.
+        expected: BlobHash,
+        /// What arrived hashes to.
+        found: BlobHash,
+    },
 }

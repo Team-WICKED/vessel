@@ -22,6 +22,9 @@ getrandom.workspace = true
 # vessel-relay.
 rustls.workspace = true
 serde.workspace = true
+# Checking a transfer's files against their hashes as they are read
+# (protocol 6); already in the workspace through vessel-fleet.
+sha2.workspace = true
 # The device preamble's frames (ADR 0010), before `vessel-rpc` takes over.
 serde_json.workspace = true
 thiserror.workspace = true
