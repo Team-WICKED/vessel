@@ -35,6 +35,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::process::{Child, Command};
@@ -46,6 +47,9 @@ pub const STDERR_LINES: usize = 64;
 /// Most bytes of a command's stdout kept by [`Ssh::run`]; the commands it
 /// runs print a line or a short list.
 const STDOUT_LIMIT: usize = 1024 * 1024;
+
+/// How long stderr is still read after `ssh` exited.
+const STDERR_GRACE: Duration = Duration::from_secs(1);
 
 /// `ssh`'s exit code for its own failures (it could not connect, log in,
 /// or lost the connection).
@@ -383,6 +387,16 @@ impl Ssh {
                 tracing::debug!(dir = %dir.display(), "control directory path too long; not sharing logins");
                 return None;
             }
+            // `ssh` splits an option's value at whitespace and quotes, and
+            // expands `%` tokens in `ControlPath`; a path with any of them
+            // would name some other place.
+            let plain = dir.to_str().is_some_and(|text| {
+                !text.contains(|c: char| c.is_whitespace() || matches!(c, '%' | '"' | '\''))
+            });
+            if !plain {
+                tracing::debug!(dir = %dir.display(), "control directory path not plain; not sharing logins");
+                return None;
+            }
             if let Err(error) = private_dir(dir) {
                 tracing::debug!(dir = %dir.display(), %error, "no control directory; not sharing logins");
                 return None;
@@ -413,12 +427,19 @@ impl Ssh {
             )));
         };
         let tail = Arc::new(Mutex::new(StderrTail::default()));
-        let (fed, stdout, (), status) = tokio::join!(
-            feed(stdin, input),
-            read_limited(stdout),
-            collect_stderr(stderr, Arc::clone(&tail)),
-            child.wait(),
-        );
+        let mut collecting = tokio::spawn(collect_stderr(stderr, Arc::clone(&tail)));
+        let (fed, stdout, status) =
+            tokio::join!(feed(stdin, input), read_limited(stdout), child.wait());
+        // `ssh` has exited. Its stderr normally closes with it, but a
+        // `ControlPersist` master started by this command may hold the
+        // pipe for as long as it lingers (some OpenSSH versions do); what
+        // arrived until then is enough for an error message.
+        if tokio::time::timeout(STDERR_GRACE, &mut collecting)
+            .await
+            .is_err()
+        {
+            collecting.abort();
+        }
         let status = status.map_err(SshError::Io)?;
         let stdout = stdout.map_err(SshError::Io)?;
         fed?;
@@ -692,6 +713,18 @@ mod tests {
         assert!(args.contains(&expected), "{args:?}");
         let mode = std::fs::metadata(&control).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
+
+        for odd in ["with space", "per%cent", "quo\"te"] {
+            let ssh = Ssh::new("box".parse().unwrap()).with_control_dir(dir.path().join(odd));
+            let command = ssh.command(&RemoteCommand::program("true"));
+            assert!(
+                !command
+                    .as_std()
+                    .get_args()
+                    .any(|arg| arg.to_string_lossy().starts_with("ControlPath")),
+                "{odd}"
+            );
+        }
 
         let long = dir.path().join("x".repeat(80));
         let ssh = Ssh::new("box".parse().unwrap()).with_control_dir(long);
