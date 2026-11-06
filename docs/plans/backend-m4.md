@@ -532,7 +532,7 @@ BundleFile>, detail: TransferDetail }`; `TransferDetail` is `session {
 harness_session, cwd, info: SessionInfo }` (harness and profile are in
 `info`) or `memory { harness, profile, project }`. `session.import` answers
 `SessionImported` rather than `SessionInfo`, since without `start` there is
-no session to report, only where the conversation now is. A `TransferId` is 128 random bits and
+no session to report, only where the conversation now is. A `TransferId` is a UUIDv4 (122 random bits, as built in F4; the holder check, not the id alone, keeps a transfer to its opener) and
 belongs to whoever opened it: the same principal (for a delivered call,
 the delivering device together with the origin) must read and close it.
 
