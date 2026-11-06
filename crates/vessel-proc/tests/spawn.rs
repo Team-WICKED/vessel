@@ -189,3 +189,31 @@ async fn dropping_an_unwaited_child_kills_its_group() {
     })
     .await;
 }
+
+/// A leader that exited but is not reaped yet: macOS refuses to signal its
+/// group (`EPERM`: every member is a zombie). That must count as "already
+/// gone", and the exit code must survive for `wait`.
+///
+/// No portable call shows an exited child without reaping it, so this
+/// signals in a loop across the moment the fake exits (it has closed its
+/// stdout by then): on macOS some of these signals land on the zombie.
+/// Elsewhere the group simply accepts them.
+#[cfg(unix)]
+#[tokio::test]
+async fn signalling_a_leader_that_exited_unreaped_succeeds() {
+    within(async {
+        let Spawned {
+            mut child, stdout, ..
+        } = spawn(&fake_tui().arg("--version")).unwrap();
+        let printed = drain(BufReader::new(stdout).lines()).await;
+        assert!(printed.contains("fake-tui"), "{printed}");
+        for _ in 0..100 {
+            child.signal(Signal::Terminate).unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        // Exited by itself (0) or ended by an early signal (no code).
+        let code = child.wait().await.unwrap();
+        assert!(matches!(code, Some(0) | None), "{code:?}");
+    })
+    .await;
+}

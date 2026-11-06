@@ -1,6 +1,7 @@
 //! [`CommandSpec`]: a command as plain data.
 
 use std::ffi::OsString;
+use std::fmt;
 use std::path::PathBuf;
 
 /// A command to run, as plain data.
@@ -9,7 +10,11 @@ use std::path::PathBuf;
 /// `vessel-pty`. Keeping it inert data (instead of a `std::process::Command`)
 /// lets launch decisions be unit-tested without starting anything, and lets
 /// different runners (pipes, PTY) execute the same description.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` shows the environment's names, never its values: a profile or an
+/// MCP server may put secrets there (ADRs 0011, 0012), and arguments never
+/// hold one.
+#[derive(Clone, PartialEq, Eq)]
 pub struct CommandSpec {
     /// Executable to run: an absolute path resolved by the caller, so the
     /// runner never searches `PATH` itself.
@@ -23,13 +28,33 @@ pub struct CommandSpec {
     pub cwd: Option<PathBuf>,
 }
 
-/// One change to an inherited environment variable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One change to an inherited environment variable. `Debug` hides the value.
+#[derive(Clone, PartialEq, Eq)]
 pub enum EnvValue {
     /// Set the variable to this value.
     Set(OsString),
     /// Remove the variable.
     Remove,
+}
+
+impl fmt::Debug for EnvValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Set(_) => f.write_str("Set(<redacted>)"),
+            Self::Remove => f.write_str("Remove"),
+        }
+    }
+}
+
+impl fmt::Debug for CommandSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommandSpec")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("env", &self.env)
+            .field("cwd", &self.cwd)
+            .finish()
+    }
 }
 
 impl CommandSpec {
@@ -116,6 +141,19 @@ impl CommandSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_shows_names_not_values() {
+        let spec = CommandSpec::new("/bin/true")
+            .arg("--visible")
+            .env("API_KEY", "sk-hidden-value")
+            .env_remove("OTHER");
+        let shown = format!("{spec:?}");
+        assert!(!shown.contains("sk-hidden-value"), "{shown}");
+        for visible in ["API_KEY", "OTHER", "--visible", "Remove"] {
+            assert!(shown.contains(visible), "{visible}: {shown}");
+        }
+    }
 
     #[test]
     fn later_env_entries_win() {
