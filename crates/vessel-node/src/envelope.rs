@@ -55,7 +55,7 @@ fn not_forwardable(method: Method) -> WireError {
         ErrorCode::InvalidRequest,
         format!(
             "`{}` cannot be sent to another node (only work on sessions, profiles, \
-             transfers and secret.set can)",
+             transfers, and secret.set and secret.list can)",
             method.as_str()
         ),
     )
@@ -341,12 +341,14 @@ async fn run_here(
             Reply::CloseTransfer(guard.close_transfer(connection, request).await?)
         }
         Call::SetSecret(request) => Reply::SetSecret(guard.set_secret(connection, request).await?),
+        Call::ListSecrets(request) => {
+            Reply::ListSecrets(guard.list_secrets(connection, request).await?)
+        }
         Call::StopNode(_)
         | Call::InviteDevice(_)
         | Call::ListDevices(_)
         | Call::RevokeDevice(_)
         | Call::ReloadProfiles(_)
-        | Call::ListSecrets(_)
         | Call::DeleteSecret(_)
         | Call::CopySecret(_)
         | Call::Forward(_)

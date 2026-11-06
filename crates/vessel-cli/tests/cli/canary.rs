@@ -242,12 +242,15 @@ fn fakes(bin: &Path) {
     }
 }
 
-/// A node linked to `relay` with the fakes in `bin`, fleet files written
+/// A node named `name` linked to `relay` with the fakes in `bin`, fleet files written
 /// into `<data>/fleet-claude`, `vessel mcp` as its agents' tools, and
 /// `prepare` run on its data directory first.
-async fn node(relay: &RouteUrl, bin: &Path, prepare: impl FnOnce(&Path)) -> Fixture {
+async fn node(name: &str, relay: &RouteUrl, bin: &Path, prepare: impl FnOnce(&Path)) -> Fixture {
     let fixture = Fixture::start_with(|config, data| {
         prepare(data);
+        // Named: a home refuses a member named as itself or another member,
+        // and both would otherwise take this machine's hostname.
+        config.name = Some(name.to_owned());
         let token = data.join("relay-token");
         std::fs::write(&token, "canary-relay\n").unwrap();
         config.relays = vec![relay.clone()];
@@ -516,19 +519,21 @@ async fn make_home(home: &Fixture, planted: &Planted, captured: &mut Captured) {
     assert!(listed.stdout.contains("WEB_TOKEN"), "{}", listed.stdout);
 }
 
-/// The member joins, granting the home `admin`, and applies the bundle
-/// with its MCP servers.
-async fn join(home: &Fixture, member: &Fixture, client: &NodeClient, captured: &mut Captured) {
-    let invited = vessel(
-        home,
-        captured,
-        &["fleet", "invite", "--label", "member"],
-        b"",
-    )
-    .await;
+/// A member joins, granting the home `grant`, and applies the bundle with
+/// its MCP servers.
+async fn join(
+    home: &Fixture,
+    member: &Fixture,
+    grant: &str,
+    client: &NodeClient,
+    captured: &mut Captured,
+) {
+    let label = member.node().info().name;
+    let args = ["fleet", "invite", "--label", label.as_str()];
+    let invited = vessel(home, captured, &args, b"").await;
     assert!(invited.ok, "{}", invited.stderr);
     let link = format!("{}\n", invited.stdout.trim());
-    let args = ["fleet", "join", "--yes", "--grant", "read,operate,admin"];
+    let args = ["fleet", "join", "--yes", "--grant", grant];
     let joined = vessel(member, captured, &args, link.as_bytes()).await;
     assert!(joined.ok, "{}", joined.stderr);
     let id = member.node().info().id;
@@ -555,7 +560,7 @@ async fn join(home: &Fixture, member: &Fixture, client: &NodeClient, captured: &
 /// `secret.copy` to the member, and its refusals.
 async fn copy_secrets(
     home: &Fixture,
-    member: &Fixture,
+    [member, plain]: [&Fixture; 2],
     planted: &Planted,
     captured: &mut Captured,
 ) {
@@ -581,6 +586,21 @@ async fn copy_secrets(
         let refused = vessel(home, captured, &args, b"").await;
         assert!(!refused.ok, "{args:?}");
     }
+    // A member that did not grant the home `admin`: refused, saying how to
+    // grant it, and asked first, so the value never went there.
+    let plain_id = plain.node().info().id.to_string();
+    let args = ["fleet", "secret", "copy", "WEB_TOKEN", "--to", &plain_id];
+    let refused = vessel(home, captured, &args, b"").await;
+    assert!(!refused.ok);
+    assert!(
+        refused.stderr.contains("--grant read,operate,admin"),
+        "{}",
+        refused.stderr
+    );
+    assert!(
+        !plain.data().join("secrets.toml").exists(),
+        "nothing reached it"
+    );
     let stored = std::fs::read_to_string(member.data().join("secrets.toml")).unwrap();
     assert!(
         stored.contains(&planted.docs),
@@ -890,7 +910,6 @@ async fn transfers(
 // ---------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "its fleet setup predates the grant binding rules (375ae31, 2dfd93a): the home never reaches the member; Track F is adapting it, with reports read from files for Windows"]
 async fn no_secret_value_appears_where_it_does_not_belong() {
     let _log = tracing_log();
     within(async {
@@ -902,7 +921,7 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         let bin = tempfile::tempdir().unwrap();
         fakes(bin.path());
         let relay = relay().await;
-        let home = node(&relay.url, bin.path(), |data| {
+        let home = node("canary-home", &relay.url, bin.path(), |data| {
             std::fs::write(
                 DataDir::new(data).profiles_path(),
                 profiles_toml(data, &planted.profile),
@@ -910,13 +929,15 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
             .unwrap();
         })
         .await;
-        let member = node(&relay.url, bin.path(), |_data| {}).await;
+        let member = node("canary-member", &relay.url, bin.path(), |_data| {}).await;
+        let plain = node("canary-plain", &relay.url, bin.path(), |_data| {}).await;
         let client = owner(&home).await;
         let mut captured = Captured::default();
 
         make_home(&home, &planted, &mut captured).await;
-        join(&home, &member, &client, &mut captured).await;
-        copy_secrets(&home, &member, &planted, &mut captured).await;
+        join(&home, &member, "read,operate,admin", &client, &mut captured).await;
+        join(&home, &plain, "read,operate", &client, &mut captured).await;
+        copy_secrets(&home, [&member, &plain], &planted, &mut captured).await;
         profiles(&home, &planted, &mut captured).await;
         let reports = tempfile::tempdir().unwrap();
         let (started, mcp, mut agents) =
@@ -971,6 +992,8 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         captured.tree(home.data(), &intended(home.data(), grant_file.clone()));
         let member_credential = member.data().join("fleet/member.credential");
         captured.tree(member.data(), &intended(member.data(), member_credential));
+        let plain_credential = plain.data().join("fleet/member.credential");
+        captured.tree(plain.data(), &intended(plain.data(), plain_credential));
         captured.text("the nodes' tracing", &String::from_utf8_lossy(&traced()));
         let mut canaries = vec![
             ("profile", planted.profile.as_str()),
@@ -992,6 +1015,7 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
 
         home.stop().await;
         member.stop().await;
+        plain.stop().await;
         relay.shutdown.cancel();
         relay.serving.await.unwrap().unwrap();
     })
