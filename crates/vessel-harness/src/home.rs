@@ -94,8 +94,14 @@ mod tests {
     use super::*;
     use crate::profile::parse_profiles;
 
+    /// An absolute path on this platform.
+    fn absolute(rest: &str) -> PathBuf {
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        Path::new(root).join(rest)
+    }
+
     fn profile(text: &str, name: &str) -> Profile {
-        parse_profiles(text, Some(Path::new("/home/u")))
+        parse_profiles(text, Some(&absolute("home/u")))
             .unwrap()
             .get(&name.parse().unwrap())
             .unwrap()
@@ -103,16 +109,13 @@ mod tests {
 
     #[test]
     fn homes_follow_the_profile_then_the_node() {
-        let user = Path::new("/home/u");
+        let user = &absolute("home/u");
         let nothing = |_: &str| None;
         let claude = Profile::default_for(HarnessKind::ClaudeCode);
         assert_eq!(home(&claude, user, nothing), Some(user.join(".claude")));
         let inherited =
-            |name: &str| (name == "CLAUDE_CONFIG_DIR").then(|| OsString::from("/srv/c"));
-        assert_eq!(
-            home(&claude, user, inherited),
-            Some(PathBuf::from("/srv/c"))
-        );
+            |name: &str| (name == "CLAUDE_CONFIG_DIR").then(|| absolute("srv/c").into_os_string());
+        assert_eq!(home(&claude, user, inherited), Some(absolute("srv/c")));
         let relative = |_: &str| Some(OsString::from("rel"));
         assert_eq!(home(&claude, user, relative), None);
         let empty = |_: &str| Some(OsString::new());

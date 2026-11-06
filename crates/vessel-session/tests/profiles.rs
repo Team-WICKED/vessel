@@ -67,10 +67,10 @@ mod support {
                 "vessel-session-profiles-{}-{n}",
                 std::process::id()
             ));
+            // Not canonicalised: Windows would make it a `\\?\` path, which
+            // `cmd.exe` cannot run a `.cmd` shim from inside a console.
             let bin = dir.join("bin");
             std::fs::create_dir_all(&bin).unwrap();
-            let dir = dir.canonicalize().unwrap();
-            let bin = dir.join("bin");
             let tui = Fake::Tui.path().unwrap();
             let acp = Fake::Acp.path().unwrap();
             drop(install(&bin, HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
