@@ -268,7 +268,8 @@ they started.
     their handshake or preamble at once, and their frames are limited to
     64 KiB until the preamble is answered. `NodeInfo.public_key` carries the
     public key. Carriers arrive from `/secure` on the node's listener (an
-    `AxumCarrier`, messages capped at one record) and from one `NodeLink`
+    `AxumCarrier`, messages capped at one record, pinged every 10 s and
+    dropped after 30 s of silence, `Config::keepalive`) and from one `NodeLink`
     per `--relay` (registering with `--relay-token-file`'s token, TLS for
     `wss://` from the system roots; `Node::relay_links` reports their
     state). `--public` adds direct routes to pairing links. Device labels
@@ -354,7 +355,12 @@ they started.
     address may come from a proxy header). `NodeLink` keeps a node
     registered (0.5-30 s jittered backoff, `LinkState` on a watch) and hands
     each client's data connection to the node as a `WsCarrier`; `dial` and
-    `connect` are the client's. `respond` runs the node's handshake on a
+    `connect` are the client's. One `Keepalive` (a ping every 10 s, a drop
+    after 30 s of silence) covers the relay's connections and direct ones:
+    a node's `AxumCarrier` on `/secure` pings its client from inside the
+    carrier (from the reading side when nothing is being written, never
+    taking the writing task's waker), and every client carrier, relayed or
+    direct, fails after the same silence. `respond` runs the node's handshake on a
     websocket and closes with `4401` when it fails; `relay_close` and
     `node_close` read the codes back. `vesseld relay --bind --token-file
     [--client-address-header]` runs it (README, "Running a relay"). Tested
