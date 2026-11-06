@@ -4,6 +4,8 @@
 //! <root>/            mode 0700 on Unix
 //!   node.id          the node's id (a UUID), created on first start
 //!   token            the access token, created on first start
+//!   node.key         the node's secret key, 32 bytes, created on first
+//!                    start (ADR 0009)
 //!   vessel.db        the event log (plus `SQLite`'s -wal and -shm files)
 //!   vesseld.lock     locked by the running node (`NodeLock`)
 //!   vesseld.owner    which process holds that lock: pid, binary, version
@@ -15,9 +17,10 @@
 //! Every file is owner-only (0600 on Unix); see `files` for why and for
 //! Windows.
 //!
-//! Both identity files are created once and never rewritten. Deleting
+//! The identity files are created once and never rewritten. Deleting
 //! `token` and restarting the node rotates the token (ADR 0005); deleting
-//! `node.id` gives the machine a new identity.
+//! `node.id` gives the machine a new identity; deleting `node.key` gives it
+//! a new key, so every paired device has to pair again (ADR 0009).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,10 +29,12 @@ use vessel_proto::NodeId;
 
 use crate::error::StoreError;
 use crate::files::{self, Privacy};
+use crate::node_key::NodeKeySecret;
 use crate::token::NodeToken;
 
 const NODE_ID_FILE: &str = "node.id";
 const TOKEN_FILE: &str = "token";
+const NODE_KEY_FILE: &str = "node.key";
 const DATABASE_FILE: &str = "vessel.db";
 const LOCK_FILE: &str = "vesseld.lock";
 const START_LOCK_FILE: &str = "vesseld.start.lock";
@@ -216,6 +221,54 @@ impl DataDir {
     /// The file cannot be read or holds something else.
     pub fn read_node_id(&self) -> Result<Option<NodeId>, StoreError> {
         read_node_id(&self.root.join(NODE_ID_FILE))
+    }
+
+    /// `<root>/node.key`, the node's secret key (ADR 0009).
+    #[must_use]
+    pub fn node_key_path(&self) -> PathBuf {
+        self.root.join(NODE_KEY_FILE)
+    }
+
+    /// The node's secret key, created on first use (owner-only). An
+    /// existing file is never replaced (see `node_key`).
+    ///
+    /// # Errors
+    /// The file cannot be read or written, has the wrong size
+    /// ([`StoreError::InvalidNodeKey`]), or the system has no randomness.
+    pub fn load_or_create_node_key(&self) -> Result<NodeKeySecret, StoreError> {
+        let path = self.node_key_path();
+        match self.read_node_key() {
+            Ok(key) => return Ok(key),
+            Err(StoreError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let fresh = NodeKeySecret::generate().map_err(StoreError::Random)?;
+        if files::create_once(&path, fresh.expose()).map_err(StoreError::io(&path))? {
+            tracing::info!(path = %path.display(), "created the node key");
+            return Ok(fresh);
+        }
+        // Another process created it first; use theirs.
+        self.read_node_key()
+    }
+
+    /// The node's secret key, without creating one.
+    ///
+    /// # Errors
+    /// There is no key file, it cannot be read, or it has the wrong size.
+    pub fn read_node_key(&self) -> Result<NodeKeySecret, StoreError> {
+        let path = self.node_key_path();
+        let bytes = std::fs::read(&path).map_err(StoreError::io(&path))?;
+        let key = NodeKeySecret::from_stored(&bytes).ok_or_else(|| StoreError::InvalidNodeKey {
+            path: path.clone(),
+            len: bytes.len(),
+        })?;
+        if files::readable_by_others(&path).unwrap_or(false) {
+            tracing::warn!(
+                path = %path.display(),
+                "the node key is readable by other users; run `chmod 600` on it"
+            );
+        }
+        Ok(key)
     }
 
     /// The access token, without creating one (for local clients).

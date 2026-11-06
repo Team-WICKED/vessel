@@ -1,8 +1,9 @@
 //! A node's durable state: its data directory and the session event log.
 //!
 //! - [`DataDir`] is the directory layout: `node.id` (stable identity),
-//!   `token` (the bearer token clients present, ADR 0005), `vessel.db`, and
-//!   the paths milestone 2 adds (local socket, `bin/`, `logs/`).
+//!   `token` (the bearer token clients present, ADR 0005), `node.key` (the
+//!   node's secret key, ADR 0009), `vessel.db`, and the paths milestone 2
+//!   adds (local socket, `bin/`, `logs/`).
 //! - [`NodeLock`] keeps one node per data directory and records which
 //!   process that is ([`NodeOwner`]).
 //! - [`Store`] is the event log (ADR 0004): one `SQLite` database holding each
@@ -38,6 +39,7 @@ mod error;
 mod files;
 mod lock;
 mod log;
+mod node_key;
 mod reader;
 mod recovery;
 mod schema;
@@ -49,5 +51,6 @@ pub use config::{ByteCount, Retention, StoreConfig};
 pub use data_dir::DataDir;
 pub use error::{Column, Quantity, StoreError};
 pub use lock::{NodeLock, NodeOwner, StartLock};
+pub use node_key::{NODE_KEY_BYTES, NodeKeySecret};
 pub use store::{Opened, Store};
 pub use token::{InvalidToken, NodeToken};
