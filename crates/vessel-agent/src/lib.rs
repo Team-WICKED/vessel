@@ -46,7 +46,7 @@ mod process;
 mod stderr;
 
 pub use error::{AgentError, Disconnect, InputError};
-pub use handshake::AgentSetup;
+pub use handshake::{AgentSetup, DEFAULT_HANDSHAKE_TIMEOUT};
 pub use input::AgentInput;
 pub use output::{AgentOutput, AgentOutputs};
 pub use process::AgentProcess;

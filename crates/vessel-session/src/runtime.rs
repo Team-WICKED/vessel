@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::Instrument as _;
-use vessel_agent::{AgentProcess, AgentSetup};
+use vessel_agent::{AgentProcess, AgentSetup, DEFAULT_HANDSHAKE_TIMEOUT};
 use vessel_proto::{
     EventRecord, EventSeq, HarnessSessionId, ModelId, SessionId, SessionInfo, SessionMode,
     SessionSpec, SessionStatus, TerminalSize,
@@ -166,9 +166,16 @@ impl SessionRuntime {
         .await
         .map_err(SessionError::Internal)??;
         // `fork`/`exec` on this thread, as `tokio::process` does.
-        let (agent, input, outputs) =
-            AgentProcess::spawn(&command, AgentSetup { cwd, model, resume })
-                .map_err(SessionError::StartAgent)?;
+        let (agent, input, outputs) = AgentProcess::spawn(
+            &command,
+            AgentSetup {
+                cwd,
+                model,
+                resume,
+                handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
+            },
+        )
+        .map_err(SessionError::StartAgent)?;
         if self.shutdown.is_cancelled() {
             // Dropping the agent kills its process group.
             drop(agent);

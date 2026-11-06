@@ -124,6 +124,13 @@ Owns: `vessel-proc`, `vessel-harness`, `vessel-pty`, `vessel-agent`,
   responder`, emits `PermissionRequested`, and resolves on the first answer;
   on cancel or exit it resolves all as `Cancelled` and emits
   `PermissionResolved` for each.
+- Handshake deadline (added 2026-11-06, Track S review): `AgentSetup::
+  handshake_timeout` bounds `initialize` + `session/new`/`session/load` +
+  model selection; past it the connection ends `Disconnect::Handshake` and
+  the session `Failed`. `vessel-session` passes `DEFAULT_HANDSHAKE_TIMEOUT`
+  (60 s). Making it node-configurable means a `RuntimeConfig` field, a
+  seam change left for the coordinator (the node builds `RuntimeConfig`
+  with a struct literal).
 
 ### R6. `vessel-session`: the runtime the node uses
 

@@ -144,7 +144,7 @@ impl Driver {
             let cx = cx.clone();
             let inbound = self.inbound.clone();
             async move {
-                let started = handshake::run(&cx, &setup).await;
+                let started = handshake::run_within(&cx, &setup).await;
                 forward(&inbound, Inbound::Started(started)).await;
                 Ok(())
             }
