@@ -577,8 +577,8 @@ All eight proposals below are accepted as written:
 1. **TLS for `wss://` relays:** `rustls` with the `ring` provider, installed
    explicitly at startup (the M1 panic came from a missing provider), and the
    OS root certificates. This lets a relay sit behind an existing HTTPS
-   proxy on 443, which is how TeamWicked would host it (Cloudflare and nginx
-   in front of ingwprox1).
+   proxy on 443, which is how the operator would host it (Cloudflare and
+   nginx in front of an existing web server).
 2. **QR codes:** `qrcode` 0.14 with default features off.
 3. **Short typeable codes:** not in M3. A short code cannot carry a key, so it
    would need a PAKE.
