@@ -84,7 +84,7 @@ impl PtyProcess {
         })?;
 
         // From here on, a failure must stop the program before returning.
-        let started = threads::start(pair.master, child, &killer);
+        let started = threads::start(pair.master, child, killer.reaper(pid));
         match started {
             Ok(threads) => {
                 tracing::debug!(pid, program = %spec.program.display(), "pty spawned");

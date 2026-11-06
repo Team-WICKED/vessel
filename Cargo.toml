@@ -101,7 +101,8 @@ futures-util = "0.3"
 # OS randomness for the 256-bit node token (vessel-store, ADR 0005).
 getrandom = "0.4"
 hostname = "0.4"
-# Unix process groups and signals (killpg) without `unsafe` (vessel-proc).
+# Unix process groups and signals (killpg) without `unsafe` (vessel-proc);
+# waiting for a PTY program without reaping it, `waitid` (vessel-pty).
 nix = { version = "0.31", features = ["signal"] }
 # PTYs on Unix and Windows ConPTY behind one API (vessel-pty).
 portable-pty = "0.9"
