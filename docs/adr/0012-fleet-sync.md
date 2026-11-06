@@ -348,8 +348,8 @@ It is idempotent: running it again fills gaps and changes nothing else.
   comments; the node notices a change within seconds. There is no way to
   read a value back out. Protocol 6's `secret.set`, `secret.list` and
   `secret.delete` (admin) call the same functions. `secret.copy` (`vessel
-  fleet secret copy NAME --to NODE`, the node named as the fleet knows
-  it) reads the value here and sends it as `secret.set` through the
+  fleet secret copy NAME --to NODE_ID`, a whole node id: never a name
+  or a prefix, which could match a node it was not meant for) reads the value here and sends it as `secret.set` through the
   envelope as the caller, so it lands only where the target granted the
   home `admin`, which the default grant leaves out; the refusal says to
   join again with `--grant read,operate,admin`. The home grants its

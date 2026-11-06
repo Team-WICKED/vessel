@@ -110,14 +110,6 @@ pub(crate) enum CliError {
     /// ... or several.
     #[error("`{prefix}` matches {count} devices; give more of the id")]
     AmbiguousDevice { prefix: String, count: usize },
-    /// `vessel fleet secret copy --to` naming no node of the fleet.
-    #[error(
-        "no node of this fleet is `{0}`; `vessel fleet status` names the home, `vessel fleet members` its members"
-    )]
-    NoSuchFleetNode(String),
-    /// ... or several.
-    #[error("`{text}` matches {count} nodes of this fleet; give its id")]
-    AmbiguousFleetNode { text: String, count: usize },
     /// A command that needs an SSH node got another kind.
     #[error("{node} is not an SSH node; {what} works only over SSH")]
     NotSsh { node: String, what: &'static str },
