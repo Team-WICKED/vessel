@@ -33,7 +33,7 @@
 //!   not found.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 use vessel_proto::{HarnessSessionId, McpTransport, ResolvedMcpServers};
@@ -210,22 +210,34 @@ fn memory_directories(
     Ok(found)
 }
 
-/// A path under `projects/<slug of from>/` moved under the slug of `to`
-/// (its resolved form, which Claude Code names projects after); any other
-/// path as it is.
+/// A path under `projects/<project>/` moved under the slug of `to` (its
+/// resolved form, which Claude Code names projects after); any other path
+/// (`file-history/...`) as it is.
+///
+/// The project's own name is replaced whatever it is rather than matched
+/// against `from`'s slug: a session's files, or one project's memory, are
+/// all under one project, named after one of `from`'s spellings, and the
+/// node renaming them may be unable to tell which (on a target node,
+/// `from` exists only on the source, so its resolved spelling is
+/// unknown). `from` must still be able to name a project.
 fn rebase(path: &Path, from: &Path, to: &Path) -> Result<PathBuf, RebaseError> {
     let invalid = |cwd: &Path| RebaseError {
         cwd: cwd.to_owned(),
     };
+    let _named = slug(from).ok_or_else(|| invalid(from))?;
     let resolved = directories(to).pop().unwrap_or_else(|| to.to_owned());
     let target = slug(&resolved).ok_or_else(|| invalid(to))?;
-    for directory in directories(from) {
-        let source = slug(&directory).ok_or_else(|| invalid(from))?;
-        if let Ok(rest) = path.strip_prefix(Path::new("projects").join(&source)) {
-            return Ok(Path::new("projects").join(&target).join(rest));
+    let mut components = path.components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(first)), Some(Component::Normal(_project)))
+            if first == "projects" && components.clone().next().is_some() =>
+        {
+            Ok(Path::new("projects")
+                .join(target)
+                .join(components.as_path()))
         }
+        _ => Ok(path.to_owned()),
     }
-    Ok(path.to_owned())
 }
 
 /// `--mcp-config`'s file: `{"mcpServers": {"<name>": {...}}}`.
