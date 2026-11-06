@@ -1,0 +1,82 @@
+//! Fleet bundles (ADR 0012): what the fleet's home publishes, and how each
+//! node writes it into its harness homes.
+//!
+//! ```text
+//! home:    Sources ──bundle──▶ Manifest + BlobStore     (fleet.manifest, fleet.blob)
+//! member:  Manifest + BlobStore ──plan──▶ Plan ──apply──▶ files in each Target
+//!                                          ▲                   │
+//!                                          └──── Managed ◀─────┘   (managed.json)
+//! launch:  McpDefinitions + secrets ──resolve──▶ ResolvedMcpServers
+//! ```
+//!
+//! No network and no node: the node moves manifests and blobs between
+//! machines and decides when to bundle and apply; this crate only reads
+//! and writes files.
+//!
+//! [Decision Log]
+//! - Purpose: one person's instructions, skills and MCP server definitions,
+//!   kept in one place (the home), reach every profile of every machine,
+//!   without ever losing a local edit and without touching anything Vessel
+//!   did not write (ADR 0012).
+//! - Constraint: the home's own harness homes may already point at the
+//!   sources by symlink (the operator's single-source scheme); targets
+//!   there must be left alone, and nothing may ever be written into a
+//!   source. A target directory may hold symlinks to anywhere.
+//! - Bundle layout: `instructions.md` for the instructions file and
+//!   `skills/<name>/...` for each skill, `<name>` being the `name` in its
+//!   `SKILL.md` (the operator's sync script names skills the same way, so
+//!   a directory named differently, or in another script, is linked under
+//!   its English name). A target maps them to its own file names
+//!   ([`Target`]).
+//! - Content addressed: blobs are stored and fetched by SHA-256, so equal
+//!   content is stored and sent once, and a member fetches only what it
+//!   lacks. The home copies sources into its store when it bundles, so a
+//!   manifest and its blobs always agree even if a source changes later.
+//! - Copies with recorded hashes ([`Managed`], `managed.json`, the role of
+//!   Paseo's `.paseo-managed-files.json`): a file whose content is still
+//!   what Vessel wrote is Vessel's to update or remove; any other content
+//!   is someone's edit, kept, with the incoming version written beside it
+//!   (`<name>.vessel-incoming`) and listed as a conflict. Paseo instead
+//!   overwrites edited files on update.
+//! - Symlinks below a target's root are never followed: a link into a
+//!   source means the target already has it (skipped), any other link is
+//!   someone's arrangement (skipped, reported).
+//! - Alternatives: symlinks to Vessel's copy (cannot tell an edit from an
+//!   update, and an edit through the link changes every profile); `git`
+//!   as the transport (a remote on every machine, and still no answer for
+//!   MCP servers); `globset` and a YAML parser (the skip globs only need
+//!   `*` and `?` within one name, and only one frontmatter field is read).
+//! - Edges: `-> proto` (the manifest and MCP types). The per-harness layout
+//!   (instruction file and skill directory names) comes from
+//!   `vessel-harness` once it describes it; until then callers build a
+//!   [`Target`] themselves.
+
+mod apply;
+mod blobs;
+mod bundle;
+mod files;
+mod managed;
+mod plan;
+mod resolve;
+mod skill;
+mod target;
+
+pub use apply::{Applied, Conflict, apply};
+pub use blobs::{BlobStore, BlobWriter, InvalidBlob};
+pub use bundle::{
+    BundleError, Bundled, InvalidSkipGlob, MAX_FILE, SkipGlob, SourceProblem, Sources, bundle,
+};
+pub use managed::{Managed, ManagedError};
+pub use plan::{Plan, Skip, SkipReason, Step, plan};
+pub use resolve::resolve;
+pub use skill::{SkillNameError, skill_name};
+pub use target::Target;
+
+/// The instructions file's place in a bundle.
+pub const INSTRUCTIONS: &str = "instructions.md";
+
+/// The directory skills sit under in a bundle.
+pub const SKILLS: &str = "skills";
+
+/// The suffix of an incoming version written beside a locally edited file.
+pub const INCOMING_SUFFIX: &str = ".vessel-incoming";

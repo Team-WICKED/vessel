@@ -2575,6 +2575,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vessel-fleet"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "vessel-proto",
+]
+
+[[package]]
 name = "vessel-harness"
 version = "0.1.0"
 dependencies = [
