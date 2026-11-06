@@ -15,7 +15,8 @@ use std::path::PathBuf;
 
 use vessel_client::RemotePath;
 
-use crate::install::{Build, BuildError, InstallError, Installed, Installer};
+use crate::build::{Build, BuildError};
+use crate::install::{InstallError, Installed, Installer};
 use crate::platform::{Platform, PlatformError};
 use crate::release::{ReleaseError, Releases};
 use crate::ssh::Ssh;

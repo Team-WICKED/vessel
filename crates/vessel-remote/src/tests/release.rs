@@ -1,7 +1,8 @@
 //! Fetching a release through a stand-in `gh`, then installing it.
 
 use super::*;
-use crate::install::{Installer, Sha256Digest};
+use crate::digest::Sha256Digest;
+use crate::install::Installer;
 use crate::platform::Platform;
 use crate::release::{CHECKSUMS, ReleaseError, Releases};
 

@@ -4,6 +4,8 @@
 //!   commands from fixed words and quoted values, keeps the end of stderr
 //!   for errors.
 //! - [`platform`]: which `vesseld` build a machine needs.
+//! - [`build`] and [`digest`]: what is installed (a local build or a
+//!   release archive) and its SHA-256.
 //! - [`install`]: uploading a local build or a release archive, checked on
 //!   the remote, run there once, then renamed into place; `cleanup`.
 //! - [`release`]: fetching a release archive locally with `gh` and
@@ -17,7 +19,9 @@
 //! (ADR 0001) and starts `ssh` with `tokio::process` directly: a single
 //! process, so no process groups and no `vessel-proc`.
 
+pub mod build;
 pub mod connector;
+pub mod digest;
 pub mod install;
 pub mod platform;
 pub mod provision;
@@ -27,10 +31,10 @@ pub mod ssh;
 #[cfg(unix)]
 mod tests;
 
+pub use build::{Build, BuildError};
 pub use connector::{SshConnectError, SshConnector};
-pub use install::{
-    Build, BuildError, InstallError, Installed, Installer, InvalidDigest, Sha256Digest,
-};
+pub use digest::{InvalidDigest, Sha256Digest};
+pub use install::{InstallError, Installed, Installer};
 pub use platform::{Arch, Os, Platform, PlatformError};
 pub use provision::{ProvisionError, Provisioner, Source};
 pub use release::{ReleaseError, Releases};

@@ -4,7 +4,9 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::install::{Build, InstallError, Installer, Kind, Sha256Digest};
+use crate::build::{Build, Kind};
+use crate::digest::Sha256Digest;
+use crate::install::{InstallError, Installer};
 
 async fn local_build(remote: &Remote, version: &str, triple: &str, on_remote: OnRemote) -> Build {
     let path = remote
