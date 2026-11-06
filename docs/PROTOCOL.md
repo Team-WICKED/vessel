@@ -45,6 +45,9 @@ pairing) implements it; until then nodes answer `device.*` with
   `incoming {conn}` per waiting client. Routing ids and connection ids are
   32 lowercase hex characters. Relay close codes: `4404` no such node,
   `4408` not accepted in time, `4413` too large, `4429` rate limited.
+- Node close code on a secure-channel websocket: `4401` the handshake failed
+  (most likely the client pinned another key). Relays forward a node's close
+  code to the client unchanged. Clients treat `4401` as final: re-pair.
 
 ## Version 3 (2026-11-06)
 
