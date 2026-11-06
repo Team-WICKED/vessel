@@ -145,6 +145,12 @@ uuid_id! {
     PermissionId
 }
 
+uuid_id! {
+    /// A paired device: one client machine holding its own credential for a
+    /// node (ADR 0010). Minted by the node at pairing.
+    DeviceId
+}
+
 opaque_id! {
     /// The harness's own session id (an ACP `sessionId`). Kept so a
     /// structured session can be resumed by the harness after a node restart.

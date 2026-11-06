@@ -1,0 +1,325 @@
+//! The relay's own protocol (ADR 0009): the node's control connection and
+//! the close codes a relay uses. Everything a client and node say to each
+//! other passes through the relay encrypted and is not in this module.
+
+use std::fmt;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
+
+use crate::key::{KeyTextError, NodePublicKey, RoutingId, base64url, serde_via_text};
+
+/// The registration token a relay operator gives to nodes allowed to
+/// register there. Clients need none. Never printed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RelayToken(String);
+
+/// An empty relay token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptyToken;
+
+impl fmt::Display for EmptyToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the relay token is empty")
+    }
+}
+
+impl std::error::Error for EmptyToken {}
+
+impl RelayToken {
+    /// Wrap a token read from a file (surrounding whitespace removed).
+    ///
+    /// # Errors
+    /// Fails if nothing is left.
+    pub fn new(text: &str) -> Result<Self, EmptyToken> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(EmptyToken);
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// The token text, for constant-time comparison by the relay.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for RelayToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RelayToken(<redacted>)")
+    }
+}
+
+impl Serialize for RelayToken {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for RelayToken {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
+        Self::new(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One waiting client's connection on a relay: 128 random bits minted by the
+/// relay, lowercase hex. The node answers with `GET /v1/accept?conn=<id>`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnId([u8; 16]);
+
+impl ConnId {
+    /// Wrap raw bytes (the relay draws them from the OS RNG).
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl fmt::Display for ConnId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&RoutingId::from_bytes(self.0), f)
+    }
+}
+
+impl fmt::Debug for ConnId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ConnId({self})")
+    }
+}
+
+impl FromStr for ConnId {
+    type Err = KeyTextError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<RoutingId>().map(|id| Self(*id.as_bytes()))
+    }
+}
+
+/// One Noise handshake message, base64url on the wire.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HandshakeMessage(Vec<u8>);
+
+impl HandshakeMessage {
+    /// Largest Noise message (the spec's limit).
+    pub const MAX_LEN: usize = 65_535;
+
+    /// Wrap message bytes.
+    ///
+    /// # Errors
+    /// Fails if longer than a Noise message can be.
+    pub fn new(bytes: Vec<u8>) -> Result<Self, KeyTextError> {
+        if bytes.len() > Self::MAX_LEN {
+            return Err(KeyTextError::Length {
+                expected: Self::MAX_LEN,
+                found: bytes.len(),
+            });
+        }
+        Ok(Self(bytes))
+    }
+
+    /// The message bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for HandshakeMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HandshakeMessage({} bytes)", self.0.len())
+    }
+}
+
+impl fmt::Display for HandshakeMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&base64url(&self.0))
+    }
+}
+
+impl FromStr for HandshakeMessage {
+    type Err = KeyTextError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use base64::Engine as _;
+        // Bound the text before decoding: 4 characters per 3 bytes, rounded
+        // up, so nothing larger than a Noise message is ever allocated.
+        let limit = Self::MAX_LEN.div_ceil(3).saturating_mul(4);
+        if s.len() > limit {
+            return Err(KeyTextError::Length {
+                expected: Self::MAX_LEN,
+                found: s.len(),
+            });
+        }
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(s.trim())
+            .map_err(|_decode| KeyTextError::Encoding)?;
+        Self::new(bytes)
+    }
+}
+
+serde_via_text!(ConnId, HandshakeMessage);
+
+/// A message from a node on its control connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NodeToRelay {
+    /// Ask to be reachable under `routing_id`.
+    Register {
+        /// The routing id derived from `key`.
+        routing_id: RoutingId,
+        /// The node's static key; the relay checks possession with a Noise
+        /// handshake to it.
+        key: NodePublicKey,
+        /// The relay's registration token.
+        token: RelayToken,
+    },
+    /// The node's response to `Prove`.
+    Proof {
+        /// The second Noise NK message.
+        message: HandshakeMessage,
+    },
+}
+
+/// Why a relay refused a registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationRefusal {
+    /// The registration token is wrong.
+    Token,
+    /// The routing id does not belong to the key, or the node could not
+    /// prove it holds the key.
+    Proof,
+    /// The message was malformed or out of order.
+    Protocol,
+}
+
+/// A message from a relay on a node's control connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RelayToNode {
+    /// Prove you hold the key: the first Noise NK message to it.
+    Prove {
+        /// The handshake message.
+        message: HandshakeMessage,
+    },
+    /// Registered; clients can now reach the node.
+    Registered,
+    /// Refused; the relay closes after sending this.
+    Rejected {
+        /// Why.
+        reason: RegistrationRefusal,
+    },
+    /// A client is waiting: open `/v1/accept?conn=<conn>`.
+    Incoming {
+        /// The waiting connection.
+        conn: ConnId,
+    },
+}
+
+/// Close codes a relay sends a client (websocket close frames). Refusals by
+/// the node itself travel inside the encrypted channel instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RelayClose {
+    /// No node with that routing id is registered (transient: it may be
+    /// restarting).
+    NoSuchNode,
+    /// The node did not accept the connection in time.
+    NotAccepted,
+    /// A message exceeded the relay's limit.
+    TooLarge,
+    /// Rate limited.
+    RateLimited,
+}
+
+impl RelayClose {
+    /// Every variant, for exhaustive tests.
+    pub const ALL: [Self; 4] = [
+        Self::NoSuchNode,
+        Self::NotAccepted,
+        Self::TooLarge,
+        Self::RateLimited,
+    ];
+
+    /// The websocket close code.
+    #[must_use]
+    pub const fn code(self) -> u16 {
+        match self {
+            Self::NoSuchNode => 4404,
+            Self::NotAccepted => 4408,
+            Self::TooLarge => 4413,
+            Self::RateLimited => 4429,
+        }
+    }
+
+    /// The variant for a close code, if it is one of the relay's.
+    #[must_use]
+    pub const fn from_code(code: u16) -> Option<Self> {
+        match code {
+            4404 => Some(Self::NoSuchNode),
+            4408 => Some(Self::NotAccepted),
+            4413 => Some(Self::TooLarge),
+            4429 => Some(Self::RateLimited),
+            _ => None,
+        }
+    }
+
+    /// Whether a client should try again later (every relay close is; a
+    /// wrong key or a refused device is not, but those are not relay codes).
+    #[must_use]
+    pub const fn is_transient(self) -> bool {
+        match self {
+            Self::NoSuchNode | Self::NotAccepted | Self::RateLimited => true,
+            Self::TooLarge => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_codes_round_trip_in_the_private_range() {
+        for close in RelayClose::ALL {
+            assert_eq!(RelayClose::from_code(close.code()), Some(close));
+            assert!((4000..5000).contains(&close.code()));
+        }
+        assert_eq!(RelayClose::from_code(1000), None);
+    }
+
+    #[test]
+    fn control_messages_are_tagged_and_hide_the_token() {
+        let register = NodeToRelay::Register {
+            routing_id: RoutingId::from_bytes([1; 16]),
+            key: NodePublicKey::from_bytes([2; 32]),
+            token: RelayToken::new(" secret ").unwrap(),
+        };
+        let json = serde_json::to_string(&register).unwrap();
+        assert!(json.starts_with(r#"{"type":"register""#));
+        assert_eq!(
+            serde_json::from_str::<NodeToRelay>(&json).unwrap(),
+            register
+        );
+        assert!(!format!("{register:?}").contains("secret"));
+        let incoming = RelayToNode::Incoming {
+            conn: ConnId::from_bytes([0xcd; 16]),
+        };
+        assert_eq!(
+            serde_json::to_string(&incoming).unwrap(),
+            format!(r#"{{"type":"incoming","conn":"{}"}}"#, "cd".repeat(16))
+        );
+        assert!(RelayToken::new("  ").is_err());
+    }
+
+    #[test]
+    fn handshake_messages_are_bounded_before_decoding() {
+        let message = HandshakeMessage::new(vec![5; 48]).unwrap();
+        let text = message.to_string();
+        assert_eq!(text.parse::<HandshakeMessage>().unwrap(), message);
+        assert!(HandshakeMessage::new(vec![0; 65_536]).is_err());
+        assert!("A".repeat(100_000).parse::<HandshakeMessage>().is_err());
+    }
+}

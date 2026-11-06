@@ -19,5 +19,8 @@ pub(crate) fn node_info(id: NodeId, name: Option<String>) -> NodeInfo {
         protocol: ProtocolRange::CURRENT,
         started_at: Utc::now(),
         state: NodeState::Serving,
+        // Set once the node has a key: secure channels arrive with M3
+        // Track P (`docs/plans/backend-m3.md`).
+        public_key: None,
     }
 }

@@ -6,9 +6,10 @@ use std::sync::Arc;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, CreateSession, EventPage, GetNode, GetSession, Handler, Harness, KillSession,
-    ListHarnesses, ListSessions, NodeInfo, ReadEvents, SendInput, SessionInfo, StopNode, Subscribe,
-    Subscribed, Unsubscribe, WireError,
+    Ack, CreateSession, DeviceInfo, ErrorCode, EventPage, GetNode, GetSession, Handler, Harness,
+    Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions, NodeInfo,
+    ReadEvents, RevokeDevice, SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe,
+    WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
@@ -174,4 +175,35 @@ impl Handler for NodeService {
         self.lifecycle.stop(request.when);
         Ok(Ack)
     }
+
+    async fn invite_device(
+        &self,
+        _: &Connection,
+        _: InviteDevice,
+    ) -> Result<Invitation, WireError> {
+        Err(devices_not_yet())
+    }
+
+    async fn list_devices(
+        &self,
+        _: &Connection,
+        _: ListDevices,
+    ) -> Result<Vec<DeviceInfo>, WireError> {
+        Err(devices_not_yet())
+    }
+
+    async fn revoke_device(&self, _: &Connection, _: RevokeDevice) -> Result<Ack, WireError> {
+        Err(devices_not_yet())
+    }
+}
+
+/// Protocol 4 added `device.*` for pairing (ADR 0010). Devices, secure
+/// channels and scope checks are milestone 3 Track P
+/// (`docs/plans/backend-m3.md`); until then the node refuses these calls with
+/// a typed `unsupported` rather than a partial behaviour.
+fn devices_not_yet() -> WireError {
+    WireError::new(
+        ErrorCode::Unsupported,
+        "devices are not implemented by this node yet (milestone 3)",
+    )
 }

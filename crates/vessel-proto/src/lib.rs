@@ -10,13 +10,16 @@
 //! - it is the only place wire types are defined.
 
 mod agent;
+mod device;
 mod error;
 mod event;
 mod harness;
 mod id;
+mod key;
 mod node;
 mod proxy;
 mod raw;
+mod relay;
 mod rpc;
 mod session;
 mod terminal;
@@ -26,18 +29,28 @@ pub use agent::{
     PermissionRequest, PlanEntry, PlanPriority, PlanStatus, StopReason, ToolCall, ToolCallContent,
     ToolCallStatus, ToolCallUpdate, ToolKind, ToolLocation,
 };
+pub use device::{
+    DeviceInfo, DeviceSecret, InvalidRoute, Invitation, InvitationSecret, InviteDevice, LinkError,
+    ListDevices, PairingLink, PairingOffer, Preamble, PreambleReply, RefusalReason, RevokeDevice,
+    RouteUrl, Scope,
+};
 pub use error::{ErrorCode, WireError};
 pub use event::{EventRecord, SessionEvent};
 pub use harness::{Harness, HarnessKind, StructuredSupport, UnknownHarness};
 pub use id::{
-    EventSeq, HarnessSessionId, ModelId, NodeId, PermissionId, PermissionOptionId, RequestId,
-    SessionId, SubscriptionId, ToolCallId,
+    DeviceId, EventSeq, HarnessSessionId, ModelId, NodeId, PermissionId, PermissionOptionId,
+    RequestId, SessionId, SubscriptionId, ToolCallId,
 };
+pub use key::{KeyTextError, NodePublicKey, RoutingId};
 pub use node::{
     MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,
 };
 pub use proxy::ProxyExit;
 pub use raw::RawJson;
+pub use relay::{
+    ConnId, EmptyToken, HandshakeMessage, NodeToRelay, RegistrationRefusal, RelayClose,
+    RelayToNode, RelayToken,
+};
 pub use rpc::{
     Ack, Call, ClientFrame, ClientInfo, CreateSession, EventPage, GetNode, GetSession, Handler,
     Hello, KillSession, ListHarnesses, ListSessions, Method, Outcome, ReadEvents, Reply, Request,

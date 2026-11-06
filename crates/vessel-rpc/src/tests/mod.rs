@@ -15,10 +15,11 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
-    Ack, Call, ClientFrame, ClientInfo, CreateSession, ErrorCode, EventPage, EventRecord, EventSeq,
-    GetNode, GetSession, Handler, Harness, HarnessKind, KillSession, ListHarnesses, ListSessions,
-    NodeId, NodeInfo, NodeState, Outcome, ProtocolRange, ProtocolVersion, ReadEvents, Request,
-    RequestId, SendInput, ServerFrame, SessionEvent, SessionId, SessionInfo, SessionInput,
+    Ack, Call, ClientFrame, ClientInfo, CreateSession, DeviceInfo, ErrorCode, EventPage,
+    EventRecord, EventSeq, GetNode, GetSession, Handler, Harness, HarnessKind, Invitation,
+    InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions, NodeId, NodeInfo,
+    NodeState, Outcome, ProtocolRange, ProtocolVersion, ReadEvents, Request, RequestId,
+    RevokeDevice, SendInput, ServerFrame, SessionEvent, SessionId, SessionInfo, SessionInput,
     SessionMode, SessionSpec, SessionStatus, StopNode, StopWhen, StructuredSupport, Subscribe,
     Subscribed, SubscriptionEnd, TerminalBytes, TerminalInput, TerminalSize, Unsubscribe,
     WireError,
@@ -59,6 +60,7 @@ fn node() -> NodeInfo {
         protocol: ProtocolRange::CURRENT,
         started_at: DateTime::UNIX_EPOCH,
         state: NodeState::Serving,
+        public_key: None,
     }
 }
 
@@ -286,6 +288,36 @@ impl Handler for Fake {
             self.shutdown.cancel();
             tokio::task::yield_now().await;
         }
+        Ok(Ack)
+    }
+
+    async fn invite_device(
+        &self,
+        _context: &Context,
+        request: InviteDevice,
+    ) -> Result<Invitation, WireError> {
+        self.saw(request.into_call());
+        Err(WireError::new(
+            ErrorCode::Unsupported,
+            "no devices in this fake",
+        ))
+    }
+
+    async fn list_devices(
+        &self,
+        _context: &Context,
+        request: ListDevices,
+    ) -> Result<Vec<DeviceInfo>, WireError> {
+        self.saw(request.into_call());
+        Ok(Vec::new())
+    }
+
+    async fn revoke_device(
+        &self,
+        _context: &Context,
+        request: RevokeDevice,
+    ) -> Result<Ack, WireError> {
+        self.saw(request.into_call());
         Ok(Ack)
     }
 }

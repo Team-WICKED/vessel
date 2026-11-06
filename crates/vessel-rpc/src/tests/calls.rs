@@ -6,7 +6,7 @@ use super::*;
 async fn every_unary_method_round_trips() {
     let mut running = start(ClientConfig::default()).await;
     let client = &running.client;
-    assert_eq!(client.welcome().protocol, ProtocolVersion::new(3));
+    assert_eq!(client.welcome().protocol, ProtocolVersion::new(4));
 
     let input = SendInput {
         session: session(1),
@@ -52,6 +52,17 @@ async fn every_unary_method_round_trips() {
             .unwrap(),
         Ack
     );
+    let device = vessel_proto::DeviceId::random();
+    assert_eq!(client.call(ListDevices).await.unwrap(), Vec::new());
+    assert_eq!(client.call(RevokeDevice { device }).await.unwrap(), Ack);
+    let invite = InviteDevice {
+        label: Some("laptop".to_owned()),
+        ttl_secs: 600,
+    };
+    assert_eq!(
+        client.call(invite.clone()).await.unwrap_err().code(),
+        Some(ErrorCode::Unsupported)
+    );
     let page = client.call(read).await.unwrap();
     assert_eq!(page.records, vec![record(3)]);
     assert_eq!(page.next, EventSeq::new(4));
@@ -86,6 +97,9 @@ async fn every_unary_method_round_trips() {
             when: StopWhen::WhenIdle,
         }
         .into_call(),
+        ListDevices.into_call(),
+        RevokeDevice { device }.into_call(),
+        invite.into_call(),
         read.into_call(),
         unknown.into_call(),
         missing.into_call(),

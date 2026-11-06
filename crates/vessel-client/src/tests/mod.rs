@@ -16,11 +16,12 @@ use std::sync::{Arc, Mutex};
 use chrono::DateTime;
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
-    Ack, ClientInfo, CreateSession, ErrorCode, EventPage, EventRecord, EventSeq, GetNode,
-    GetSession, Handler, Harness, HarnessKind, KillSession, ListHarnesses, ListSessions, NodeId,
-    NodeInfo, NodeState, ProtocolRange, ReadEvents, SendInput, SessionEvent, SessionId,
-    SessionInfo, SessionMode, SessionSpec, SessionStatus, StopNode, StopWhen, Subscribe,
-    Subscribed, SubscriptionEnd, TerminalSize, Unsubscribe, WireError,
+    Ack, ClientInfo, CreateSession, DeviceInfo, ErrorCode, EventPage, EventRecord, EventSeq,
+    GetNode, GetSession, Handler, Harness, HarnessKind, Invitation, InviteDevice, KillSession,
+    ListDevices, ListHarnesses, ListSessions, NodeId, NodeInfo, NodeState, ProtocolRange,
+    ReadEvents, RevokeDevice, SendInput, SessionEvent, SessionId, SessionInfo, SessionMode,
+    SessionSpec, SessionStatus, StopNode, StopWhen, Subscribe, Subscribed, SubscriptionEnd,
+    TerminalSize, Unsubscribe, WireError,
 };
 use vessel_rpc::memory::Disconnected;
 use vessel_rpc::{ClientConfig, Outbound, OutboundError, Server, ServerConfig};
@@ -62,6 +63,7 @@ fn node() -> NodeInfo {
         protocol: ProtocolRange::CURRENT,
         started_at: DateTime::UNIX_EPOCH,
         state: NodeState::Serving,
+        public_key: None,
     }
 }
 
@@ -241,6 +243,33 @@ impl Handler for FakeNode {
 
     async fn stop_node(&self, _context: &Context, request: StopNode) -> Result<Ack, WireError> {
         *self.stopped.lock().unwrap() = Some(request.when);
+        Ok(Ack)
+    }
+
+    async fn invite_device(
+        &self,
+        _context: &Context,
+        _request: InviteDevice,
+    ) -> Result<Invitation, WireError> {
+        Err(WireError::new(
+            ErrorCode::Unsupported,
+            "no devices in this fake",
+        ))
+    }
+
+    async fn list_devices(
+        &self,
+        _context: &Context,
+        _request: ListDevices,
+    ) -> Result<Vec<DeviceInfo>, WireError> {
+        Ok(Vec::new())
+    }
+
+    async fn revoke_device(
+        &self,
+        _context: &Context,
+        _request: RevokeDevice,
+    ) -> Result<Ack, WireError> {
         Ok(Ack)
     }
 }

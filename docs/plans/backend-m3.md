@@ -418,6 +418,23 @@ Owns `vessel-store`, `vessel-node`, `vessel-client` and `vessel-cli` changes.
   `ARCHITECTURE.md`, `README.md` and `docs/ROADMAP.md` describe relays and
   pairing.
 
+## Contract as built (coordinator, 2026-11-06)
+
+Protocol 4 is on `backend/m3` (see `docs/PROTOCOL.md`). Two deviations from
+the seams below, decided while writing it:
+
+- **Key types live in `vessel-proto`.** `NodePublicKey` (32 bytes, text
+  `x25519:<base64url>`) and `RoutingId` (16 bytes) are wire data: they travel
+  in `NodeInfo`, pairing links and relay registration, and wire types exist
+  once (ADR 0001). `vessel-secure` therefore depends on `vessel-proto` for
+  those types (a new edge, `vessel-secure -> proto`) and owns everything
+  computed from them: deriving the routing id (truncated SHA-256), the
+  fingerprint, the handshake. `NodeKeypair` stays in `vessel-secure`.
+- **Routing ids and connection ids are lowercase hex**, not base32: URL-safe
+  and no extra encoding dependency for 16 bytes.
+- Preamble types are `vessel_proto::{Preamble, PreambleReply}`;
+  `PreambleReply::Paired` boxes its `NodeInfo`.
+
 ## Decisions (coordinator, 2026-11-06)
 
 All eight proposals below are accepted as written:

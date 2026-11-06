@@ -4,6 +4,41 @@ The types are defined in `crates/vessel-proto`; this file is the changelog
 and a reader's summary. Bump `PROTOCOL_VERSION` on any breaking change and add
 an entry here. Additive, optional fields do not need a bump.
 
+## Version 4 (2026-11-06)
+
+Nodes speak 2..=4; version 4 only adds. Milestone 3 (relay, secure channel,
+pairing) implements it; until then nodes answer `device.*` with
+`unsupported` and send no `public_key`.
+
+- Methods: `device.invite { label?, ttl_secs }` returns
+  `{ link, expires }`; `device.list` returns `DeviceInfo[]`;
+  `device.revoke { device }` returns `ack` and closes that device's
+  connections.
+- Scopes: every method declares one (`read`, `operate`, `admin`; the table
+  in `vessel-proto` `rpc.rs`). Calls from a paired device without it get
+  `forbidden`. The node token and the local socket hold every scope.
+- `NodeInfo.public_key`: `"x25519:<base64url>"`, absent when unknown.
+- Secure channel (ADR 0009): `Noise_NK_25519_ChaChaPoly_SHA256`, prologue
+  `vessel/secure/1`, empty handshake payloads. Record and chunk format,
+  limits and close rules are specified in `docs/plans/backend-m3.md`
+  ("Seams", `vessel-secure`) and implemented by `vessel-secure`.
+- Preamble inside the channel, before `hello`: the client sends
+  `{"type":"device_auth","device","secret"}` or
+  `{"type":"pair_request","invite","device_name"}`; the node answers
+  `authenticated`, `paired` (with the new credential and `NodeInfo`), or
+  `refused` with `unknown_device` | `revoked` | `invalid_invitation` |
+  `unavailable`, then closes.
+- Pairing link: `vessel://pair#` + base64url(JSON `PairingOffer`): node id,
+  key, relay and direct routes (`ws://` or `wss://`), the single-use
+  invitation, and its expiry. The offer sits after `#` so it never reaches a
+  web server.
+- Relay control connection (`vessel_proto::relay`): node sends `register
+  {routing_id, key, token}`, relay sends `prove {message}`, node answers
+  `proof {message}`, relay sends `registered` or `rejected {reason}`, then
+  `incoming {conn}` per waiting client. Routing ids and connection ids are
+  32 lowercase hex characters. Relay close codes: `4404` no such node,
+  `4408` not accepted in time, `4413` too large, `4429` rate limited.
+
 ## Version 3 (2026-11-06)
 
 Nodes speak 2..=3. Version 3 only adds, so version 2 peers keep working.

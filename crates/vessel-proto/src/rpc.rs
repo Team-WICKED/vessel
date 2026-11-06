@@ -20,6 +20,7 @@ use std::future::Future;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::device::{DeviceInfo, Invitation, InviteDevice, ListDevices, RevokeDevice, Scope};
 use crate::error::WireError;
 use crate::event::EventRecord;
 use crate::harness::Harness;
@@ -69,11 +70,13 @@ impl std::error::Error for UnexpectedReply {}
 
 /// Declares every RPC method in one table.
 ///
-/// Each row: `Variant / handler_fn / "wire.name": RequestType => ResponseType;`
+/// Each row: `Variant / handler_fn / "wire.name" [Scope]: Request => Response;`
+/// The scope column (protocol 4, ADR 0010) is what a paired device must hold
+/// to call the method; adding a method without one does not compile.
 macro_rules! rpc_methods {
     ($(
         $(#[$doc:meta])*
-        $variant:ident / $handler:ident / $wire:literal : $request:ty => $response:ty;
+        $variant:ident / $handler:ident / $wire:literal [$scope:ident] : $request:ty => $response:ty;
     )*) => {
         /// Every RPC method.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -93,6 +96,17 @@ macro_rules! rpc_methods {
                     $( Self::$variant => $wire, )*
                 }
             }
+
+            /// The scope a paired device needs to call it.
+            #[must_use]
+            pub const fn scope(self) -> Scope {
+                match self {
+                    $( Self::$variant => Scope::$scope, )*
+                }
+            }
+
+            /// Every method, in table order.
+            pub const ALL: &'static [Self] = &[$( Self::$variant, )*];
         }
 
         /// A request of any method, as sent on the wire.
@@ -307,27 +321,33 @@ pub struct Ack;
 
 rpc_methods! {
     /// Describe the node.
-    NodeInfo / node_info / "node.info": GetNode => NodeInfo;
+    NodeInfo / node_info / "node.info" [Read]: GetNode => NodeInfo;
     /// List installed harnesses.
-    ListHarnesses / list_harnesses / "harness.list": ListHarnesses => Vec<Harness>;
+    ListHarnesses / list_harnesses / "harness.list" [Read]: ListHarnesses => Vec<Harness>;
     /// List sessions.
-    ListSessions / list_sessions / "session.list": ListSessions => Vec<SessionInfo>;
+    ListSessions / list_sessions / "session.list" [Read]: ListSessions => Vec<SessionInfo>;
     /// Get one session.
-    GetSession / get_session / "session.get": GetSession => SessionInfo;
+    GetSession / get_session / "session.get" [Read]: GetSession => SessionInfo;
     /// Start a session.
-    CreateSession / create_session / "session.create": CreateSession => SessionInfo;
+    CreateSession / create_session / "session.create" [Operate]: CreateSession => SessionInfo;
     /// Send input to a session.
-    SendInput / send_input / "session.send": SendInput => Ack;
+    SendInput / send_input / "session.send" [Operate]: SendInput => Ack;
     /// Kill a session.
-    KillSession / kill_session / "session.kill": KillSession => Ack;
+    KillSession / kill_session / "session.kill" [Operate]: KillSession => Ack;
     /// Read a page of a session's log.
-    ReadEvents / read_events / "session.read": ReadEvents => EventPage;
+    ReadEvents / read_events / "session.read" [Read]: ReadEvents => EventPage;
     /// Subscribe to a session's events.
-    Subscribe / subscribe / "session.subscribe": Subscribe => Subscribed;
+    Subscribe / subscribe / "session.subscribe" [Read]: Subscribe => Subscribed;
     /// End a subscription.
-    Unsubscribe / unsubscribe / "session.unsubscribe": Unsubscribe => Ack;
+    Unsubscribe / unsubscribe / "session.unsubscribe" [Read]: Unsubscribe => Ack;
     /// Stop the node (protocol 3).
-    StopNode / stop_node / "node.stop": StopNode => Ack;
+    StopNode / stop_node / "node.stop" [Admin]: StopNode => Ack;
+    /// Make a pairing invitation (protocol 4).
+    InviteDevice / invite_device / "device.invite" [Admin]: InviteDevice => Invitation;
+    /// List paired devices (protocol 4).
+    ListDevices / list_devices / "device.list" [Admin]: ListDevices => Vec<DeviceInfo>;
+    /// Revoke a device and close its connections (protocol 4).
+    RevokeDevice / revoke_device / "device.revoke" [Admin]: RevokeDevice => Ack;
 }
 
 /// Result of a call.
@@ -454,6 +474,21 @@ mod tests {
             r#"{"type":"request","id":7,"call":{"method":"node.info","params":null}}"#
         );
         assert_eq!(serde_json::from_str::<ClientFrame>(&json).unwrap(), frame);
+    }
+
+    #[test]
+    fn every_method_declares_a_scope_and_admin_is_rare() {
+        let admin: Vec<_> = Method::ALL
+            .iter()
+            .filter(|method| method.scope() == Scope::Admin)
+            .map(|method| method.as_str())
+            .collect();
+        assert_eq!(
+            admin,
+            ["node.stop", "device.invite", "device.list", "device.revoke"]
+        );
+        assert_eq!(Method::SendInput.scope(), Scope::Operate);
+        assert_eq!(Method::ReadEvents.scope(), Scope::Read);
     }
 
     #[test]
