@@ -44,9 +44,28 @@ CREATE TABLE events (
 ) STRICT, WITHOUT ROWID;
 ";
 
+/// Version 2 (milestone 3): paired devices (ADR 0010; see `devices`).
+///
+/// - `secret_hash` is SHA-256 of the device's credential; the secret itself
+///   is never stored.
+/// - `scopes` is a JSON array of scope names.
+/// - `revoked_at` is set instead of deleting the row, so a revoked device
+///   is told `Revoked` and not `UnknownDevice`.
+const V2: &str = "
+CREATE TABLE devices (
+    id          TEXT    NOT NULL PRIMARY KEY,
+    label       TEXT    NOT NULL,
+    secret_hash BLOB    NOT NULL,
+    scopes      TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL,
+    last_seen   INTEGER,
+    revoked_at  INTEGER
+) STRICT;
+";
+
 /// Every migration, oldest first. Index `n` takes the schema from version
 /// `n` to `n + 1`.
-const MIGRATIONS: &[&str] = &[V1];
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// Bring the database to the newest schema.
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {

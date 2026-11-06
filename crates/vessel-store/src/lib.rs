@@ -8,7 +8,9 @@
 //!   process that is ([`NodeOwner`]).
 //! - [`Store`] is the event log (ADR 0004): one `SQLite` database holding each
 //!   session's metadata and every [`EventRecord`] it produced, so a client
-//!   can resume from any sequence number even after the node restarts.
+//!   can resume from any sequence number even after the node restarts. It
+//!   also keeps the paired devices (ADR 0010), each with only the hash of
+//!   its credential ([`CredentialHash`]).
 //!
 //! This crate is the only place that knows the on-disk formats. It decodes
 //! rows into `vessel-proto` types once, here, and nothing outside sees SQL or
@@ -35,6 +37,7 @@
 mod codec;
 mod config;
 mod data_dir;
+mod devices;
 mod error;
 mod files;
 mod lock;
@@ -49,6 +52,7 @@ mod writer;
 
 pub use config::{ByteCount, Retention, StoreConfig};
 pub use data_dir::DataDir;
+pub use devices::{CredentialHash, StoredDevice};
 pub use error::{Column, Quantity, StoreError};
 pub use lock::{NodeLock, NodeOwner, StartLock};
 pub use node_key::{NODE_KEY_BYTES, NodeKeySecret};

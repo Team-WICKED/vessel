@@ -14,11 +14,13 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Transaction};
 use tokio::sync::{mpsc, oneshot};
-use vessel_proto::{EventRecord, SessionId, SessionInfo};
+use vessel_proto::{DeviceId, DeviceInfo, EventRecord, SessionId, SessionInfo};
 
 use crate::config::Retention;
+use crate::devices::{self, CredentialHash};
 use crate::error::StoreError;
 use crate::log::{self, Appended};
 
@@ -50,6 +52,24 @@ pub(crate) enum Write {
     Append {
         session: SessionId,
         records: Vec<Arc<EventRecord>>,
+        done: Done,
+    },
+    /// Store a newly paired device.
+    AddDevice {
+        device: DeviceInfo,
+        credential: CredentialHash,
+        done: Done,
+    },
+    /// Note when a device last authenticated.
+    DeviceSeen {
+        device: DeviceId,
+        at: DateTime<Utc>,
+        done: Done,
+    },
+    /// Revoke a device (it stays as a tombstone).
+    RevokeDevice {
+        device: DeviceId,
+        at: DateTime<Utc>,
         done: Done,
     },
 }
@@ -155,6 +175,28 @@ fn apply(
                 let _first = touched.insert(session);
                 *ended |= now_ended;
                 Ok(())
+            });
+            (done, applied)
+        }
+        Write::AddDevice {
+            device,
+            credential,
+            done,
+        } => {
+            let applied = isolated(transaction, |connection| {
+                devices::insert(connection, &device, &credential)
+            });
+            (done, applied)
+        }
+        Write::DeviceSeen { device, at, done } => {
+            let applied = isolated(transaction, |connection| {
+                devices::seen(connection, device, at)
+            });
+            (done, applied)
+        }
+        Write::RevokeDevice { device, at, done } => {
+            let applied = isolated(transaction, |connection| {
+                devices::revoke(connection, device, at)
             });
             (done, applied)
         }

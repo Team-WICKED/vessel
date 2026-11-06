@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use vessel_proto::{ErrorCode, EventSeq, NodeId, SessionId};
+use vessel_proto::{DeviceId, ErrorCode, EventSeq, NodeId, SessionId};
 
 /// A value that does not fit the on-disk representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +132,21 @@ pub enum StoreError {
         #[source]
         source: <SessionId as FromStr>::Err,
     },
+    /// A stored device row did not decode; the database was edited or
+    /// corrupted.
+    #[error("stored device {id:?} has an invalid {what}")]
+    CorruptDevice {
+        /// The stored id text.
+        id: String,
+        /// Which column.
+        what: &'static str,
+    },
+    /// No device with this id is stored.
+    #[error("device {0} is not known to this node")]
+    UnknownDevice(DeviceId),
+    /// A device with this id is already stored.
+    #[error("device {0} already exists")]
+    DeviceExists(DeviceId),
     /// A value could not be encoded for storage.
     #[error("could not encode a value for storage")]
     Encode(#[source] serde_json::Error),
@@ -170,8 +185,10 @@ impl StoreError {
     #[must_use]
     pub const fn code(&self) -> ErrorCode {
         match self {
-            Self::UnknownSession(_) => ErrorCode::NotFound,
-            Self::SessionExists(_) | Self::OutOfOrder { .. } => ErrorCode::Conflict,
+            Self::UnknownSession(_) | Self::UnknownDevice(_) => ErrorCode::NotFound,
+            Self::SessionExists(_) | Self::DeviceExists(_) | Self::OutOfOrder { .. } => {
+                ErrorCode::Conflict
+            }
             Self::Closed => ErrorCode::Unavailable,
             Self::Io { .. }
             | Self::NotPrivate { .. }
@@ -185,6 +202,7 @@ impl StoreError {
             | Self::Commit(_)
             | Self::Corrupt { .. }
             | Self::CorruptId { .. }
+            | Self::CorruptDevice { .. }
             | Self::Encode(_)
             | Self::OutOfRange(_)
             | Self::Thread(_)

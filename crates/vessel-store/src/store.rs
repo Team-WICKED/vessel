@@ -2,13 +2,16 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot};
-use vessel_proto::{EventPage, EventRecord, EventSeq, SessionId, SessionInfo};
+use vessel_proto::{
+    DeviceId, DeviceInfo, EventPage, EventRecord, EventSeq, SessionId, SessionInfo,
+};
 
 use crate::config::StoreConfig;
 use crate::data_dir::DataDir;
+use crate::devices::{CredentialHash, StoredDevice};
 use crate::error::StoreError;
 use crate::log;
 use crate::reader::Reader;
@@ -132,6 +135,63 @@ impl Store {
     /// The read failed.
     pub async fn sessions(&self) -> Result<Vec<SessionInfo>, StoreError> {
         self.read(Reader::sessions).await
+    }
+
+    /// Store a newly paired device with its credential's hash.
+    ///
+    /// # Errors
+    /// The id is already stored, or the write failed.
+    pub async fn add_device(
+        &self,
+        device: DeviceInfo,
+        credential: CredentialHash,
+    ) -> Result<(), StoreError> {
+        self.write(|done| Write::AddDevice {
+            device,
+            credential,
+            done,
+        })
+        .await
+    }
+
+    /// Note that `device` authenticated at `at` (`last_seen`).
+    ///
+    /// # Errors
+    /// The write failed.
+    pub async fn device_seen(&self, device: DeviceId, at: DateTime<Utc>) -> Result<(), StoreError> {
+        self.write(|done| Write::DeviceSeen { device, at, done })
+            .await
+    }
+
+    /// Revoke `device` at `at`. It stays listed, with `revoked_at` set;
+    /// revoking it again keeps the first time.
+    ///
+    /// # Errors
+    /// [`StoreError::UnknownDevice`] if there is no such device, or the
+    /// write failed.
+    pub async fn revoke_device(
+        &self,
+        device: DeviceId,
+        at: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        self.write(|done| Write::RevokeDevice { device, at, done })
+            .await
+    }
+
+    /// Every paired device, revoked ones included, oldest first.
+    ///
+    /// # Errors
+    /// The read failed.
+    pub async fn devices(&self) -> Result<Vec<DeviceInfo>, StoreError> {
+        self.read(Reader::devices).await
+    }
+
+    /// One device with its credential hash, for authentication.
+    ///
+    /// # Errors
+    /// The read failed.
+    pub async fn device(&self, id: DeviceId) -> Result<Option<StoredDevice>, StoreError> {
+        self.read(move |reader| reader.device(id)).await
     }
 
     /// Commit everything queued so far, fold the WAL into the database file
