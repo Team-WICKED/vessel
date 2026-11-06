@@ -52,13 +52,50 @@ mod support {
 
     impl Fixture {
         pub(super) fn new() -> Self {
+            Self::with_adapter(|bin, acp| {
+                drop(install(bin, HarnessKind::ClaudeCode, Role::Structured, acp).unwrap());
+            })
+        }
+
+        /// Claude's adapter never answers `initialize` (fake-acp with
+        /// `FAKE_ACP_HANG`, behind a wrapper that sets it).
+        pub(super) fn with_stuck_adapter() -> Self {
+            Self::with_adapter(|bin, acp| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    let wrapper = bin.join("claude-agent-acp");
+                    std::fs::write(
+                        &wrapper,
+                        format!(
+                            "#!/bin/sh\nFAKE_ACP_HANG=initialize exec '{}' \"$@\"\n",
+                            acp.display()
+                        ),
+                    )
+                    .unwrap();
+                    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                }
+                #[cfg(windows)]
+                std::fs::write(
+                    bin.join("claude-agent-acp.cmd"),
+                    format!(
+                        "@echo off\r\nset FAKE_ACP_HANG=initialize\r\n\"{}\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+                        acp.display()
+                    ),
+                )
+                .unwrap();
+            })
+        }
+
+        fn with_adapter(adapter: impl FnOnce(&std::path::Path, &std::path::Path)) -> Self {
             static NEXT: AtomicU32 = AtomicU32::new(0);
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let bin = std::env::temp_dir()
                 .join(format!("vessel-structured-test-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&bin).unwrap();
             let acp = Fake::Acp.path().unwrap();
-            drop(install(&bin, HarnessKind::ClaudeCode, Role::Structured, &acp).unwrap());
+            adapter(&bin, &acp);
             let runtime = SessionRuntime::new(
                 RuntimeConfig {
                     harness_lookup: Lookup::new([bin.clone()]),
@@ -400,6 +437,30 @@ async fn resuming_replays_history_before_the_session_runs() {
         fixture.runtime.shutdown().await;
         assert_eq!(follower.until_end().await, SessionStatus::Interrupted);
         drop(stored.await.unwrap());
+    })
+    .await;
+}
+
+/// Killed while still starting (here: an adapter stuck before `Ready`), a
+/// structured session ends `Exited` like a killed terminal session, not
+/// `Failed` as if it could not start.
+#[tokio::test]
+async fn a_session_killed_while_starting_ends_exited() {
+    within(async {
+        let fixture = Fixture::with_stuck_adapter();
+        let created = fixture.runtime.create(structured(None)).await.unwrap();
+        let stored = collect(created.durable);
+        let mut follower = Follower::new(&created.handle);
+        assert_eq!(
+            follower.until(|event| status(event).is_some()).await,
+            SessionEvent::Status {
+                status: SessionStatus::Starting
+            }
+        );
+        created.handle.kill();
+        let end = follower.until_end().await;
+        assert!(matches!(end, SessionStatus::Exited { .. }), "{end:?}");
+        assert_eq!(stored.await.unwrap(), follower.records);
     })
     .await;
 }

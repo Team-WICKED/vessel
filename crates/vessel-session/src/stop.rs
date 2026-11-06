@@ -86,4 +86,10 @@ impl Stopper {
     pub(crate) fn interrupted(&self) -> bool {
         self.shutdown.is_cancelled()
     }
+
+    /// Whether someone killed this session (not a shutdown, and not a stop
+    /// the session started itself).
+    pub(crate) fn killed(&self) -> bool {
+        self.kill.is_cancelled() && !self.interrupted()
+    }
 }
