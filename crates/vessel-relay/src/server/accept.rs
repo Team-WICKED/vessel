@@ -68,8 +68,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt as _;
 
-use super::address::Block;
 use super::{Relay, lock};
+use crate::address::Block;
 
 /// What a connection refused before any HTTP is told.
 const REFUSED: &[u8] =

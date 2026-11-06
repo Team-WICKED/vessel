@@ -1,5 +1,8 @@
-//! Where a peer counts for the per-address limits ([`blocks`]), and which
-//! peers may say where a client really is ([`TrustedProxy`]).
+//! Where a peer counts for the per-address limits ([`blocks`],
+//! [`BlockCounts`]), and which peers may say where a client really is
+//! ([`TrustedProxy`]). Public because a node counts its direct route's
+//! unadmitted channels the same way (`vessel-node`'s secure gateway, the
+//! review's round 10): one layering, one set of multipliers.
 //!
 //! [Decision Log] (the security review, rounds 7 and 8)
 //! - Purpose: one host, or one IPv6 `/48` (what a single customer is
@@ -17,6 +20,7 @@
 //!   only from a peer the operator named (`--trusted-proxy`): a header from
 //!   anyone else would let them pick their address and slip every limit.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -25,7 +29,7 @@ use std::str::FromStr;
 /// any block may. The counting ([`V6_LAYERS`]) and the startup check that
 /// no `/48` can hold half of a pool (`Limits::check`) both take it from
 /// here, so they cannot drift apart.
-pub(crate) const WIDEST: u32 = 4;
+pub const WIDEST: u32 = 4;
 
 /// The IPv6 blocks an address counts in, narrowest first, each with how
 /// many times a per-address limit it may hold. The last, the widest,
@@ -34,7 +38,7 @@ const V6_LAYERS: [(u8, u32); 3] = [(64, 1), (56, 2), (48, WIDEST)];
 
 /// One block an address counts in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Block {
+pub struct Block {
     /// The address with every bit past `prefix` cleared.
     network: IpAddr,
     prefix: u8,
@@ -47,12 +51,14 @@ impl Block {
     /// How many times a per-address limit this block may hold: 1 for an
     /// IPv4 address or an IPv6 `/64`, 2 for a `/56`, [`WIDEST`] for a
     /// `/48`.
-    pub(crate) const fn scale(self) -> u32 {
+    #[must_use]
+    pub const fn scale(self) -> u32 {
         self.scale
     }
 
     /// `limit` for this block ([`Block::scale`]).
-    pub(crate) fn limit(self, limit: usize) -> usize {
+    #[must_use]
+    pub fn limit(self, limit: usize) -> usize {
         limit.saturating_mul(usize::try_from(self.scale()).unwrap_or(1))
     }
 }
@@ -65,7 +71,8 @@ impl fmt::Display for Block {
 
 /// The blocks `address` counts in, the narrowest first: one for IPv4,
 /// three for IPv6.
-pub(crate) fn blocks(address: IpAddr) -> Vec<Block> {
+#[must_use]
+pub fn blocks(address: IpAddr) -> Vec<Block> {
     match address {
         IpAddr::V4(v4) => vec![v4_block(v4)],
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
@@ -79,6 +86,48 @@ pub(crate) fn blocks(address: IpAddr) -> Vec<Block> {
                 })
                 .collect(),
         },
+    }
+}
+
+/// How many of something each block holds, against a per-address limit
+/// scaled per block ([`Block::limit`]). A block holding nothing has no
+/// entry, so the table holds only blocks in use.
+#[derive(Debug, Default)]
+pub struct BlockCounts(HashMap<Block, usize>);
+
+impl BlockCounts {
+    /// Whether one more fits in every one of `blocks` under `limit`.
+    #[must_use]
+    pub fn fits(&self, blocks: &[Block], limit: usize) -> bool {
+        blocks
+            .iter()
+            .all(|block| self.0.get(block).copied().unwrap_or(0) < block.limit(limit))
+    }
+
+    /// One more in every one of `blocks`.
+    pub fn add(&mut self, blocks: &[Block]) {
+        for block in blocks {
+            let count = self.0.entry(*block).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+    }
+
+    /// One less in every one of `blocks`, forgetting a block at zero.
+    pub fn remove(&mut self, blocks: &[Block]) {
+        for block in blocks {
+            if let Some(count) = self.0.get_mut(block) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    let _gone = self.0.remove(block);
+                }
+            }
+        }
+    }
+
+    /// Whether no block holds anything.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -217,6 +266,51 @@ mod tests {
             .map(|block| block.scale())
             .max();
         assert_eq!(widest, Some(WIDEST));
+    }
+
+    #[test]
+    fn counts_hold_each_block_to_its_scaled_limit() {
+        let mut counts = BlockCounts::default();
+        // Two per /64: a /56 holds four, a /48 eight.
+        let take = |counts: &mut BlockCounts, text: &str| {
+            let blocks = blocks(ip(text));
+            let fits = counts.fits(&blocks, 2);
+            if fits {
+                counts.add(&blocks);
+            }
+            fits
+        };
+        assert!(take(&mut counts, "2001:db8:1:1::1"));
+        assert!(take(&mut counts, "2001:db8:1:1::2"));
+        assert!(!take(&mut counts, "2001:db8:1:1::3"), "the /64's two");
+        assert!(take(&mut counts, "2001:db8:1:2::1"));
+        assert!(take(&mut counts, "2001:db8:1:2::2"));
+        assert!(!take(&mut counts, "2001:db8:1:3::1"), "the /56's four");
+        for other in [
+            "2001:db8:1:101::1",
+            "2001:db8:1:101::2",
+            "2001:db8:1:102::1",
+        ] {
+            assert!(take(&mut counts, other), "{other}");
+        }
+        assert!(take(&mut counts, "2001:db8:1:102::2"));
+        assert!(!take(&mut counts, "2001:db8:1:201::1"), "the /48's eight");
+        assert!(take(&mut counts, "2001:db8:2::1"), "another /48");
+        // Given back, every block is forgotten.
+        for text in [
+            "2001:db8:1:1::1",
+            "2001:db8:1:1::2",
+            "2001:db8:1:2::1",
+            "2001:db8:1:2::2",
+            "2001:db8:1:101::1",
+            "2001:db8:1:101::2",
+            "2001:db8:1:102::1",
+            "2001:db8:1:102::2",
+            "2001:db8:2::1",
+        ] {
+            counts.remove(&blocks(ip(text)));
+        }
+        assert!(counts.is_empty());
     }
 
     #[test]

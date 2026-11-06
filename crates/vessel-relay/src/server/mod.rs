@@ -11,7 +11,6 @@
 //! `shutdown_grace`, but upgraded connections run in tasks of their own.
 
 mod accept;
-mod address;
 mod balance;
 mod control;
 mod pairing;
@@ -37,11 +36,10 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{ConnId, RelayClose, RelayToken, RoutingId};
 use vessel_secure::MAX_RECORD;
 
-pub use self::address::{BadProxy, TrustedProxy};
-use self::address::{Block, blocks};
 pub use self::balance::Unbalanced;
 use self::rate::RateLimiter;
 use self::throttle::{Refusal, RefusalLog};
+use crate::address::{Block, BlockCounts, TrustedProxy, blocks};
 use crate::carrier::Keepalive;
 use crate::{ACCEPT_PATH, CONNECT_PATH, HEALTH_PATH, NODE_PATH};
 
@@ -349,19 +347,19 @@ struct Load {
     /// ...and those that have not, yet.
     unauthenticated: usize,
     /// Sockets not authenticated yet, per block (not a trusted proxy's).
-    unauthenticated_per_block: HashMap<Block, usize>,
+    unauthenticated_per_block: BlockCounts,
     /// Control connections registering in the open places...
     registering: usize,
     /// ...and in the places kept for nodes that registered before.
     registering_reserved: usize,
     /// Control connections registering or waiting for a place, per block.
-    registering_per_block: HashMap<Block, usize>,
+    registering_per_block: BlockCounts,
     /// Relayed clients in all.
     clients: usize,
     /// Relayed clients per node.
     clients_per_node: HashMap<RoutingId, usize>,
     /// Relayed clients per block.
-    clients_per_block: HashMap<Block, usize>,
+    clients_per_block: BlockCounts,
     /// Relayed clients per node and block that their node may not have
     /// admitted yet (`ClientSlot::settle`).
     node_clients_per_block: HashMap<(RoutingId, Block), usize>,
@@ -383,14 +381,6 @@ fn count_down<K: std::hash::Hash + Eq>(counts: &mut HashMap<K, usize>, key: &K) 
     }
 }
 
-/// Whether one more fits in every one of `blocks` under `limit` (scaled
-/// per block, `Block::limit`).
-fn fits(counts: &HashMap<Block, usize>, blocks: &[Block], limit: usize) -> bool {
-    blocks
-        .iter()
-        .all(|block| counts.get(block).copied().unwrap_or(0) < block.limit(limit))
-}
-
 /// Whether one more client of `node` fits in every one of `blocks` under
 /// `limit` (scaled per block).
 fn fits_node(
@@ -402,20 +392,6 @@ fn fits_node(
     blocks
         .iter()
         .all(|block| counts.get(&(node, *block)).copied().unwrap_or(0) < block.limit(limit))
-}
-
-/// One more in every one of `blocks`.
-fn count_up_all(counts: &mut HashMap<Block, usize>, blocks: &[Block]) {
-    for block in blocks {
-        count_up(counts, *block);
-    }
-}
-
-/// One less in every one of `blocks`.
-fn count_down_all(counts: &mut HashMap<Block, usize>, blocks: &[Block]) {
-    for block in blocks {
-        count_down(counts, block);
-    }
 }
 
 /// The routing ids that registered here, at most `capacity`, the oldest
@@ -503,7 +479,7 @@ impl Drop for RegisteringSlot<'_> {
             }
             Seat::Waiting => {}
         }
-        count_down_all(&mut load.registering_per_block, &self.blocks);
+        load.registering_per_block.remove(&self.blocks);
     }
 }
 
@@ -537,7 +513,7 @@ impl Drop for ClientSlot<'_> {
         let mut load = lock(&self.relay.load);
         load.clients = load.clients.saturating_sub(1);
         count_down(&mut load.clients_per_node, &self.node);
-        count_down_all(&mut load.clients_per_block, &self.blocks);
+        load.clients_per_block.remove(&self.blocks);
     }
 }
 
@@ -623,14 +599,13 @@ impl Relay {
                 break 'refuse Refusal::Unauthenticated;
             }
             if let Some(blocks) = &counted {
-                if !fits(
-                    &load.unauthenticated_per_block,
-                    blocks,
-                    limits.max_connections_per_address,
-                ) {
+                if !load
+                    .unauthenticated_per_block
+                    .fits(blocks, limits.max_connections_per_address)
+                {
                     break 'refuse Refusal::AddressConnections;
                 }
-                count_up_all(&mut load.unauthenticated_per_block, blocks);
+                load.unauthenticated_per_block.add(blocks);
             }
             load.unauthenticated = load.unauthenticated.saturating_add(1);
             return Some(accept::ConnectionPlace::new(
@@ -652,7 +627,7 @@ impl Relay {
             load.unauthenticated = load.unauthenticated.saturating_sub(1);
             load.authenticated = load.authenticated.saturating_add(1);
             if let Some(blocks) = counted {
-                count_down_all(&mut load.unauthenticated_per_block, blocks);
+                load.unauthenticated_per_block.remove(blocks);
             }
         }
         if counted.is_some() {
@@ -668,7 +643,7 @@ impl Relay {
         } else {
             load.unauthenticated = load.unauthenticated.saturating_sub(1);
             if let Some(blocks) = counted {
-                count_down_all(&mut load.unauthenticated_per_block, blocks);
+                load.unauthenticated_per_block.remove(blocks);
             }
         }
     }
@@ -768,11 +743,10 @@ impl Relay {
             let kept = self.kept_registering();
             let open = limits.max_registering.saturating_sub(kept);
             let mut load = lock(&self.load);
-            if !fits(
-                &load.registering_per_block,
-                &blocks,
-                limits.max_registering_per_address,
-            ) {
+            if !load
+                .registering_per_block
+                .fits(&blocks, limits.max_registering_per_address)
+            {
                 break 'refuse Refusal::AddressRegistering;
             }
             let seat = if load.registering < open {
@@ -783,7 +757,7 @@ impl Relay {
             } else {
                 break 'refuse Refusal::Registering;
             };
-            count_up_all(&mut load.registering_per_block, &blocks);
+            load.registering_per_block.add(&blocks);
             return Some(RegisteringSlot {
                 relay: self,
                 blocks,
@@ -808,11 +782,10 @@ impl Relay {
                 Refusal::Clients
             } else if of_node >= limits.max_clients_per_node {
                 Refusal::NodeClients
-            } else if !fits(
-                &load.clients_per_block,
-                &blocks,
-                limits.max_clients_per_address,
-            ) {
+            } else if !load
+                .clients_per_block
+                .fits(&blocks, limits.max_clients_per_address)
+            {
                 Refusal::AddressClients
             } else if !fits_node(
                 &load.node_clients_per_block,
@@ -824,7 +797,7 @@ impl Relay {
             } else {
                 load.clients = load.clients.saturating_add(1);
                 count_up(&mut load.clients_per_node, node);
-                count_up_all(&mut load.clients_per_block, &blocks);
+                load.clients_per_block.add(&blocks);
                 for block in &blocks {
                     count_up(&mut load.node_clients_per_block, (node, *block));
                 }
