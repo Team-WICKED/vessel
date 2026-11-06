@@ -160,7 +160,8 @@ they started.
     stale, with the holder's pid, binary and version in `vesseld.owner`),
     the `StartLock` racing proxies share, and the `bin/`, `logs/` and
     socket paths. Milestone 3 (Track P): `node.key` (the node's secret key,
-    32 bytes, 0600, created on first start and never replaced), and the
+    32 bytes, 0600, created on first start and never replaced; its bytes
+    are wiped from memory when dropped), and the
     `devices` table (schema version 2) holding each paired device with only
     the SHA-256 of its credential, compared in constant time; a revoked
     device stays as a tombstone.
