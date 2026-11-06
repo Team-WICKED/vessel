@@ -98,7 +98,9 @@ enum Command {
     /// Run a relay that nodes register with and clients reach them through.
     /// It speaks plain HTTP: put an HTTPS reverse proxy in front for
     /// `wss://`.
-    Relay(RelayArgs),
+    // Boxed: the relay's flags outgrow every other command's (clippy's
+    // `large_enum_variant`, which Windows' larger `PathBuf` tips over).
+    Relay(Box<RelayArgs>),
 }
 
 /// `vesseld relay`.
@@ -111,10 +113,21 @@ struct RelayArgs {
     #[arg(long, env = "VESSEL_RELAY_TOKEN_FILE")]
     token_file: PathBuf,
     /// Header in which the reverse proxy passes the client's address
-    /// (`X-Real-IP`, `CF-Connecting-IP`), for per-client rate limits. Only
-    /// with a proxy that every request passes and that overwrites it.
+    /// (`X-Real-IP`, `CF-Connecting-IP`), for per-client limits. Believed
+    /// only from --trusted-proxy, which it needs; the proxy must overwrite
+    /// it.
     #[arg(long, env = "VESSEL_RELAY_CLIENT_ADDRESS_HEADER")]
     client_address_header: Option<axum::http::HeaderName>,
+    /// A reverse proxy whose --client-address-header is believed: an
+    /// address or a network in CIDR form (`127.0.0.1`, `10.0.0.0/8`).
+    /// Repeatable; comma-separated in the environment. Anyone else is
+    /// counted by their own address.
+    #[arg(
+        long = "trusted-proxy",
+        env = "VESSEL_RELAY_TRUSTED_PROXY",
+        value_delimiter = ','
+    )]
+    trusted_proxies: Vec<vessel_relay::TrustedProxy>,
     /// Nodes registered at once; another is refused until one leaves.
     #[arg(long, env = "VESSEL_RELAY_MAX_NODES", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_nodes)]
@@ -142,8 +155,15 @@ struct RelayArgs {
     #[arg(long, env = "VESSEL_RELAY_MAX_CONNECTIONS", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_connections)]
     max_connections: usize,
-    /// Connections open at once from one address (an IPv6 /64), counted
-    /// from accept; not applied with --client-address-header.
+    /// Of --max-connections, the connections that have not authenticated
+    /// yet (registered as a node, or paired as a client): the rest is kept
+    /// for those that have.
+    #[arg(long, env = "VESSEL_RELAY_MAX_UNAUTHENTICATED", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_unauthenticated)]
+    max_unauthenticated: usize,
+    /// Connections not authenticated yet from one address (an IPv6 /64; a
+    /// /56 twice this, a /48 four times), counted from accept; not
+    /// applied to a trusted proxy's connections.
     #[arg(long, env = "VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_connections_per_address)]
     max_connections_per_address: usize,
@@ -235,7 +255,8 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn relay(args: RelayArgs) -> ExitCode {
+async fn relay(args: Box<RelayArgs>) -> ExitCode {
+    let args = *args;
     let token = match vessel_relay::read_token_file(&args.token_file) {
         Ok(token) => token,
         Err(error) => {
@@ -243,8 +264,27 @@ async fn relay(args: RelayArgs) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if args.client_address_header.is_some() && args.trusted_proxies.is_empty() {
+        // A header believed from anyone lets anyone pick their address and
+        // slip every per-address limit.
+        tracing::error!(
+            "relay failed to start: --client-address-header needs --trusted-proxy, the \
+             proxies whose header is believed"
+        );
+        return ExitCode::FAILURE;
+    }
+    if args.client_address_header.is_none() && !args.trusted_proxies.is_empty() {
+        tracing::warn!("--trusted-proxy does nothing without --client-address-header");
+    }
     let mut config = vessel_relay::RelayConfig::new(token);
     config.client_address_header = args.client_address_header;
+    config.trusted_proxies = args.trusted_proxies;
+    let trusted_proxies = config
+        .trusted_proxies
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     let limits = &mut config.limits;
     limits.max_nodes = args.max_nodes;
     limits.max_registering = args.max_registering;
@@ -252,6 +292,7 @@ async fn relay(args: RelayArgs) -> ExitCode {
     limits.max_clients_per_node = args.max_clients_per_node;
     limits.max_bytes_per_second = args.max_bytes_per_second;
     limits.max_connections = args.max_connections;
+    limits.max_unauthenticated = args.max_unauthenticated;
     limits.max_connections_per_address = args.max_connections_per_address;
     limits.max_registering_per_address = args.max_registering_per_address;
     limits.reserved_registering = args.reserved_registering;
@@ -263,10 +304,12 @@ async fn relay(args: RelayArgs) -> ExitCode {
         max_clients_per_node = limits.max_clients_per_node,
         max_bytes_per_second = limits.max_bytes_per_second,
         max_connections = limits.max_connections,
+        max_unauthenticated = limits.max_unauthenticated,
         max_connections_per_address = limits.max_connections_per_address,
         max_registering_per_address = limits.max_registering_per_address,
         reserved_registering = limits.reserved_registering,
         max_clients_per_address = limits.max_clients_per_address,
+        %trusted_proxies,
         "relay limits"
     );
     let listener = match tokio::net::TcpListener::bind(args.bind).await {

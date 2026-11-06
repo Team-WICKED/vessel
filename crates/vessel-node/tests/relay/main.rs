@@ -108,7 +108,12 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
             "--reserved-registering",
             "1",
         ])
-        .args(["--max-clients-per-address", "4"])
+        .args([
+            "--max-clients-per-address",
+            "4",
+            "--max-unauthenticated",
+            "30",
+        ])
         .spawn()
         .unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -134,6 +139,7 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
         "max_registering_per_address=2",
         "reserved_registering=1",
         "max_clients_per_address=4",
+        "max_unauthenticated=30",
     ] {
         assert!(limits.contains(field), "{field}: {limits}");
     }
@@ -159,6 +165,95 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("must be at least 1"), "{stderr}");
+}
+
+#[tokio::test]
+async fn vesseld_relay_believes_the_address_header_only_from_trusted_proxies() {
+    let dir = tempfile::tempdir().unwrap();
+    let token = dir.path().join("relay.token");
+    std::fs::write(&token, "a-relay-token\n").unwrap();
+    let run = |extra: &'static [&'static str]| {
+        let mut command = vesseld();
+        let _command = command
+            .args(["relay", "--bind", "127.0.0.1:0", "--token-file"])
+            .arg(&token)
+            .args(extra);
+        command
+    };
+    // The header alone: anyone could pick their address. Refused.
+    let output = tokio::time::timeout(
+        SAFETY,
+        run(&["--client-address-header", "x-real-ip"]).output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--trusted-proxy"), "{stderr}");
+    // Something that is not an address or a network. Refused.
+    let output = tokio::time::timeout(
+        SAFETY,
+        run(&[
+            "--client-address-header",
+            "x-real-ip",
+            "--trusted-proxy",
+            "proxy.example",
+        ])
+        .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("CIDR"), "{stderr}");
+    // With proxies named, it serves, and says whom it trusts.
+    let mut child = run(&[
+        "--client-address-header",
+        "x-real-ip",
+        "--trusted-proxy",
+        "192.0.2.7",
+        "--trusted-proxy",
+        "10.0.0.0/8",
+    ])
+    .spawn()
+    .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let mut lines = BufReader::new(stderr).lines();
+    let limits = tokio::time::timeout(SAFETY, async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.contains("relay limits") {
+                return line;
+            }
+        }
+        panic!("vesseld relay ended before logging its limits");
+    })
+    .await
+    .unwrap();
+    assert!(
+        limits.contains("192.0.2.7/32") && limits.contains("10.0.0.0/8"),
+        "{limits}"
+    );
+    let _listening = listening_after(&mut lines).await;
+    child.kill().await.unwrap();
+}
+
+/// The line in which `vesseld relay` says it listens, from its log lines.
+#[cfg(test)]
+async fn listening_after(
+    lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
+) -> String {
+    tokio::time::timeout(SAFETY, async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.contains("relay listening") {
+                return line;
+            }
+        }
+        panic!("vesseld relay ended before listening");
+    })
+    .await
+    .unwrap()
 }
 
 #[cfg(unix)]
