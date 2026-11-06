@@ -17,10 +17,11 @@ use std::sync::{Mutex, PoisonError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use vessel_fleet::{Applied, ConflictKind};
-use vessel_proto::{BundlePath, Generation, NodeId};
+use vessel_proto::{BundlePath, Generation, Manifest, McpServerName, NodeId, SecretName};
 
 use super::files::{self, FileError, FleetFiles};
 use super::member::Membership;
+use super::secrets::{self, Secrets, SecretsError};
 
 /// What the fleet loop last did on this node.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +190,13 @@ pub struct FleetStatus {
     pub role: Role,
     /// What it last did.
     pub state: FleetState,
+    /// The fleet's MCP servers, as this node last applied them.
+    pub mcp_servers: Vec<McpServerName>,
+    /// Secrets those servers need that this node does not have: sessions
+    /// here start without the servers that need them.
+    pub missing_secrets: Vec<SecretName>,
+    /// Why `secrets.toml` cannot be used, if it cannot (names no value).
+    pub secrets_problem: Option<String>,
 }
 
 /// The fleet status of the node keeping its state in `files`' data
@@ -210,5 +218,29 @@ pub fn status(files: &FleetFiles) -> Result<FleetStatus, FileError> {
         Role::None
     };
     let state = files::read_json(&files.state())?.unwrap_or_default();
-    Ok(FleetStatus { role, state })
+    let mut status = FleetStatus {
+        role,
+        state,
+        mcp_servers: Vec::new(),
+        missing_secrets: Vec::new(),
+        secrets_problem: None,
+    };
+    if status.role == Role::None {
+        return Ok(status);
+    }
+    let Some(manifest) = files::read_json::<Manifest>(&files.manifest())? else {
+        return Ok(status);
+    };
+    status.mcp_servers = manifest.mcp.keys().cloned().collect();
+    let secrets = match secrets::read(files) {
+        Ok((secrets, _digest)) => secrets,
+        Err(SecretsError::File(error)) => return Err(error),
+        Err(error) => {
+            status.secrets_problem = Some(error.to_string());
+            Secrets::default()
+        }
+    };
+    let (_servers, missing) = vessel_fleet::resolve(&manifest.mcp, |name| secrets.get(name));
+    status.missing_secrets = missing;
+    Ok(status)
 }

@@ -24,6 +24,7 @@ use vessel_proto::{BundlePath, HarnessKind, Manifest};
 
 use super::FleetTargets;
 use super::files::{self, FileError, FleetFiles, FleetLock};
+use super::mcp::FleetMcp;
 use super::state::StateFile;
 use crate::profiles::NodeProfiles;
 
@@ -116,6 +117,8 @@ pub(crate) struct Local {
     pub(crate) files: FleetFiles,
     targets: TargetSource,
     pub(crate) state: Arc<StateFile>,
+    /// Sessions' MCP servers: the definitions of the manifest applied.
+    pub(crate) mcp: Arc<FleetMcp>,
 }
 
 impl Local {
@@ -123,11 +126,13 @@ impl Local {
         files: FleetFiles,
         targets: TargetSource,
         state: Arc<StateFile>,
+        mcp: Arc<FleetMcp>,
     ) -> Self {
         Self {
             files,
             targets,
             state,
+            mcp,
         }
     }
 
@@ -139,6 +144,9 @@ impl Local {
         blobs: &BlobStore,
         sources: &[PathBuf],
     ) -> Result<Outcome, LocalError> {
+        // Sessions get this manifest's MCP servers whatever happens to its
+        // files: the definitions do not depend on them.
+        self.mcp.set_definitions(manifest.mcp.clone());
         let result = self.apply_locked(manifest, blobs, sources);
         match &result {
             Ok((applied, skipped)) => {
