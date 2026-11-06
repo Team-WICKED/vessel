@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use vessel_harness::Lookup;
 use vessel_proto::{DEFAULT_PORT, RouteUrl};
+use vessel_relay::Keepalive;
 use vessel_rpc::ServerConfig;
 use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY};
 use vessel_store::{DataDir, StoreConfig};
@@ -50,6 +51,10 @@ pub struct Config {
     /// Direct addresses pairing links advertise (`--public`). Nothing is
     /// guessed: a node behind NAT has none, and is reached through a relay.
     pub public: Vec<RouteUrl>,
+    /// How the node keeps its own `/secure` connections alive: a ping every
+    /// 10 s, and a connection silent for 30 s is dropped, as a relay does
+    /// for relayed ones. Clients give up after the same silence.
+    pub keepalive: Keepalive,
 }
 
 impl Config {
@@ -69,6 +74,7 @@ impl Config {
             relays: Vec::new(),
             relay_token_file: None,
             public: Vec::new(),
+            keepalive: Keepalive::DEFAULT,
         }
     }
 }

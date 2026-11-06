@@ -1,7 +1,10 @@
 //! [`WsDialer`]: the real [`Dialer`], websockets through `vessel-relay`.
 //!
 //! Direct routes reach the node's `/secure` (`vessel_relay::connect`);
-//! relay routes go through `vessel_relay::dial`. Close codes come back
+//! relay routes go through `vessel_relay::dial`. Either way the carrier
+//! fails after the same silence (`Keepalive`): the node pings its direct
+//! connections as a relay pings relayed ones, so a half-open route ends
+//! and the reconnecting stream takes over. Close codes come back
 //! inside carrier errors and are read with `vessel_relay::node_close` and
 //! `relay_close`.
 //!
@@ -16,7 +19,7 @@
 use std::io;
 
 use vessel_proto::{RouteUrl, RoutingId};
-use vessel_relay::{DialError, TlsConfig, TlsError, WsCarrier};
+use vessel_relay::{DialError, Keepalive, TlsConfig, TlsError, WsCarrier};
 
 use super::dial::{Dialer, PeerClose};
 
@@ -27,13 +30,26 @@ const SECURE_PATH: &str = "/secure";
 #[derive(Debug, Clone)]
 pub struct WsDialer {
     tls: TlsConfig,
+    keepalive: Keepalive,
 }
 
 impl WsDialer {
-    /// Verify `wss://` routes with `tls`.
+    /// Verify `wss://` routes with `tls`. Carriers fail after
+    /// [`Keepalive::DEFAULT`]'s silence: the node or the relay pings.
     #[must_use]
     pub const fn new(tls: TlsConfig) -> Self {
-        Self { tls }
+        Self {
+            tls,
+            keepalive: Keepalive::DEFAULT,
+        }
+    }
+
+    /// The same, with another silence limit (`keepalive.silence`), for
+    /// nodes and relays that ping more often than every 10 s.
+    #[must_use]
+    pub const fn with_keepalive(mut self, keepalive: Keepalive) -> Self {
+        self.keepalive = keepalive;
+        self
     }
 
     /// A dialer for `routes`, with the system's root certificates. If none
@@ -62,11 +78,11 @@ impl Dialer for WsDialer {
 
     async fn direct(&self, route: &RouteUrl) -> Result<WsCarrier, DialError> {
         let url = format!("{}{SECURE_PATH}", route.as_str().trim_end_matches('/'));
-        vessel_relay::connect(&url, &self.tls).await
+        vessel_relay::connect_with(&url, &self.tls, self.keepalive).await
     }
 
     async fn relay(&self, route: &RouteUrl, node: &RoutingId) -> Result<WsCarrier, DialError> {
-        vessel_relay::dial(route, node, &self.tls).await
+        vessel_relay::dial_with(route, node, &self.tls, self.keepalive).await
     }
 
     fn is_transient(&self, error: &DialError) -> bool {

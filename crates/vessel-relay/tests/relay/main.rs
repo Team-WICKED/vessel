@@ -1,13 +1,16 @@
 //! The relay, end to end on loopback: registration and its proof, pairing
 //! and splicing, the limits and close codes, the node's handshake close,
-//! a relay restart under a registered node, and a node's own `/secure`
-//! (`direct`).
+//! a relay restart under a registered node, a node's own `/secure`
+//! (`direct`), and keepalive on direct routes (`keepalive`, on paused
+//! time).
 //!
 //! Tests wait on events (a link state, a message, a close); the timeouts
 //! under test are shortened through `Limits`, never slept on.
 
 #[cfg(test)]
 mod direct;
+#[cfg(test)]
+mod keepalive;
 #[cfg(test)]
 mod support;
 #[cfg(test)]

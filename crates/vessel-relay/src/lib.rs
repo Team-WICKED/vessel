@@ -54,9 +54,10 @@ mod token;
 use vessel_proto::RouteUrl;
 
 pub use carrier::{
-    AxumCarrier, NodeCarrier, NodeClosed, RelayClosed, WsCarrier, node_close, relay_close, respond,
+    AxumCarrier, Keepalive, NodeCarrier, NodeClosed, RelayClosed, WsCarrier, node_close,
+    relay_close, respond,
 };
-pub use dial::{DialError, connect, dial};
+pub use dial::{DialError, connect, connect_with, dial, dial_with};
 pub use link::{LinkState, NodeLink};
 pub use server::{Limits, RelayConfig, serve};
 pub use tls::{TlsConfig, TlsError};
