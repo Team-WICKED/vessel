@@ -11,6 +11,7 @@ use support::{Fixture, within};
 mod support {
     use std::future::Future;
     use std::net::{Ipv4Addr, SocketAddr};
+    use std::path::Path;
     use std::process::{Output, Stdio};
     use std::time::Duration;
 
@@ -77,16 +78,30 @@ mod support {
             self.data.path().display().to_string()
         }
 
-        /// Run `vessel <args>` with `stdin` as its input.
+        pub(super) fn data(&self) -> &Path {
+            self.data.path()
+        }
+
+        pub(super) fn node_address(&self) -> String {
+            self.node.address().to_string()
+        }
+
+        /// Run `vessel <args>` against this fixture's node with `stdin` as
+        /// its input.
         pub(super) async fn vessel(&self, args: &[&str], stdin: &[u8]) -> Ran {
-            let mut child = Command::new(env!("CARGO_BIN_EXE_vessel"))
-                .arg("--node")
-                .arg(self.node.address().to_string())
-                .arg("--data-dir")
-                .arg(self.data.path())
-                .args(args)
-                .env_remove("VESSEL_TOKEN")
-                .env_remove("VESSEL_NODE")
+            let node = self.node.address().to_string();
+            self.vessel_at(&node, self.data.path(), args, stdin).await
+        }
+
+        /// Run `vessel --node <node> <args>` in the directory `dir`.
+        pub(super) async fn vessel_at(
+            &self,
+            node: &str,
+            dir: &Path,
+            args: &[&str],
+            stdin: &[u8],
+        ) -> Ran {
+            let mut child = command(node, self.data.path(), dir, args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -98,7 +113,6 @@ mod support {
             child.wait_with_output().await.unwrap().into()
         }
 
-        /// `vessel run claude --detach`; returns the new session's id.
         pub(super) async fn run_detached(&self) -> String {
             let cwd = self.cwd();
             let run = self
@@ -111,6 +125,20 @@ mod support {
         pub(super) async fn stop(self) {
             self.node.stop().await.unwrap();
         }
+    }
+
+    fn command(node: &str, data: &Path, dir: &Path, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_vessel"));
+        let _ = command
+            .arg("--node")
+            .arg(node)
+            .arg("--data-dir")
+            .arg(data)
+            .args(args)
+            .current_dir(dir)
+            .env_remove("VESSEL_TOKEN")
+            .env_remove("VESSEL_NODE");
+        command
     }
 }
 
@@ -271,6 +299,65 @@ async fn a_piped_prompt_shows_the_whole_reply_then_detaches() {
             "{}",
             sessions.stdout
         );
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// The local token file goes only to a node on this machine, and a relative
+/// `--cwd` means something only there. For a remote node both fail before
+/// any connection is attempted (nothing here touches the network).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_nodes_need_an_explicit_token_and_an_absolute_cwd() {
+    within(async {
+        let fixture = Fixture::start().await;
+        let remote = "gpu-box.invalid:7077";
+        let sessions = fixture
+            .vessel_at(remote, fixture.data(), &["sessions"], b"")
+            .await;
+        assert!(!sessions.ok);
+        assert!(
+            sessions.stderr.contains("is not on this machine")
+                && sessions.stderr.contains("--token"),
+            "{}",
+            sessions.stderr
+        );
+
+        let relative = fixture
+            .vessel_at(
+                remote,
+                fixture.data(),
+                &[
+                    "--token", "abc", "run", "claude", "--detach", "--cwd", "sub",
+                ],
+                b"",
+            )
+            .await;
+        assert!(!relative.ok);
+        assert!(
+            relative.stderr.contains("is relative"),
+            "{}",
+            relative.stderr
+        );
+
+        // On this machine a relative `--cwd` is taken from where `vessel`
+        // runs.
+        let sub = fixture.data().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let node = fixture.node_address();
+        let run = fixture
+            .vessel_at(
+                &node,
+                fixture.data(),
+                &["run", "claude", "--detach", "--cwd", "sub"],
+                b"",
+            )
+            .await;
+        assert!(run.ok, "{}", run.stderr);
+        let id = run.stdout.trim().to_owned();
+        let attach = fixture.vessel(&["attach", &id], b"cwd\rexit\r").await;
+        let expected = format!("cwd {}", std::fs::canonicalize(&sub).unwrap().display());
+        assert!(attach.stdout.contains(&expected), "{}", attach.stdout);
         fixture.stop().await;
     })
     .await;
