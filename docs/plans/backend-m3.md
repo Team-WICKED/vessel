@@ -153,7 +153,7 @@ Roadmap Phase 1, the relay:
 | `vessel-node` | `/secure` on the existing listener; the device preamble; scope checks; `device.*`; one relay link per configured relay; `vesseld relay` subcommand; `NodeInfo.public_key` | **`-> secure, relay`** |
 | `vessel-client` | `SecureConnector` (direct, then each relay), `wss://` through a TLS client (open decision 1), book fields (`key`, `relay`, `direct`, `credential`), pairing | **`-> secure, relay`** |
 | `vessel-cli` | `vessel node pair`, `vessel nodes add --pair`, `vessel node devices [revoke]`, QR code (open decision 2) | none |
-| `vessel-testkit` | A relay that misbehaves on command: drop, reorder, replay, corrupt, delay | none (dev-only) |
+| `vessel-testkit` | A relay that misbehaves on command: drop, reorder, replay, corrupt, delay (built: feature `relay`, a websocket proxy in front of a real relay, `vessel_testkit::relay::MisbehavingRelay`) | none (dev-only) |
 
 ADR 0001 and `ARCHITECTURE.md` gain these edges in the same change that adds
 the crates.
@@ -245,62 +245,92 @@ pub fn answer_proof(keypair: &NodeKeypair, challenge: &HandshakeMessage) -> Resu
 
 ### `vessel-relay`
 
-Relay endpoints (plain HTTP; `wss://` comes from a reverse proxy in front):
+As built (Track S, 2026-11-06; `crates/vessel-relay`, the source of
+truth). Relay endpoints (plain HTTP; `wss://` comes from a reverse proxy in
+front):
 
 ```text
-GET /v1/node     websocket, the node's control connection
-GET /v1/accept?conn=<id>        websocket, the node's data connection for one client
+GET /v1/node                        websocket, the node's control connection
+GET /v1/accept?conn=<id>            websocket, the node's data connection for one client
 GET /v1/connect?node=<routing-id>   websocket, a client
-GET /health
+GET /health                         "ok"
 ```
 
 - **Control connection.** JSON text messages, defined in
   `vessel_proto::relay`:
-  1. node: `Register { routing_id, key, token }`, where `token` is the
-     relay's registration token (open decision 4);
+  1. node: `Register { routing_id, key, token }`; the token is compared in
+     constant time;
   2. relay: `Prove { message }`, the first message of a Noise NK handshake
-     to `key` (base64url);
+     to `key` with prologue `vessel/relay-proof/1`; a routing id that is
+     not the key's is refused with `Proof` without a challenge;
   3. node: `Proof { message }`, the response;
   4. relay: `Registered`, or `Rejected { reason }` and close;
   5. then, per waiting client, relay: `Incoming { conn }`, where `conn` is
      128 random bits, lowercase hex.
   - The node answers each `Incoming` by opening `/v1/accept?conn=…`.
   - A second registration for the same routing id replaces the first only
-    after its own proof succeeds.
+    after its own proof succeeds; the first connection is then closed.
+  - Each registration step has 10 s.
 - **Pairing.** The relay splices the client's and the node's data websocket
-  and forwards binary messages unchanged.
+  and forwards binary messages unchanged, one at a time per direction.
   - It reads nothing from the client until the node's data connection is
     there.
-  - A client waits at most 10 s for it.
-  - At most 64 clients wait per node.
-- **Close codes from the relay itself** (`vessel_proto::relay::Close`):
-  - `4404`: no such node online. Clients treat it as transient: the node
-    may be restarting.
-  - `4408`: the node did not accept in time.
-  - `4429`: rate limited.
-  - `4413`: message too large.
-  - These are about the relay; refusals by the node travel inside the
-    channel (`Refused`).
-- **Limits:**
-  - each message at most 65,535 bytes (one Noise message, tag included),
-    checked before reading;
-  - ping every 10 s, dropped after 30 s of silence;
-  - per-address rate limit on `/v1/connect`.
+  - A client waits at most 10 s for it (`4408`); at most 64 clients wait
+    per node (`4429` beyond).
+  - A close frame from either side is forwarded to the other unchanged
+    (a node's `4401`, `vessel_proto::NodeClose`).
+- **Close codes from the relay itself** (`vessel_proto::RelayClose`):
+  `4404` no such node (transient), `4408` not accepted in time, `4413` a
+  message too large, `4429` rate limited or too many waiting.
+- **Limits** (`Limits`, defaults as the protocol says):
+  - each message at most 65,535 bytes, checked from the frame header before
+    the payload is read (control connections too);
+  - every connection pinged every 10 s and dropped after 30 s of silence;
+  - a token bucket per client address on `/v1/node` and `/v1/connect`
+    (30 at once, then one per second; IPv6 counted by `/64`; at most 16,384
+    addresses tracked, newcomers let in untracked beyond that). Behind a
+    proxy the address comes from `RelayConfig::client_address_header`.
 
 ```rust
-pub struct RelayConfig { pub bind: SocketAddr, pub registration_token: RelayToken, pub limits: Limits }
+pub struct RelayConfig { pub token: RelayToken, pub limits: Limits, pub client_address_header: Option<HeaderName> }
 pub async fn serve(listener: TcpListener, config: RelayConfig, shutdown: CancellationToken) -> io::Result<()>;
 
-/// The node side: keep one relay registered (reconnecting with backoff),
-/// and hand every client's data connection, already spliced, to `accept`.
-pub struct NodeLink { /* url, keypair, token */ }
+/// The node side: keep one relay registered (reconnecting with 0.5-30 s
+/// jittered backoff, 30 s after a refusal), and hand every client's data
+/// connection to `accept`.
+pub struct NodeLink;
 impl NodeLink {
+    pub fn new(relay: RouteUrl, keypair: Arc<NodeKeypair>, token: RelayToken, tls: TlsConfig) -> Self;
+    pub fn state(&self) -> watch::Receiver<LinkState>;   // Connecting, Registered, Refused(reason), Stopped
     pub async fn run(self, accept: impl Fn(WsCarrier) + Send + Sync + 'static, shutdown: CancellationToken);
 }
 
-/// The client side: a carrier to the node with `routing_id` through `relay`.
-pub async fn dial(relay: &RelayUrl, routing_id: &RoutingId, tls: &TlsConfig) -> Result<WsCarrier, DialError>;
+/// The client side: a carrier to the node with `routing_id` through `relay`
+/// (fails after 30 s of silence), or to a node's own `/secure` (no limit).
+pub async fn dial(relay: &RouteUrl, node: &RoutingId, tls: &TlsConfig) -> Result<WsCarrier, DialError>;
+pub async fn connect(url: &str, tls: &TlsConfig) -> Result<WsCarrier, DialError>;
+
+/// Websocket carriers: opened (tungstenite) and accepted on `/secure` (axum).
+pub struct WsCarrier;
+pub struct AxumCarrier;   // AxumCarrier::new(socket, idle: Option<Duration>)
+/// The node's handshake on a websocket: closes with 4401 when it fails.
+pub async fn respond<C: NodeCarrier>(carrier: C, keypair: &NodeKeypair, config: &Config) -> Result<SecureChannel<C>, SecureError>;
+/// The close code inside `SecureError::Carrier(io)`.
+pub fn relay_close(error: &io::Error) -> Option<RelayClose>;
+pub fn node_close(error: &io::Error) -> Option<NodeClose>;
+
+/// rustls with `ring`, chosen explicitly; the OS roots, or given ones.
+pub struct TlsConfig;     // native_roots(), with_roots(RootCertStore)
+pub fn read_token_file(path: &Path) -> Result<RelayToken, TokenFileError>;
 ```
+
+- `vesseld relay --bind ADDR --token-file PATH [--client-address-header
+  NAME]` runs `serve` until a signal; it needs no data directory.
+- New dependencies (AGENTS.md section 9): `rustls` (no default features;
+  `ring`, `std`, `tls12`) and `rustls-native-certs`, for decision 1;
+  `curve25519-dalek` (deriving a public key from `node.key` without a
+  fallible path; already in the tree through `snow`) and `zeroize`
+  (wiping the secret; already in the tree) in `vessel-secure`.
 
 ### `vessel-node`
 

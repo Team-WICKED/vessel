@@ -36,12 +36,13 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s. | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`), SQLite event log, retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway (milestone 3). | proto, rpc, harness, session, store, secure |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3). | proto, rpc, harness, session, store, secure, relay |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections (milestone 3). | proto, rpc, secure |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
+| `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
 | `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node, remote |
-| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests. | - |
+| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
 that ADR and this table. Test-only edges: `vessel-node`'s end-to-end tests
@@ -310,7 +311,29 @@ they started.
     NK vectors, tamper cases (corrupt, replay, reorder, drop, truncate,
     each chunk rule), a seeded fuzz of the parser, 16 MiB frames, and a
     `vessel-rpc` connection over the channel. The cipher crates are
-    optimised in dev builds (`Cargo.toml` explains why).
+    optimised in dev builds (`Cargo.toml` explains why). `try_respond`
+    hands the carrier back after a failed handshake.
+  - `vessel-relay` (2026-11-06): `serve` on plain HTTP behind a reverse
+    proxy (`/v1/node`, `/v1/accept`, `/v1/connect`, `/health`), state in
+    memory only. A node registers with the relay token (constant-time) and
+    the possession proof, and replaces an earlier registration only after
+    proving the key. A client is not read until the node's data connection
+    arrives (no buffering), then both directions are forwarded a message at
+    a time; a sender's close frame (a node's `4401`) goes through
+    unchanged. Limits: one record per message (from the frame header), 64
+    waiting clients per node, 10 s to accept, pings every 10 s and a drop
+    after 30 s of silence, a per-address token bucket (IPv6 by `/64`; the
+    address may come from a proxy header). `NodeLink` keeps a node
+    registered (0.5-30 s jittered backoff, `LinkState` on a watch) and hands
+    each client's data connection to the node as a `WsCarrier`; `dial` and
+    `connect` are the client's. `respond` runs the node's handshake on a
+    websocket and closes with `4401` when it fails; `relay_close` and
+    `node_close` read the codes back. `vesseld relay --bind --token-file
+    [--client-address-header]` runs it (README, "Running a relay"). Tested
+    on loopback with real relays, raw protocol peers, a byte tap (no
+    plaintext), a relay restart behind a forwarder, and
+    `vessel-testkit`'s misbehaving relay (drop, replay, reorder, corrupt
+    both ways end the channel; delay does not).
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

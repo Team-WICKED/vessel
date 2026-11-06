@@ -7,6 +7,8 @@
 //!   protocol stream, so it logs only warnings, to stderr.
 //! - `vesseld version`: the version and target the installer checks.
 //! - `vesseld cleanup`: delete installed binaries nothing needs (ADR 0008).
+//! - `vesseld relay --bind ADDR --token-file PATH`: run a relay (ADR 0009)
+//!   until `Ctrl-C` or `SIGTERM`; no data directory, nothing stored.
 
 use std::io::Write as _;
 use std::net::SocketAddr;
@@ -16,6 +18,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use tokio_util::sync::CancellationToken;
 use vessel_node::{Config, DataDir, Node};
 use vessel_proto::RouteUrl;
 
@@ -91,6 +94,26 @@ enum Command {
         #[arg(long, default_value = "1")]
         keep: usize,
     },
+    /// Run a relay that nodes register with and clients reach them through.
+    /// It speaks plain HTTP: put an HTTPS reverse proxy in front for
+    /// `wss://`.
+    Relay(RelayArgs),
+}
+
+/// `vesseld relay`.
+#[derive(Debug, clap::Args)]
+struct RelayArgs {
+    /// Address to listen on.
+    #[arg(long, env = "VESSEL_RELAY_BIND", default_value = "127.0.0.1:7078")]
+    bind: SocketAddr,
+    /// File holding the registration token nodes must present.
+    #[arg(long, env = "VESSEL_RELAY_TOKEN_FILE")]
+    token_file: PathBuf,
+    /// Header in which the reverse proxy passes the client's address
+    /// (`X-Real-IP`, `CF-Connecting-IP`), for per-client rate limits. Only
+    /// with a proxy that every request passes and that overwrites it.
+    #[arg(long, env = "VESSEL_RELAY_CLIENT_ADDRESS_HEADER")]
+    client_address_header: Option<axum::http::HeaderName>,
 }
 
 /// `--bind`: an address, or `none`.
@@ -137,16 +160,65 @@ async fn main() -> ExitCode {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
+    // A relay keeps nothing on disk: it needs no data directory (nor a home).
+    let command = match args.command {
+        Some(Command::Relay(relay_args)) => return relay(relay_args).await,
+        command => command,
+    };
     let Some(root) = args.data_dir.or_else(DataDir::default_root) else {
         tracing::error!("no home directory; pass --data-dir");
         return ExitCode::FAILURE;
     };
     let dir = DataDir::new(root);
-    match args.command {
+    match command {
         None => run(dir, args.run).await,
         Some(Command::Attach) => ExitCode::from(vessel_node::attach::run(dir).await.code()),
         Some(Command::Version) => print(&format!("{}\n", vessel_node::VERSION_LINE)),
         Some(Command::Cleanup { keep }) => cleanup(dir, keep).await,
+        Some(Command::Relay(relay_args)) => relay(relay_args).await,
+    }
+}
+
+async fn relay(args: RelayArgs) -> ExitCode {
+    let token = match vessel_relay::read_token_file(&args.token_file) {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::error!(error = %chain(&error), "relay failed to start");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut config = vessel_relay::RelayConfig::new(token);
+    config.client_address_header = args.client_address_header;
+    let listener = match tokio::net::TcpListener::bind(args.bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::error!(%error, address = %args.bind, "relay cannot listen");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Ok(address) = listener.local_addr() {
+        tracing::info!(%address, "relay listening");
+    }
+    let shutdown = CancellationToken::new();
+    let mut serving = tokio::spawn(vessel_relay::serve(listener, config, shutdown.clone()));
+    let served = tokio::select! {
+        () = vessel_node::signal() => {
+            tracing::info!("stopping");
+            shutdown.cancel();
+            serving.await
+        }
+        served = &mut serving => served,
+    };
+    match served {
+        Ok(Ok(())) => ExitCode::SUCCESS,
+        Ok(Err(error)) => {
+            tracing::error!(%error, "relay failed");
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            tracing::error!(%error, "relay task failed");
+            ExitCode::FAILURE
+        }
     }
 }
 
