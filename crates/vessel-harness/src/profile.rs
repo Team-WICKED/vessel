@@ -461,6 +461,12 @@ fn variable(key: &'static str, written: &str) -> Result<EnvName, ProfileProblem>
 /// `~` and a leading `~/` become the home; anything else is kept as text
 /// (`~user` and a `~` later in the value too, as in a shell). `None` when
 /// the value needs the home and there is none.
+///
+/// The path after `~/` is written with the system's separator, as the home
+/// is: on Windows `~/.claude-work` is `C:\Users\me\.claude-work`, not a
+/// path with both separators, which Windows accepts but which then differs
+/// as text from the same path elsewhere (in a report, or an environment
+/// variable compared by value).
 fn expand(value: &str, home: Option<&str>) -> Option<String> {
     let rest = if value == "~" {
         ""
@@ -470,10 +476,11 @@ fn expand(value: &str, home: Option<&str>) -> Option<String> {
         return Some(value.to_owned());
     };
     let home = home?;
+    let rest = rest.replace('/', std::path::MAIN_SEPARATOR_STR);
     let separator = if home.ends_with(['/', std::path::MAIN_SEPARATOR]) || rest.is_empty() {
         ""
     } else {
-        "/"
+        std::path::MAIN_SEPARATOR_STR
     };
     Some(format!("{home}{separator}{rest}"))
 }
@@ -841,5 +848,18 @@ mod tests {
         assert_eq!(x.args(), ["a~/b"]);
         assert_eq!(expand("~/a", Some("/h/")), Some("/h/a".to_owned()));
         assert_eq!(expand("~", Some("/h")), Some("/h".to_owned()));
+        // The system's separator throughout, as `Path::join` writes it.
+        let home = std::env::temp_dir();
+        let home_text = home.to_str().unwrap().trim_end_matches(['/', '\\']);
+        assert_eq!(
+            expand("~/.claude-work/sub", Some(home_text)),
+            Some(
+                Path::new(home_text)
+                    .join(".claude-work")
+                    .join("sub")
+                    .display()
+                    .to_string()
+            )
+        );
     }
 }
