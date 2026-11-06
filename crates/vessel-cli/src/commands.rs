@@ -18,7 +18,7 @@ use crate::attach::{self, terminal};
 use crate::connect::{connect, connect_to, data_dir, is_here};
 use crate::error::CliError;
 use crate::selector::SessionSelector;
-use crate::{devices, io, nodes, remote, render};
+use crate::{devices, fleet, io, nodes, remote, render};
 
 pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
     let target = &cli.target;
@@ -48,6 +48,7 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             command: NodeCommand::Devices { command },
         } => devices::devices(target, command).await,
         Command::Nodes { command } => nodes::command(target, command).await,
+        Command::Fleet { command } => Box::pin(fleet::command(target, command)).await,
         Command::Status => {
             let client = connect(target).await?.client;
             let node = client.node_info().await?;

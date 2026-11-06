@@ -12,6 +12,7 @@ mod commands;
 mod connect;
 mod devices;
 mod error;
+mod fleet;
 mod io;
 mod log;
 mod nodes;
@@ -37,6 +38,7 @@ async fn main() -> ExitCode {
         | Command::Status
         | Command::Harnesses
         | Command::Profiles { .. }
+        | Command::Fleet { .. }
         | Command::Sessions
         | Command::Run(_)
         | Command::Attach { .. }
