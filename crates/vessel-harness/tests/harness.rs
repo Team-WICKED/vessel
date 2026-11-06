@@ -257,6 +257,31 @@ fn relative_search_entries_are_ignored() {
     assert_eq!(lookup.dirs(), [std::env::temp_dir()]);
 }
 
+/// A directory `PATH` syntax cannot express (Unix: a `:` in its name;
+/// Windows: a `"`) cannot be searched; it is dropped, and the other
+/// directories still find their harnesses.
+#[test]
+fn a_directory_path_syntax_cannot_express_does_not_hide_the_others() {
+    let bin = TempDir::new();
+    let claude = install(
+        bin.path(),
+        HarnessKind::ClaudeCode,
+        Role::Terminal,
+        &fake_tui(),
+    )
+    .unwrap();
+    let unsayable = if cfg!(windows) { "\"" } else { ":" };
+    let odd = bin.path().join(format!("odd{unsayable}name"));
+    let lookup = Lookup::new([odd, bin.path().to_path_buf()]);
+    assert_eq!(lookup.dirs(), [bin.path().to_path_buf()]);
+    let command = launch(
+        &lookup,
+        &terminal(HarnessKind::ClaudeCode, &[], Some(bin.path().to_path_buf())),
+    )
+    .unwrap();
+    assert_eq!(command.program, claude);
+}
+
 #[test]
 fn relative_working_directories_are_refused() {
     let bin = TempDir::new();
