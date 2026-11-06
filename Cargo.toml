@@ -135,6 +135,14 @@ qrcode = { version = "0.14", default-features = false }
 rmcp = { version = "3.9", default-features = false, features = ["server", "transport-io"] }
 # SQLite event log with the library compiled in (vessel-store, ADR 0004).
 rusqlite = { version = "0.41", features = ["bundled"] }
+# Whether two paths are one file (vessel-harness `link_session`, ADR 0011):
+# device and inode on Unix, the volume serial and file index on Windows,
+# which `std` exposes only on nightly there. It replaces "on Windows every
+# existing file is a conflict", which made moving a session back to a
+# profile it came from, or retrying a failed move, fail there. Checked
+# 2026-11-06 against AGENTS.md section 9: small and mature, no `unsafe` of
+# ours, no runtime, and on Windows only `winapi-util` beneath it.
+same-file = "1"
 # Safe `tcgetwinsize` for the fake-tui test binary (vessel-testkit only).
 rustix = { version = "1", default-features = false, features = ["std", "termios"] }
 # TLS for `wss://` relays (vessel-relay; plan decision 1): rustls with the

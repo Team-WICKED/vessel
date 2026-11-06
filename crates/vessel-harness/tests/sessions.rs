@@ -204,16 +204,13 @@ fn linking_shares_one_file_and_leaves_memory_alone() {
         "per profile\n"
     );
 
-    // Linking again is a no-op where the file id can tell (Unix); Windows
-    // cannot tell the same file from another one and reports a conflict.
-    let again = link_session(&files, from.path(), to.path());
-    #[cfg(unix)]
-    assert_eq!(again.unwrap().already, 4);
-    #[cfg(not(unix))]
-    assert!(
-        matches!(again, Err(LinkError::Conflict { .. })),
-        "{again:?}"
-    );
+    // Linking again is a no-op, on every system (the files' identity
+    // tells): moving back, or retrying, works.
+    let again = link_session(&files, from.path(), to.path()).unwrap();
+    assert_eq!((again.linked, again.already), (0, 4), "{again:?}");
+    // The other way round too: the old home has them all already.
+    let back = link_session(&files, to.path(), from.path()).unwrap();
+    assert_eq!((back.linked, back.already), (0, 4), "{back:?}");
 }
 
 #[cfg(unix)]
@@ -312,6 +309,15 @@ fn symbolic_links_are_never_followed() {
     assert!(matches!(error, LinkError::SymbolicLink { .. }), "{error:?}");
     assert!(!to.path().join("file-history").exists());
     assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 1);
+
+    // A target that is a link to the very file: refused, not "already
+    // linked" (telling the two apart follows links).
+    let to = TempDir::new();
+    let transcript = files.transcript().to_owned();
+    fs::create_dir_all(to.path().join(transcript.parent().unwrap())).unwrap();
+    symlink(from.path().join(&transcript), to.path().join(&transcript)).unwrap();
+    let error = link_session(&files, from.path(), to.path()).unwrap_err();
+    assert!(matches!(error, LinkError::SymbolicLink { .. }), "{error:?}");
 
     // A link in the source home's path: refused too.
     let from = ClaudeHome::new(cwd.path());

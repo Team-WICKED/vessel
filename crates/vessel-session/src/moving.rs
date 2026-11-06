@@ -25,10 +25,9 @@
 //! - A `kill` during a move wins: the move stops where it is and the
 //!   session ends as any killed session does.
 //! - Trade-off: links made for a move whose new agent did not start stay
-//!   in the target home. They are the same files, so nothing forks; a
-//!   retry on Unix finds them already linked (on Windows `link_session`
-//!   cannot tell, and reports a conflict). Taking them back would need
-//!   to know which files the failed agent created meanwhile.
+//!   in the target home. They are the same files, so nothing forks, and a
+//!   retry finds them already linked. Taking them back would need to know
+//!   which files the failed agent created meanwhile.
 
 use std::path::PathBuf;
 use std::time::Duration;
