@@ -20,6 +20,7 @@ mod nodes;
 mod pair;
 mod remote;
 mod render;
+mod secret;
 mod selector;
 mod view;
 
