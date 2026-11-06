@@ -30,6 +30,9 @@ use vessel_secure::{Carrier, SecureError};
 pub use connector::{RouteTimeouts, SecureConnector, pair_over};
 pub use dial::{Dialer, PeerClose};
 pub use route::{ReachError, Route, RouteError, RouteFailure};
+/// The websocket dial's errors and TLS setup, from `vessel-relay`, so callers
+/// of [`WsDialer`] need no edge of their own to it.
+pub use vessel_relay::{DialError, TlsError};
 pub use websocket::WsDialer;
 
 use crate::client::NodeClient;

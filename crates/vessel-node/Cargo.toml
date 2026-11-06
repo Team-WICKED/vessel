@@ -46,7 +46,8 @@ tracing-subscriber.workspace = true
 tempfile.workspace = true
 vessel-client.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }
-vessel-testkit.workspace = true
+# The misbehaving relay (feature `relay`) for the secure e2e tests.
+vessel-testkit = { workspace = true, features = ["relay"] }
 
 [lints]
 workspace = true

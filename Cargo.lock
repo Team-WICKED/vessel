@@ -2532,6 +2532,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
+ "hostname",
  "qrcode",
  "tempfile",
  "thiserror 2.0.21",
