@@ -9,7 +9,16 @@
 //! - Codex: `-c mcp_servers.<name>.…` overrides. Codex has no file flag
 //!   (its `--profile` layers a file inside its own home), so values reach
 //!   the server by name: `env_vars` forwards variables from Codex's own
-//!   environment, `env_http_headers` reads headers from it.
+//!   environment, `env_http_headers` reads headers from it. Those values
+//!   are then in Codex's own environment, which the commands the agent runs
+//!   may inherit (Codex filters names holding `KEY`, `SECRET` or `TOKEN` by
+//!   default, so generated names end in `_SECRET`); Claude Code's values
+//!   stay in its file. A variable that would change Codex itself is
+//!   refused: one the profile or the inherited environment already gives
+//!   another value, and those steering its search path, home, loader,
+//!   proxies or credentials (`PATH`, `HOME`, `LD_*`, `DYLD_*`,
+//!   `NODE_OPTIONS`, `*_PROXY`, `OPENAI_*`, `CODEX_*`, and the Windows
+//!   equivalents).
 //! - Gemini CLI, `OpenCode`: no launch-time form that leaves the user's own
 //!   configuration alone was confirmed (2026-11-06); their terminal
 //!   sessions start without the servers and the caller reports which
@@ -45,10 +54,21 @@ use vessel_proto::{EnvName, McpServerName, ResolvedValue};
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum McpError {
     /// Two values for one environment variable: Codex forwards variables
-    /// by name from its own environment, so two servers (or a server and the
-    /// profile) cannot give the same variable different values.
+    /// by name from its own environment, so two servers, a server and the
+    /// profile, or a server and the environment Codex inherits cannot give
+    /// the same variable different values.
     #[error("the variable {name} would need two different values for this harness's MCP servers")]
     SharedVariable {
+        /// The variable.
+        name: EnvName,
+    },
+    /// A variable that steers the harness itself (its search path, home,
+    /// loader, proxy or credentials), which an MCP server may not set in
+    /// the harness's own environment.
+    #[error(
+        "an MCP server may not set {name} for this harness: it would change the harness itself"
+    )]
+    ProtectedVariable {
         /// The variable.
         name: EnvName,
     },

@@ -296,7 +296,10 @@ fn codex_gets_servers_as_overrides_and_values_in_its_environment() {
         Some("/home/u/.codex-work")
     );
     assert_eq!(set(command, "DOCS_TOKEN").as_deref(), Some(STDIO_SECRET));
-    assert_eq!(set(command, "VESSEL_MCP_1_0").as_deref(), Some(HTTP_SECRET));
+    assert_eq!(
+        set(command, "VESSEL_MCP_1_0_SECRET").as_deref(),
+        Some(HTTP_SECRET)
+    );
 
     let args: Vec<String> = command
         .args
@@ -331,7 +334,7 @@ fn codex_gets_servers_as_overrides_and_values_in_its_environment() {
     assert_eq!(web["url"].as_str(), Some("https://mcp.example.invalid/mcp"));
     assert_eq!(
         web["env_http_headers"]["Authorization"].as_str(),
-        Some("VESSEL_MCP_1_0")
+        Some("VESSEL_MCP_1_0_SECRET")
     );
 }
 
@@ -383,10 +386,33 @@ fn codex_refuses_one_variable_with_two_values() {
     )]);
     assert_eq!(
         launch(&lookup, &spec, &default, &homing).unwrap_err(),
-        HarnessError::Mcp(McpError::SharedVariable {
+        HarnessError::Mcp(McpError::ProtectedVariable {
             name: "CODEX_HOME".parse().unwrap()
         })
     );
+    // Nor change what Codex inherits from the node (cargo sets this one
+    // for the test process).
+    let inherited = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let clashing = |value: &str| {
+        BTreeMap::from([(
+            "dir".parse().unwrap(),
+            McpTransport::Stdio {
+                command: PathBuf::from("/opt/x"),
+                args: Vec::new(),
+                env: BTreeMap::from([(
+                    "CARGO_MANIFEST_DIR".parse().unwrap(),
+                    ResolvedValue::new(value.to_owned()),
+                )]),
+            },
+        )])
+    };
+    assert_eq!(
+        launch(&lookup, &spec, &default, &clashing("/elsewhere")).unwrap_err(),
+        HarnessError::Mcp(McpError::SharedVariable {
+            name: "CARGO_MANIFEST_DIR".parse().unwrap()
+        })
+    );
+    assert!(launch(&lookup, &spec, &default, &clashing(&inherited)).is_ok());
 }
 
 #[test]

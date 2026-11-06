@@ -261,10 +261,16 @@ It is idempotent: running it again fills gaps and changes nothing else.
   one `-c mcp_servers.<name>={...}` override that replaces any server of
   that name whole. Values go into Codex's environment: a stdio server's
   under its own variable names, forwarded with `env_vars`; a header's under
-  a generated name read with `env_http_headers`. Because that environment
-  is Codex's own, a variable that two servers (or a server and the profile)
-  would set differently, or the home variable, is refused rather than
-  silently changing Codex itself.
+  a generated name (ending in `_SECRET`) read with `env_http_headers`.
+  Because that environment is Codex's own, a variable is refused rather
+  than silently changing Codex itself when two servers, a server and the
+  profile, or a server and the environment Codex inherits would give it
+  different values, when the profile removes it, and always for variables
+  that steer Codex (`PATH`, `HOME`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`,
+  `*_PROXY`, `OPENAI_*`, `CODEX_*`, and the Windows equivalents). Unlike
+  Claude Code's file, these values are visible to the commands the agent
+  runs unless Codex's environment filter drops them (by default it drops
+  names holding `KEY`, `SECRET` or `TOKEN`).
 - **Gemini CLI and `OpenCode`**: no launch-time form that leaves the user's
   own configuration alone was confirmed, so their terminal sessions start
   without the servers, and the launch reports which servers were left out.

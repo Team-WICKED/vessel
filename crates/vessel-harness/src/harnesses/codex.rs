@@ -165,14 +165,16 @@ fn terminal_mcp(servers: &ResolvedMcpServers) -> Result<TerminalMcp, McpError> {
     Ok(mcp)
 }
 
-/// `VESSEL_MCP_<server>_<header>`: indexes, since server and header names
-/// may hold characters a variable name cannot.
+/// `VESSEL_MCP_<server>_<header>_SECRET`: indexes, since server and header
+/// names may hold characters a variable name cannot; the `_SECRET` ending
+/// makes name-based filters (Codex's own default for the commands it runs
+/// among them) leave the value out.
 fn header_variable(
     server: &McpServerName,
     index: usize,
     header_index: usize,
 ) -> Result<EnvName, McpError> {
-    format!("VESSEL_MCP_{index}_{header_index}")
+    format!("VESSEL_MCP_{index}_{header_index}_SECRET")
         .parse()
         .map_err(|_invalid| McpError::Encode {
             server: server.clone(),
