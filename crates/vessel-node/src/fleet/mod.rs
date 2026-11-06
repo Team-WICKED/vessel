@@ -105,6 +105,11 @@ pub struct FleetConfig {
     /// How long the home holds a `fleet.watch`: 50 s, under the 60 s idle
     /// limits proxies commonly have.
     pub watch_limit: Duration,
+    /// How long after a device was paired the home gives it a first relay
+    /// ticket without its having granted (`fleet.callback`): an hour, for
+    /// a member with no route of its own to register and grant; then the
+    /// node is invited again.
+    pub first_ticket_window: Duration,
 }
 
 impl Default for FleetConfig {
@@ -114,6 +119,7 @@ impl Default for FleetConfig {
             poll: Duration::from_secs(5),
             pull_every: Duration::from_secs(10 * 60),
             watch_limit: Duration::from_secs(50),
+            first_ticket_window: Duration::from_secs(60 * 60),
         }
     }
 }

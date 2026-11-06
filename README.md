@@ -332,8 +332,10 @@ has none to share: its members still sync, but the home cannot run calls
 on them until one of the two gets a route (`vessel init --join` and
 `vessel fleet status` say so). The relay's token stays with the home: a
 member gets a ticket that registers its own key only, for a day, renewed
-while it reaches its home, and it dials only `wss://` relays on public
-addresses, or relays on the host it reaches its home by.
+while it reaches its home (a member with no route has to join, and grant,
+within an hour of being invited), and it dials only `wss://` relays at
+public addresses, checked when it connects, or relays on the host it
+reaches its home by.
 
 ### Agent tools
 

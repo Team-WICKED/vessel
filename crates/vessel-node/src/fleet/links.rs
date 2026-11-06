@@ -204,8 +204,6 @@ pub(crate) struct Links {
     /// As a home, what it mints its members' relay tickets with: its relays
     /// and their token (none without relays).
     home_relays: Option<HomeRelays>,
-    /// As a home, the devices given a ticket before their first grant.
-    first_tickets: callback::FirstTickets,
     /// As a member, the ticket its callback links register with now.
     ticketed: callback::Ticketed,
     /// A member's connection to its home, while the pull loop has one.
@@ -346,6 +344,19 @@ fn check_claim(
 /// live member shows in `fleet.peers` anyway; the rest says "another node",
 /// and the home's log has the details.
 fn check_record(claim: Claim<'_>, bound: &Bindings, held: &[MemberGrant]) -> Result<(), WireError> {
+    // A device that took a first relay ticket grants as the node and key
+    // it took it for (round 7): one key per device, across restarts.
+    if let Some((node, key)) = bound.first_of(claim.member)
+        && (node != claim.node || key != claim.key)
+    {
+        tracing::info!(member = %claim.member, claimed = %claim.node, ticketed = %node, "refused a claim: this device took a relay ticket for another node or key");
+        return Err(conflict(
+            "this device took a relay ticket on this home for another node or key, and \
+             grants only as that one; the node is invited again (`vessel fleet invite`) and \
+             joins from there"
+                .to_owned(),
+        ));
+    }
     // A device keeps its node, a node its key, a key its node.
     if let Some(node) = bound.node_of(claim.member)
         && node != claim.node
@@ -483,7 +494,6 @@ impl Links {
             devices,
             relays,
             home_relays,
-            first_tickets: callback::FirstTickets::default(),
             ticketed: callback::Ticketed::default(),
             home: Mutex::new(None),
             members: tokio::sync::Mutex::new(HashMap::new()),

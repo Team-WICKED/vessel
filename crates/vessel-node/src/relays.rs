@@ -47,7 +47,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_proto::{NodeId, RelayTicket, RelayToken, RouteUrl};
-use vessel_relay::{LinkState, NodeLink, TlsConfig, WsCarrier};
+use vessel_relay::{LinkState, NodeLink, Reach, TlsConfig, WsCarrier};
 use vessel_secure::NodeKeypair;
 
 use crate::error::NodeError;
@@ -173,20 +173,22 @@ impl Relays {
     }
 
     /// Link to `home`'s `relays` with `ticket` (for this node's key), as a
-    /// member with no route of its own: a newer ticket for the relays
-    /// already linked (each registers again with it), links for new ones,
-    /// and none any more for relays the home no longer names, or for
-    /// another home's. Where each of `relays` stands.
+    /// member with no route of its own, each reaching only the addresses
+    /// its [`Reach`] allows: a newer ticket for the relays already linked
+    /// (each registers again with it), links for new ones, and none any
+    /// more for relays the home no longer names, or for another home's.
+    /// Where each of `relays` stands.
     ///
     /// # Errors
     /// A `wss://` relay and no TLS roots on this machine.
     pub(crate) fn link_callback(
         &self,
         home: NodeId,
-        relays: &[RouteUrl],
+        relays: &[(RouteUrl, Reach)],
         ticket: RelayTicket,
     ) -> Result<Vec<watch::Receiver<LinkState>>, NodeError> {
-        let tls = relay_tls(relays)?;
+        let urls: Vec<RouteUrl> = relays.iter().map(|(relay, _reach)| relay.clone()).collect();
+        let tls = relay_tls(&urls)?;
         let mut state = self.state();
         let mut callback = match state.callback.take() {
             Some(current) if current.home == home => {
@@ -207,14 +209,14 @@ impl Relays {
         };
         let (kept, dropped): (Vec<_>, Vec<_>) = std::mem::take(&mut callback.links)
             .into_iter()
-            .partition(|(relay, _, _)| relays.contains(relay));
+            .partition(|(relay, _, _)| urls.contains(relay));
         for (relay, _state, stop) in dropped {
             tracing::info!(%relay, %home, "unlinking from a relay the home no longer names");
             stop.cancel();
         }
         callback.links = kept;
         let mut states = Vec::with_capacity(relays.len());
-        for relay in relays {
+        for (relay, reach) in relays {
             if let Some((_, linked, _)) = callback.links.iter().find(|(url, _, _)| url == relay) {
                 states.push(linked.clone());
                 continue;
@@ -224,7 +226,8 @@ impl Relays {
                 Arc::clone(&self.keypair),
                 callback.tickets.subscribe(),
                 tls.clone(),
-            );
+            )
+            .reaching(*reach);
             let linked = link.state();
             let stop = self.stop.child_token();
             callback

@@ -12,13 +12,15 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use vessel_client::CallError;
+use vessel_client::pairing::Paired;
 use vessel_client::secure::{RouteTimeouts, pair_over};
 use vessel_client::{Connector as _, NodeClient};
 use vessel_node::Node;
 use vessel_node::fleet::{self, DEFAULT_GRANT, FleetFiles, FleetInit};
 use vessel_proto::{
-    ErrorCode, GetCallback, HarnessKind, ListDevices, ListSessions, NodeId, PairingOffer,
-    RegistrationRefusal, RelayTicket, Scope,
+    ErrorCode, GetCallback, GrantHome, HarnessKind, InvitationSecret, ListDevices, ListSessions,
+    NodeId, OfferVersion, PairingLink, PairingOffer, RegistrationRefusal, RelayTicket, Scope,
 };
 use vessel_relay::{LinkState, NodeLink, TlsConfig, unix_now};
 use vessel_secure::NodeKeypair;
@@ -27,7 +29,7 @@ use crate::across::{Member, home};
 use crate::agents::code;
 use crate::fleet::{fleet_config, write};
 use crate::grants::reaches;
-use crate::secure::{Relay, device_via, dialer, direct_route};
+use crate::secure::{Relay, device_via, dialer, direct_route, relayed_with};
 use crate::support::{Fixture, client, step, within};
 
 /// A member's node as `vessel node start` runs it: a name, and no route of
@@ -173,9 +175,16 @@ async fn direct_home(sources: &std::path::Path) -> Member {
 /// A device paired on `home` with `sync` only, which never joins or
 /// grants, as a client through `relay`; its id there.
 async fn stranger(home: &Member, relay: &Relay) -> (NodeClient, vessel_proto::DeviceId) {
+    let (paired, id) = pair_stranger(home).await;
+    (connect_stranger(&paired, relay).await, id)
+}
+
+/// Pair a device with `sync` only on `home`; its credential and id there.
+async fn pair_stranger(home: &Member) -> (Paired, vessel_proto::DeviceId) {
+    let label = format!("not-a-member-{}", NodeId::random());
     let offer = home
         .owner
-        .invite_with_scopes(Some("not-a-member".to_owned()), 600, vec![Scope::Sync])
+        .invite_with_scopes(Some(label.clone()), 600, vec![Scope::Sync])
         .await
         .unwrap()
         .link
@@ -184,17 +193,21 @@ async fn stranger(home: &Member, relay: &Relay) -> (NodeClient, vessel_proto::De
     let (paired, _route) = pair_over(&dialer(), &offer, "x", RouteTimeouts::default())
         .await
         .unwrap();
-    let client = device_via(dialer(), &paired, &[], &[&relay.url])
-        .connect(client())
-        .await
-        .unwrap();
     let devices = home.owner.call(ListDevices).await.unwrap();
     let id = devices
         .iter()
-        .find(|device| device.label == "not-a-member")
+        .find(|device| device.label == label)
         .unwrap()
         .id;
-    (client, id)
+    (paired, id)
+}
+
+/// A connection as the paired device, through `relay`.
+async fn connect_stranger(paired: &Paired, relay: &Relay) -> NodeClient {
+    device_via(dialer(), paired, &[], &[&relay.url])
+        .connect(client())
+        .await
+        .unwrap()
 }
 
 /// A relay link for `keypair` registering with the tickets on `tickets`,
@@ -337,6 +350,136 @@ async fn a_member_moving_homes_drops_the_old_homes_relay() {
         first.node.stop().await.unwrap();
         second.node.stop().await.unwrap();
         second_relay.stop().await;
+    })
+    .await;
+}
+
+/// A home with `fleet.toml` in `fixture`, linked to `relay`, giving first
+/// relay tickets for `window` after a device was paired; started again
+/// the same way after a stop.
+async fn start_home(fixture: &Fixture, relay: &Relay, window: Duration) -> Node {
+    if !FleetFiles::new(&fixture.data_dir()).sources().exists() {
+        let agents = fixture.cwd().join("sources/AGENTS.md");
+        write(&agents, "fleet instructions\n");
+        let _toml = fleet::init(
+            &FleetFiles::new(&fixture.data_dir()),
+            &FleetInit {
+                instructions: Some(agents),
+                skills: None,
+                skip: Vec::new(),
+            },
+        )
+        .unwrap();
+    }
+    let applied = fixture.cwd().join("home-claude");
+    relayed_with(fixture, &[&relay.url], |config| {
+        config.name = Some("home".to_owned());
+        config.fleet = fleet_config(HarnessKind::ClaudeCode, applied);
+        config.fleet.first_ticket_window = window;
+    })
+    .await
+}
+
+/// A random node id and key to ask a ticket for.
+fn ask() -> GetCallback {
+    GetCallback {
+        node: NodeId::random(),
+        key: *NodeKeypair::generate().unwrap().public(),
+    }
+}
+
+/// The review's round 7, `poc_r7_a_stranger_renews_a_first_ticket_forever`:
+/// a `sync` device that never joins renewed a ten-minute first ticket for
+/// the same key as often as it asked, keeping a relay place for good. A
+/// first ticket now comes only within a window after the device was paired
+/// (an hour; two seconds here), and never reaches past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_first_ticket_comes_only_within_its_window_after_pairing() {
+    within(async {
+        let relay = Relay::start().await;
+        let fixture = Fixture::new();
+        let node = start_home(&fixture, &relay, Duration::from_secs(2)).await;
+        let home = Member {
+            owner: fixture.connect(&node).await,
+            fixture,
+            node,
+        };
+        let (stranger, _id) = stranger(&home, &relay).await;
+        let asked = ask();
+        let first = stranger.call(asked).await.unwrap().ticket.unwrap();
+        assert!(
+            first.expires_at <= unix_now() + 2,
+            "the ticket reaches past the window"
+        );
+        assert!(
+            stranger.call(asked).await.is_ok(),
+            "renewed within the window"
+        );
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(code(stranger.call(asked).await), ErrorCode::Forbidden);
+        home.node.stop().await.unwrap();
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// The review's round 7: the one key a device that has not granted may take
+/// a first ticket for was kept in memory, so after the home's restart it
+/// could take another. It is kept in the home's record now, and the
+/// device's grant must claim that node and key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_devices_first_ticket_key_holds_across_a_restart_and_for_its_grant() {
+    within(async {
+        let relay = Relay::start().await;
+        let fixture = Fixture::new();
+        let window = Duration::from_secs(3600);
+        let node = start_home(&fixture, &relay, window).await;
+        let home = Member {
+            owner: fixture.connect(&node).await,
+            fixture,
+            node,
+        };
+        let (paired, _id) = pair_stranger(&home).await;
+        let stranger = connect_stranger(&paired, &relay).await;
+        let (chosen, other) = (ask(), ask());
+        assert!(stranger.call(chosen).await.is_ok());
+        assert_eq!(code(stranger.call(other).await), ErrorCode::Forbidden);
+
+        // The home restarts: still the same one key.
+        drop(stranger);
+        let Member { fixture, node, .. } = home;
+        node.stop().await.unwrap();
+        let node = start_home(&fixture, &relay, window).await;
+        let stranger = connect_stranger(&paired, &relay).await;
+        assert_eq!(code(stranger.call(other).await), ErrorCode::Forbidden);
+        assert!(stranger.call(chosen).await.is_ok());
+
+        // Its grant must be that node's, with that key: a link for another
+        // is refused before the home dials anything.
+        let link = PairingLink::encode(&PairingOffer {
+            v: OfferVersion,
+            node: other.node,
+            key: other.key,
+            relays: vec![relay.url.clone()],
+            direct: Vec::new(),
+            invite: InvitationSecret::from_bytes([3; 16]),
+            expires: chrono::Utc::now() + chrono::TimeDelta::minutes(10),
+        })
+        .unwrap();
+        let refused = stranger.call(GrantHome { link }).await;
+        let Err(CallError::Remote(error)) = refused else {
+            panic!("a grant for another key was not refused: {refused:?}");
+        };
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert!(
+            error
+                .message
+                .contains("took a relay ticket on this home for another node or key"),
+            "{}",
+            error.message
+        );
+        node.stop().await.unwrap();
+        relay.stop().await;
     })
     .await;
 }
