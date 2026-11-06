@@ -15,7 +15,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::CancellationToken;
-use vessel_proto::{ConnId, NodeToRelay, RelayToNode, RelayToken, RouteUrl, RoutingId};
+use vessel_proto::{
+    ConnId, NodeToRelay, RelayTicket, RelayToNode, RelayToken, RouteUrl, RoutingId,
+};
 use vessel_relay::{Limits, LinkState, NodeLink, RelayConfig, TlsConfig, WsCarrier};
 use vessel_secure::{Config, NodeKeypair, SecureChannel, answer_proof, routing_id};
 
@@ -106,6 +108,20 @@ impl EchoNode {
         token: RelayToken,
     ) -> Self {
         let link = NodeLink::new(relay.clone(), Arc::clone(&keypair), token, tls());
+        Self::run(link, keypair)
+    }
+
+    /// A node registering with the newest ticket on `tickets`.
+    pub(crate) fn with_tickets(
+        relay: &RouteUrl,
+        keypair: Arc<NodeKeypair>,
+        tickets: watch::Receiver<RelayTicket>,
+    ) -> Self {
+        let link = NodeLink::with_tickets(relay.clone(), Arc::clone(&keypair), tickets, tls());
+        Self::run(link, keypair)
+    }
+
+    fn run(link: NodeLink, keypair: Arc<NodeKeypair>) -> Self {
         let state = link.state();
         let shutdown = CancellationToken::new();
         let accept = {
@@ -207,7 +223,8 @@ impl RawNode {
             &NodeToRelay::Register {
                 routing_id: routing_id(&key),
                 key,
-                token: token(),
+                token: Some(token()),
+                ticket: None,
             },
         )
         .await;

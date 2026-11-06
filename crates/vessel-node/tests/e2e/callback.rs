@@ -2,20 +2,33 @@
 //! fresh-machine smoke): a member started plainly, with no `--relay` and
 //! no `--public`, synced but named no route in its grant, so the home
 //! refused the grant and could never call it (`--to`, `vessel mcp`'s
-//! `node`, `secret.copy`). It now registers with its home's relays; a home
-//! with none to share has its members say so, and how to add a route.
+//! `node`, `secret.copy`). It now registers with its home's relays with a
+//! ticket for its own key (the review's round 6: never the relays' token);
+//! a home with none to share has its members say so, and how to add a
+//! route.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use vessel_client::secure::{RouteTimeouts, pair_over};
+use vessel_client::{Connector as _, NodeClient};
 use vessel_node::Node;
 use vessel_node::fleet::{self, DEFAULT_GRANT, FleetFiles, FleetInit};
-use vessel_proto::{HarnessKind, PairingOffer, Scope};
+use vessel_proto::{
+    ErrorCode, GetCallback, HarnessKind, ListDevices, ListSessions, NodeId, PairingOffer,
+    RegistrationRefusal, RelayTicket, Scope,
+};
+use vessel_relay::{LinkState, NodeLink, TlsConfig, unix_now};
+use vessel_secure::NodeKeypair;
 
 use crate::across::{Member, home};
+use crate::agents::code;
 use crate::fleet::{fleet_config, write};
 use crate::grants::reaches;
-use crate::secure::{Relay, direct_route};
-use crate::support::{Fixture, within};
+use crate::secure::{Relay, device_via, dialer, direct_route};
+use crate::support::{Fixture, client, step, within};
 
 /// A member's node as `vessel node start` runs it: a name, and no route of
 /// its own.
@@ -155,4 +168,175 @@ async fn direct_home(sources: &std::path::Path) -> Member {
         node,
         owner,
     }
+}
+
+/// A device paired on `home` with `sync` only, which never joins or
+/// grants, as a client through `relay`; its id there.
+async fn stranger(home: &Member, relay: &Relay) -> (NodeClient, vessel_proto::DeviceId) {
+    let offer = home
+        .owner
+        .invite_with_scopes(Some("not-a-member".to_owned()), 600, vec![Scope::Sync])
+        .await
+        .unwrap()
+        .link
+        .decode()
+        .unwrap();
+    let (paired, _route) = pair_over(&dialer(), &offer, "x", RouteTimeouts::default())
+        .await
+        .unwrap();
+    let client = device_via(dialer(), &paired, &[], &[&relay.url])
+        .connect(client())
+        .await
+        .unwrap();
+    let devices = home.owner.call(ListDevices).await.unwrap();
+    let id = devices
+        .iter()
+        .find(|device| device.label == "not-a-member")
+        .unwrap()
+        .id;
+    (client, id)
+}
+
+/// A relay link for `keypair` registering with the tickets on `tickets`,
+/// until `stop`; where it stands.
+fn ticket_link(
+    relay: &Relay,
+    keypair: NodeKeypair,
+    tickets: watch::Receiver<RelayTicket>,
+    stop: &CancellationToken,
+) -> watch::Receiver<LinkState> {
+    let link = NodeLink::with_tickets(
+        relay.url.clone(),
+        Arc::new(keypair),
+        tickets,
+        TlsConfig::with_roots(rustls::RootCertStore::empty()).unwrap(),
+    );
+    let state = link.state();
+    drop(tokio::spawn(link.run(|_carrier| {}, stop.clone())));
+    state
+}
+
+/// The review's round 6, `poc_r6_who_gets_the_token_and_what_it_registers`:
+/// the home handed its relays' token to any `sync` device (one that never
+/// joined included), and the device registered any key with it, also after
+/// it was revoked. Now no one gets the token: a device that has not
+/// granted gets a short ticket for one key its record would take (a
+/// member's first grant needs it, its home pairing with it through the
+/// relay), and that ticket registers that key and no other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_gets_a_ticket_for_one_key_of_its_own_and_never_the_token() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let own = NodeKeypair::generate().unwrap();
+        let asked = GetCallback {
+            node: NodeId::random(),
+            key: *own.public(),
+        };
+        // The owner holds no device: no ticket.
+        assert_eq!(code(home.owner.call(asked).await), ErrorCode::Forbidden);
+
+        let (stranger, id) = stranger(&home, &relay).await;
+        let callback = stranger.call(asked).await.unwrap();
+        let text = serde_json::to_string(&callback).unwrap();
+        assert!(!text.contains("e2e-relay-token"), "{text}");
+        let ticket = callback.ticket.unwrap();
+        assert_eq!(ticket.key, *own.public());
+        assert!(ticket.expires_at <= unix_now() + 10 * 60);
+
+        // It registers its own key, and none of 25 others.
+        let stop = CancellationToken::new();
+        let (_issued, tickets) = watch::channel(ticket);
+        let mut registered = ticket_link(&relay, own, tickets.clone(), &stop);
+        let _registered = step(
+            "the ticket's own key registering",
+            registered.wait_for(|state| *state == LinkState::Registered),
+        )
+        .await
+        .unwrap();
+        for _ in 0..25 {
+            let mut other = ticket_link(
+                &relay,
+                NodeKeypair::generate().unwrap(),
+                tickets.clone(),
+                &stop,
+            );
+            let _refused = step(
+                "another key refused with the ticket",
+                other.wait_for(|state| *state == LinkState::Refused(RegistrationRefusal::Ticket)),
+            )
+            .await
+            .unwrap();
+        }
+        // A second key, for the same device: refused.
+        let second = GetCallback {
+            node: NodeId::random(),
+            key: *NodeKeypair::generate().unwrap().public(),
+        };
+        assert_eq!(code(stranger.call(second).await), ErrorCode::Forbidden);
+        // Revoked, it asks no more.
+        home.owner.revoke_device(id).await.unwrap();
+        assert!(stranger.call(asked).await.is_err());
+        stop.cancel();
+        home.node.stop().await.unwrap();
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// The review's round 6, `poc_r6_a_member_moving_homes_keeps_the_old_homes_relay`:
+/// a member with no route that left one home for another kept the first
+/// home's relay as its only route, never asked the second, and the second
+/// home's grant named the first home's relay. Now the second home's
+/// relays replace the first's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_moving_homes_drops_the_old_homes_relay() {
+    within(async {
+        let (first_relay, second_relay) = (Relay::start().await, Relay::start().await);
+        let (first_sources, second_sources) =
+            (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let first = home(&first_relay, first_sources.path()).await;
+        let second = home(&second_relay, second_sources.path()).await;
+        let fixture = Fixture::new();
+        let member = plain_member(&fixture, "laptop").await;
+        let id = member.info().id;
+        join(&fixture, &invite(&first, "laptop").await, "laptop").await;
+        assert!(reaches(&first, id).await, "the first home never reached it");
+
+        assert!(fleet::leave(&FleetFiles::new(&fixture.data_dir())).unwrap());
+        join(&fixture, &invite(&second, "laptop").await, "laptop").await;
+        assert!(
+            reaches(&second, id).await,
+            "the second home never reached it"
+        );
+        let linked: Vec<_> = member
+            .relay_links()
+            .into_iter()
+            .map(|(relay, _state)| relay)
+            .collect();
+        assert_eq!(linked, std::slice::from_ref(&second_relay.url));
+        let grants = FleetFiles::new(&second.fixture.data_dir())
+            .dir()
+            .join("grants");
+        for entry in std::fs::read_dir(&grants).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                let grant = std::fs::read_to_string(&path).unwrap();
+                assert!(grant.contains(second_relay.url.as_str()), "{grant}");
+                assert!(!grant.contains(first_relay.url.as_str()), "{grant}");
+            }
+        }
+        // The first home's relay is not needed any more.
+        first_relay.stop().await;
+        assert!(second.owner.call_on(id, ListSessions).await.is_ok());
+        member.stop().await.unwrap();
+        first.node.stop().await.unwrap();
+        second.node.stop().await.unwrap();
+        second_relay.stop().await;
+    })
+    .await;
 }

@@ -18,6 +18,13 @@
 //!   `vessel_secure::respond` on it, exactly as for its own `/secure`.
 //! - The state is published on a watch ([`LinkState`]) for `vessel node
 //!   status` and for tests to wait on, instead of sleeping.
+//! - Tickets (protocol 6, `fleet.callback`): a fleet member registers with
+//!   its home's relay with a ticket for its own key instead of the token
+//!   ([`NodeLink::with_tickets`]). The relay ends that registration when
+//!   the ticket expires, so the member hands the link a newer one before
+//!   then, and the link registers again with it at once (the relay drops
+//!   the old registration when the new one proves the key); a refused
+//!   ticket is tried again as soon as a newer one arrives.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +36,9 @@ use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
-use vessel_proto::{ConnId, NodeToRelay, RegistrationRefusal, RelayToNode, RelayToken, RouteUrl};
+use vessel_proto::{
+    ConnId, NodeToRelay, RegistrationRefusal, RelayTicket, RelayToNode, RelayToken, RouteUrl,
+};
 use vessel_secure::{NodeKeypair, answer_proof, routing_id};
 
 use crate::backoff::Backoff;
@@ -60,9 +69,47 @@ pub enum LinkState {
 pub struct NodeLink {
     relay: RouteUrl,
     keypair: Arc<NodeKeypair>,
-    token: RelayToken,
+    credential: Credential,
     tls: TlsConfig,
     state: watch::Sender<LinkState>,
+}
+
+/// What a link registers with.
+enum Credential {
+    /// The relay's token: an operator's node.
+    Token(RelayToken),
+    /// Tickets for the node's key, the newest on the watch: a fleet member
+    /// registering with its home's relay.
+    Tickets(watch::Receiver<RelayTicket>),
+}
+
+impl Credential {
+    /// What registering now sends: the token, or the newest ticket.
+    fn register_with(&self) -> (Option<RelayToken>, Option<RelayTicket>) {
+        match self {
+            Self::Token(token) => (Some(token.clone()), None),
+            Self::Tickets(tickets) => (None, Some(tickets.borrow().clone())),
+        }
+    }
+
+    /// A watch that wakes when a newer ticket arrives (none for a token).
+    fn renewals(&self) -> Option<watch::Receiver<RelayTicket>> {
+        match self {
+            Self::Token(_) => None,
+            Self::Tickets(tickets) => Some(tickets.clone()),
+        }
+    }
+}
+
+/// Resolves when a newer ticket arrives; never for a token, nor once the
+/// tickets' sender is gone.
+async fn renewed(renewals: &mut Option<watch::Receiver<RelayTicket>>) {
+    if let Some(tickets) = renewals
+        && tickets.changed().await.is_ok()
+    {
+        return;
+    }
+    std::future::pending::<()>().await;
 }
 
 impl std::fmt::Debug for NodeLink {
@@ -82,6 +129,8 @@ enum Ended {
     Lost,
     /// The relay refused the registration.
     Refused(RegistrationRefusal),
+    /// A newer ticket arrived: register again with it.
+    Renewed,
 }
 
 impl NodeLink {
@@ -94,11 +143,33 @@ impl NodeLink {
         token: RelayToken,
         tls: TlsConfig,
     ) -> Self {
+        Self::with(relay, keypair, Credential::Token(token), tls)
+    }
+
+    /// A link to `relay` for the node with `keypair`, registering with the
+    /// newest ticket on `tickets` (each for the node's own key), and again
+    /// whenever a newer one arrives.
+    #[must_use]
+    pub fn with_tickets(
+        relay: RouteUrl,
+        keypair: Arc<NodeKeypair>,
+        tickets: watch::Receiver<RelayTicket>,
+        tls: TlsConfig,
+    ) -> Self {
+        Self::with(relay, keypair, Credential::Tickets(tickets), tls)
+    }
+
+    fn with(
+        relay: RouteUrl,
+        keypair: Arc<NodeKeypair>,
+        credential: Credential,
+        tls: TlsConfig,
+    ) -> Self {
         let (state, _receiver) = watch::channel(LinkState::Connecting);
         Self {
             relay,
             keypair,
-            token,
+            credential,
             tls,
             state,
         }
@@ -118,15 +189,21 @@ impl NodeLink {
     {
         let accept = Arc::new(accept);
         let mut backoff = Backoff::new();
+        let mut renewals = self.credential.renewals();
         loop {
             let _previous = self.state.send_replace(LinkState::Connecting);
             let ended = tokio::select! {
-                ended = self.connection(&accept) => ended,
+                ended = self.connection(&accept, &mut renewals) => ended,
                 () = shutdown.cancelled() => break,
             };
             match ended {
                 Ended::Failed => {}
                 Ended::Lost => backoff.reset(),
+                Ended::Renewed => {
+                    tracing::debug!(relay = %self.relay, "registering again with a newer ticket");
+                    backoff.reset();
+                    continue;
+                }
                 Ended::Refused(reason) => {
                     tracing::warn!(relay = %self.relay, ?reason, "the relay refused the registration");
                     let _previous = self.state.send_replace(LinkState::Refused(reason));
@@ -137,17 +214,30 @@ impl NodeLink {
             tracing::debug!(relay = %self.relay, ?delay, "reconnecting to the relay");
             tokio::select! {
                 () = tokio::time::sleep(delay) => {}
+                // A refused or lapsed ticket is worth trying again at once
+                // when a newer one arrives.
+                () = renewed(&mut renewals) => {}
                 () = shutdown.cancelled() => break,
             }
         }
         let _previous = self.state.send_replace(LinkState::Stopped);
     }
 
-    /// One control connection, from connecting until it ends.
-    async fn connection<F>(&self, accept: &Arc<F>) -> Ended
+    /// One control connection, from connecting until it ends (or a newer
+    /// ticket arrives on `renewals`).
+    async fn connection<F>(
+        &self,
+        accept: &Arc<F>,
+        renewals: &mut Option<watch::Receiver<RelayTicket>>,
+    ) -> Ended
     where
         F: Fn(WsCarrier) + Send + Sync + 'static,
     {
+        // What this connection registers with is the newest now; only a
+        // later one counts as renewed.
+        if let Some(tickets) = renewals.as_mut() {
+            tickets.mark_unchanged();
+        }
         let url = endpoint(&self.relay, NODE_PATH);
         let mut socket = match timeout(STEP, socket::open(&url, &self.tls)).await {
             Ok(Ok(socket)) => socket,
@@ -165,7 +255,11 @@ impl NodeLink {
         tracing::info!(relay = %self.relay, "registered with the relay");
         let _previous = self.state.send_replace(LinkState::Registered);
         loop {
-            let message = match timeout(Keepalive::DEFAULT.silence, socket.next()).await {
+            let next = tokio::select! {
+                next = timeout(Keepalive::DEFAULT.silence, socket.next()) => next,
+                () = renewed(renewals) => return Ended::Renewed,
+            };
+            let message = match next {
                 Ok(Some(Ok(message))) => message,
                 Ok(Some(Err(error))) => {
                     tracing::debug!(relay = %self.relay, %error, "lost the relay");
@@ -199,12 +293,14 @@ impl NodeLink {
     /// other failure.
     async fn register(&self, socket: &mut Socket) -> Result<(), Option<RegistrationRefusal>> {
         let key = *self.keypair.public();
+        let (token, ticket) = self.credential.register_with();
         send(
             socket,
             &NodeToRelay::Register {
                 routing_id: routing_id(&key),
                 key,
-                token: self.token.clone(),
+                token,
+                ticket,
             },
         )
         .await?;

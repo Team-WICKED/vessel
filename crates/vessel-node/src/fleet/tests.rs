@@ -200,17 +200,17 @@ impl Member {
             crate::devices::Routes::default(),
         ));
         let files = FleetFiles::new(&data);
-        let relays = Arc::new(crate::relays::Relays::new(keypair, Arc::clone(&devices)));
+        let relays = Arc::new(crate::relays::Relays::new(
+            keypair,
+            CancellationToken::new(),
+        ));
         let links = Arc::new(super::Links::new(
             node,
             "member".to_owned(),
             files.clone(),
             devices,
             relays,
-            vessel_proto::Callback {
-                relays: Vec::new(),
-                token: None,
-            },
+            None,
         ));
         let state = Arc::new(StateFile::open(&files));
         let local = Arc::new(Local::new(

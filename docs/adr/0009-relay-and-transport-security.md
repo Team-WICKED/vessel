@@ -264,3 +264,19 @@ Option 1, `snow`, behind our own crate `vessel-secure`.
   explicit later operation; M3 has none.
 - Metadata (who talks to which routing id, when, how much) is visible to
   the relay operator. That is accepted: the operator is the owner.
+
+## Amendment: registration tickets (protocol 6, 2026-11-06)
+
+A fleet member with no route of its own registers with its home's relay,
+so the home can call it back (`fleet.callback`, milestone 4). Handing it
+the registration token let any device that asked register any key, for
+good (the review of milestone 4, round 6), so a member gets a ticket
+instead: one node key and an expiry, with HMAC-SHA256 over both keyed by
+the relay's token (`vessel_relay::issue_ticket`, `check_ticket`). The
+relay accepts the token or a ticket, a ticket only for the key the node
+then proves it holds, unexpired and at most 48 h ahead, and closes a
+registration made with one when it expires. The relay keeps no new state
+or configuration; rotating its token voids every ticket. Whoever holds the
+token mints tickets: the operator, and a fleet's home that registers with
+the relay, which gives them only to its members' devices for their own
+keys (`docs/plans/backend-m4.md`, review round 6).

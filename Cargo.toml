@@ -154,6 +154,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# HMAC-SHA256 for relay registration tickets (vessel-relay, protocol 6's
+# `fleet.callback`): a fleet's home mints them with the relay's token and
+# the relay checks them with it. RustCrypto, the same family as `sha2`.
+hmac = "0.13"
 # SHA-256 of a vesseld build (vessel-remote): its `-dev-<hash>` name and the
 # checksum the remote verifies before installing it (ADR 0008); device
 # credential hashes (vessel-store) and invitation keys (vessel-node, ADR

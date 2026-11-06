@@ -8,7 +8,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::key::{
-    KeyTextError, NodePublicKey, RoutingId, base64url, hex_array, serde_via_text, write_hex,
+    KeyTextError, NodePublicKey, RoutingId, base64url, hex_array, secret, serde_via_text, write_hex,
 };
 
 /// The registration token a relay operator gives to nodes allowed to
@@ -65,6 +65,31 @@ impl<'de> Deserialize<'de> for RelayToken {
         let text = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
         Self::new(&text).map_err(serde::de::Error::custom)
     }
+}
+
+secret!(
+    /// A ticket's HMAC-SHA256 under the relay's token (`vessel_relay`
+    /// computes and checks it). Not printed: it is no use without the
+    /// ticket's node key, but nothing needs to see it.
+    TicketMac,
+    32
+);
+
+/// A registration ticket (protocol 6, `fleet.callback`): lets the one node
+/// whose key it names register with a relay until it expires, without the
+/// relay's token. A fleet's home mints one for a member from the token it
+/// registers with, and the relay checks it with the same token, so the
+/// relay keeps no state for it and rotating the token voids every ticket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayTicket {
+    /// The node it registers: the relay takes it only with this key, and
+    /// only once the node proved it holds the key.
+    pub key: NodePublicKey,
+    /// When it stops registering the node, in seconds since the Unix epoch;
+    /// a relay also ends a registration made with it then.
+    pub expires_at: u64,
+    /// The MAC over the key and `expires_at`.
+    pub mac: TicketMac,
 }
 
 /// One waiting client's connection on a relay: 128 random bits minted by the
@@ -175,8 +200,13 @@ pub enum NodeToRelay {
         /// The node's static key; the relay checks possession with a Noise
         /// handshake to it.
         key: NodePublicKey,
-        /// The relay's registration token.
-        token: RelayToken,
+        /// The relay's registration token (an operator's node), or
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<RelayToken>,
+        /// a ticket for `key` (a fleet member, protocol 6): exactly one of
+        /// the two.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ticket: Option<RelayTicket>,
     },
     /// The node's response to `Prove`.
     Proof {
@@ -189,8 +219,11 @@ pub enum NodeToRelay {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistrationRefusal {
-    /// The registration token is wrong.
+    /// The registration token is wrong, or none and no ticket was given.
     Token,
+    /// The ticket is not for this key, has expired, reaches too far ahead,
+    /// or was not made with the relay's token.
+    Ticket,
     /// The routing id does not belong to the key, or the node could not
     /// prove it holds the key.
     Proof,
@@ -343,7 +376,8 @@ mod tests {
         let register = NodeToRelay::Register {
             routing_id: RoutingId::from_bytes([1; 16]),
             key: NodePublicKey::from_bytes([2; 32]),
-            token: RelayToken::new(" secret ").unwrap(),
+            token: Some(RelayToken::new(" secret ").unwrap()),
+            ticket: None,
         };
         let json = serde_json::to_string(&register).unwrap();
         assert!(json.starts_with(r#"{"type":"register""#));
@@ -360,6 +394,29 @@ mod tests {
             format!(r#"{{"type":"incoming","conn":"{}"}}"#, "cd".repeat(16))
         );
         assert!(RelayToken::new("  ").is_err());
+    }
+
+    #[test]
+    fn a_registration_names_a_ticket_instead_and_hides_its_mac() {
+        let ticket = RelayTicket {
+            key: NodePublicKey::from_bytes([2; 32]),
+            expires_at: 1_800_000_000,
+            mac: TicketMac::from_bytes([9; 32]),
+        };
+        let register = NodeToRelay::Register {
+            routing_id: RoutingId::from_bytes([1; 16]),
+            key: NodePublicKey::from_bytes([2; 32]),
+            token: None,
+            ticket: Some(ticket.clone()),
+        };
+        let json = serde_json::to_string(&register).unwrap();
+        assert!(!json.contains("token"), "{json}");
+        assert!(json.contains(r#""expires_at":1800000000"#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<NodeToRelay>(&json).unwrap(),
+            register
+        );
+        assert!(!format!("{ticket:?}").contains(&TicketMac::from_bytes([9; 32]).to_string()));
     }
 
     #[test]

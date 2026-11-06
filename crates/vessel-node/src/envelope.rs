@@ -248,22 +248,19 @@ impl NodeService {
             .map(|()| Ack)
     }
 
-    /// `fleet.callback` (the home): its relays, for a member's device.
-    #[expect(
-        clippy::unused_async,
-        reason = "every call has the same async shape, so the guard's rows are uniform"
-    )]
+    /// `fleet.callback` (the home): its relays and a ticket, for a member's
+    /// device.
     pub(crate) async fn get_callback(
         &self,
         connection: &Connection,
-        _: GetCallback,
+        request: GetCallback,
     ) -> Result<Callback, WireError> {
-        let Principal::Device { .. } = connection.principal() else {
+        let Principal::Device { id, .. } = connection.principal() else {
             return Err(forbidden(
                 "only a fleet member's device asks its home for its relays",
             ));
         };
-        self.links.callback()
+        self.links.callback(*id, request).await
     }
 
     /// `fleet.forget` (the home's owner; `admin`).

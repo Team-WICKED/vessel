@@ -53,9 +53,10 @@ pub(crate) struct Devices {
     node: NodeId,
     /// The node's public key, which pairing links carry.
     key: NodePublicKey,
-    /// Relays are added while the node runs (a fleet member's home's,
-    /// `crate::relays`); direct addresses are fixed at start.
-    routes: Mutex<Routes>,
+    /// From the node's start-up (`--relay`, `--public`). A fleet member's
+    /// callback relays are not among them: only its grant's link names
+    /// those (`crate::relays`).
+    routes: Routes,
     invitations: Mutex<Invitations>,
     /// Bumped whenever every pending invitation is withdrawn (a fleet home
     /// forgetting a node): a pairing whose invitation was redeemed before
@@ -71,7 +72,7 @@ impl Devices {
             store,
             node,
             key,
-            routes: Mutex::new(routes),
+            routes,
             invitations: Mutex::new(Invitations::default()),
             withdrawals: AtomicU64::new(0),
             connected: Arc::new(Connected::default()),
@@ -81,7 +82,7 @@ impl Devices {
     /// `device.invite`: a single-use pairing link valid for `ttl_secs`
     /// (capped at a day).
     pub(crate) fn invite(&self, request: &InviteDevice) -> Result<Invitation, ServiceError> {
-        self.make_invitation(request, None)
+        self.make_invitation(request, None, None)
     }
 
     /// An invitation like [`invite`](Self::invite)'s whose redemption is
@@ -89,31 +90,28 @@ impl Devices {
     /// member grants its home a credential this way and must know which of
     /// its devices is the home's (it accepts `fleet.deliver` from that one
     /// only).
+    /// `routes`, when given, are the link's instead of the node's own (a
+    /// member's grant naming its home's relays).
     pub(crate) fn invite_tracked(
         &self,
         request: &InviteDevice,
+        routes: Option<Routes>,
     ) -> Result<(Invitation, oneshot::Receiver<DeviceId>), ServiceError> {
         let (paired, redeemed) = oneshot::channel();
-        Ok((self.make_invitation(request, Some(paired))?, redeemed))
+        Ok((
+            self.make_invitation(request, Some(paired), routes)?,
+            redeemed,
+        ))
     }
 
-    /// Where pairing links say this node can be reached, now.
+    /// Where the node's own pairing links say it can be reached.
     pub(crate) fn routes(&self) -> Routes {
-        self.routes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.routes.clone()
     }
 
-    /// Add `relays` (those not there yet) to the routes pairing links name,
-    /// once the node links to them.
-    pub(crate) fn add_relays(&self, relays: &[RouteUrl]) {
-        let mut routes = self.routes.lock().unwrap_or_else(PoisonError::into_inner);
-        for relay in relays {
-            if !routes.relays.contains(relay) {
-                routes.relays.push(relay.clone());
-            }
-        }
+    /// The node's public key.
+    pub(crate) const fn key(&self) -> &NodePublicKey {
+        &self.key
     }
 
     /// Withdraw every pending invitation; how many there were. For a fleet
@@ -137,6 +135,7 @@ impl Devices {
         &self,
         request: &InviteDevice,
         paired: Option<oneshot::Sender<DeviceId>>,
+        routes: Option<Routes>,
     ) -> Result<Invitation, ServiceError> {
         let key = self.key;
         if request.ttl_secs == 0 {
@@ -150,7 +149,7 @@ impl Devices {
         let mut bytes = [0_u8; 16];
         getrandom::fill(&mut bytes).map_err(ServiceError::Random)?;
         let invite = InvitationSecret::from_bytes(bytes);
-        let routes = self.routes();
+        let routes = routes.unwrap_or_else(|| self.routes.clone());
         let offer = PairingOffer {
             v: OfferVersion,
             node: self.node,

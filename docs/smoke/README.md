@@ -96,8 +96,9 @@ docs/smoke/join.sh --local               # or here, under a temporary HOME
 - Expected in the output: `vessel init` lists Gemini CLI and OpenCode as
   not installed (offered, never run). The home runs with a relay on
   loopback (`vesseld relay`, a throwaway token), and the fresh machine's
-  node, started with plain `vessel node start`, registers there too and
-  the home takes its grant (`fleet.callback`); before, it had no route the
+  node, started with plain `vessel node start`, registers there too, with
+  a ticket for its own key (never the relay's token), and the home takes
+  its grant (`fleet.callback`); before, it had no route the
   home could call back on, and `vessel fleet status` said the home did
   not take its grant. A home with no relay still syncs its members, and
   `vessel init --join` and `vessel fleet status` say then that the home
