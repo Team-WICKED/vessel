@@ -215,31 +215,50 @@ fn terminal_mcp(servers: &ResolvedMcpServers) -> Result<TerminalMcp, McpError> {
 mod tests {
     use super::*;
 
+    /// An absolute path on this platform: `/` on Unix, `C:\` on Windows,
+    /// followed by `rest` with `/` as the separator.
+    fn absolute(rest: &str) -> String {
+        if cfg!(windows) {
+            format!("C:\\{}", rest.replace('/', "\\"))
+        } else {
+            format!("/{rest}")
+        }
+    }
+
     #[test]
     fn slugs_follow_claude_code() {
-        let slug = |path: &str| slug(Path::new(path));
+        let slug = |rest: &str| slug(Path::new(&absolute(rest)));
+        // `/` and `C:\` both start the slug with dashes.
+        let start = if cfg!(windows) { "C--" } else { "-" };
         assert_eq!(
-            slug("/home/u/.config/work/x").as_deref(),
-            Some("-home-u--config-work-x")
+            slug("home/u/.config/work/x"),
+            Some(format!("{start}home-u--config-work-x"))
         );
-        assert_eq!(slug("/srv/My_App-2").as_deref(), Some("-srv-My-App-2"));
-        assert_eq!(slug("/tmp/é").as_deref(), Some("-tmp--"));
-        assert_eq!(slug("/tmp/😀").as_deref(), Some("-tmp---"));
-        assert_eq!(slug("relative"), None);
+        assert_eq!(slug("srv/My_App-2"), Some(format!("{start}srv-My-App-2")));
+        assert_eq!(slug("tmp/é"), Some(format!("{start}tmp--")));
+        assert_eq!(slug("tmp/😀"), Some(format!("{start}tmp---")));
+        assert_eq!(super::slug(Path::new("relative")), None);
     }
 
     /// Values computed with Claude Code 2.1.318's own slug function, run
-    /// under Node.
+    /// under Node, for both platforms' paths.
     #[test]
     fn long_slugs_are_cut_and_hashed_as_claude_code_does() {
-        let long = format!("/{}", "a".repeat(250));
+        let long = absolute(&"a".repeat(250));
         let slug = slug(Path::new(&long)).unwrap();
-        assert_eq!(slug, format!("-{}-feo44x", "a".repeat(199)));
-        let mixed = format!("/home/u/{}", "é😀x".repeat(80));
-        let slug = super::slug(Path::new(&mixed)).unwrap();
-        assert!(slug.starts_with("-home-u----x---x"), "{slug}");
-        assert!(slug.ends_with("---x-wk7xa3"), "{slug}");
-        assert_eq!(slug.len(), 207);
+        if cfg!(windows) {
+            assert_eq!(slug, format!("C--{}-hltyrp", "a".repeat(197)));
+        } else {
+            assert_eq!(slug, format!("-{}-feo44x", "a".repeat(199)));
+        }
+        #[cfg(unix)]
+        {
+            let mixed = format!("/home/u/{}", "é😀x".repeat(80));
+            let slug = super::slug(Path::new(&mixed)).unwrap();
+            assert!(slug.starts_with("-home-u----x---x"), "{slug}");
+            assert!(slug.ends_with("---x-wk7xa3"), "{slug}");
+            assert_eq!(slug.len(), 207);
+        }
         assert_eq!(base36(0), "0");
         assert_eq!(base36(35), "z");
         assert_eq!(base36(36), "10");
