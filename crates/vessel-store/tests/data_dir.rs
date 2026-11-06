@@ -117,3 +117,38 @@ async fn the_event_log_is_owner_only() {
     }
     reopened.store.close().await;
 }
+
+fn owner(pid: u32) -> vessel_store::NodeOwner {
+    vessel_store::NodeOwner {
+        pid,
+        executable: std::path::PathBuf::from(format!("/bin/vesseld-{pid}")),
+        version: "0.1.0".to_owned(),
+        started_at: chrono::DateTime::UNIX_EPOCH,
+    }
+}
+
+/// One node per data directory: a second lock fails and names the holder,
+/// and the lock is free again once its holder lets go.
+#[test]
+fn the_node_lock_admits_one_holder_and_names_it() {
+    use vessel_store::NodeLock;
+
+    let temp = tempfile::tempdir().unwrap();
+    let dir = DataDir::new(temp.path());
+    dir.prepare().unwrap();
+    assert_eq!(NodeLock::holder(&dir).unwrap(), None);
+
+    let held = NodeLock::acquire(&dir, &owner(41)).unwrap();
+    assert_eq!(NodeLock::holder(&dir).unwrap(), Some(owner(41)));
+    let Err(StoreError::Locked { holder, .. }) = NodeLock::acquire(&dir, &owner(42)) else {
+        panic!("a second node must not get the lock");
+    };
+    assert_eq!(holder.as_deref(), Some(&owner(41)));
+
+    drop(held);
+    // The record is left behind, but without the lock it names nobody.
+    assert!(dir.owner_path().exists());
+    assert_eq!(NodeLock::holder(&dir).unwrap(), None);
+    let _again = NodeLock::acquire(&dir, &owner(43)).unwrap();
+    assert_eq!(NodeLock::holder(&dir).unwrap(), Some(owner(43)));
+}

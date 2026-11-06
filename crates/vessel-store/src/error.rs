@@ -54,6 +54,18 @@ pub enum StoreError {
         #[source]
         source: std::io::Error,
     },
+    /// Another node holds the data directory's lock.
+    #[error(
+        "{} is held by another node{}",
+        path.display(),
+        holder.as_deref().map(|owner| format!(" (pid {}, version {})", owner.pid, owner.version)).unwrap_or_default()
+    )]
+    Locked {
+        /// The lock file.
+        path: PathBuf,
+        /// That node's record, when it could be read.
+        holder: Option<Box<crate::lock::NodeOwner>>,
+    },
     /// The operating system's random source failed.
     #[error("no randomness available for the node token")]
     Random(#[source] getrandom::Error),
@@ -150,6 +162,7 @@ impl StoreError {
             Self::Closed => ErrorCode::Unavailable,
             Self::Io { .. }
             | Self::NotPrivate { .. }
+            | Self::Locked { .. }
             | Self::Random(_)
             | Self::InvalidNodeId { .. }
             | Self::InvalidToken { .. }
