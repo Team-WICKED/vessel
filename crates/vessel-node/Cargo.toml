@@ -29,6 +29,10 @@ futures-util = { workspace = true, features = ["sink"] }
 # workspace through vessel-store.
 getrandom.workspace = true
 hostname.workspace = true
+# An empty root store for `ws://`-only relays on a machine with no system
+# roots (`vessel_relay::TlsConfig::with_roots`); already built for
+# vessel-relay.
+rustls.workspace = true
 serde_json.workspace = true
 # Invitations are kept by the hash of their secret (ADR 0010).
 sha2.workspace = true

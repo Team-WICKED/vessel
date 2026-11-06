@@ -13,25 +13,21 @@
 //!   RPC layer closes the connection in its usual order. The alternative,
 //!   one shared server, has no way to close one connection from outside.
 //! - The gateway is generic over the carrier and the channel, so the same
-//!   code serves websockets, relays and the in-memory pairs of the tests.
-//! - A failed handshake is returned to the caller, which owns the carrier's
-//!   close: `/secure` and relay data connections close with
-//!   `NodeClose::HandshakeFailed` (4401), which clients treat as final.
-
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reached through /secure and relay data connections once vessel-secure lands"
-    )
-)]
+//!   code serves `/secure` ([`vessel_relay::AxumCarrier`]), relay data
+//!   connections ([`vessel_relay::WsCarrier`]) and the in-memory pairs of
+//!   the tests.
+//! - The handshake goes through [`vessel_relay::respond`], which closes the
+//!   carrier with `NodeClose::HandshakeFailed` (4401) when it fails: with
+//!   NK only the node can tell that a client pinned another key, and the
+//!   code is how the client learns it (final: pair again).
 
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+use vessel_relay::NodeCarrier;
 use vessel_rpc::{FrameTransport, Server, ServerConfig};
-use vessel_secure::{Carrier, NodeKeypair, SecureError};
+use vessel_secure::{NodeKeypair, SecureError};
 
 use crate::devices::Devices;
 use crate::devices::preamble::{self, Admitted, NotAdmitted};
@@ -44,6 +40,8 @@ use crate::service::Connection;
 pub(crate) struct SecureGateway {
     /// The node's key pair, for the handshake.
     pub(crate) keypair: Arc<NodeKeypair>,
+    /// The channel's limits (frame size, handshake timeout).
+    pub(crate) channel: vessel_secure::Config,
     pub(crate) service: Arc<Guarded>,
     pub(crate) lifecycle: Lifecycle,
     pub(crate) devices: Arc<Devices>,
@@ -60,11 +58,20 @@ impl SecureGateway {
     ///
     /// # Errors
     /// The handshake failed (another key or version, a timeout, or the
-    /// carrier); the caller closes the carrier accordingly.
-    pub(crate) async fn accept<C: Carrier>(&self, carrier: C) -> Result<(), SecureError> {
-        let channel = vessel_secure::respond(carrier, &self.keypair).await?;
+    /// carrier); the carrier was closed with 4401 if it was the handshake
+    /// itself.
+    pub(crate) async fn accept<C: NodeCarrier>(&self, carrier: C) -> Result<(), SecureError> {
+        let channel = vessel_relay::respond(carrier, &self.keypair, &self.channel).await?;
         self.serve(channel).await;
         Ok(())
+    }
+
+    /// [`accept`](Self::accept) for a carrier from a transport task: the
+    /// failure is logged, since nobody waits for it.
+    pub(crate) async fn accept_logged<C: NodeCarrier>(&self, carrier: C, via: &'static str) {
+        if let Err(error) = self.accept(carrier).await {
+            tracing::info!(via, error = %error, "a secure handshake failed");
+        }
     }
 
     /// Serve one established secure channel until it ends: the preamble,
