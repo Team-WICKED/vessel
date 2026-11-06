@@ -297,10 +297,11 @@ pub(crate) enum FleetCommand {
     /// The home's members and what each last applied (needs `admin`).
     Members,
     /// On the home: let a member node grant again under a new key (it was
-    /// reinstalled). The home binds each node id to the key of its first
-    /// grant for good; this forgets that binding and the node's grants,
-    /// and records that it did. Revoke any of the node's devices that
-    /// should not sync any more separately.
+    /// reinstalled) or a new name. The home binds each node id to the key
+    /// and name of its first grant for good; this forgets that binding and
+    /// the node's grants, and records that it did. The node is then invited
+    /// again: only a device paired after this may take its id and name.
+    /// Revoke any of its old devices that should not sync any more.
     Forget {
         /// The node's id (`vessel fleet members`, `list_nodes`).
         node: NodeId,

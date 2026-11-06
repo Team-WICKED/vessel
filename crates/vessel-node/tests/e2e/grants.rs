@@ -516,7 +516,8 @@ async fn a_revoked_members_id_stays_bound_to_its_key() {
 
 /// A node reinstalled with a new key keeps its id: the home refuses its
 /// grant until its owner runs `vessel fleet forget` (here
-/// `fleet::forget`), which drops the binding and the old grants.
+/// `fleet::forget`), which drops the binding and the old grants, and the
+/// node is invited and joins again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_reinstalled_node_grants_again_once_the_home_forgets_it() {
     within(async {
@@ -559,13 +560,20 @@ async fn a_reinstalled_node_grants_again_once_the_home_forgets_it() {
             .unwrap()
             .unwrap();
         assert_eq!(forgot.devices.len(), 1, "{forgot:?}");
-        // Its next connection grants again.
+        // Its device was paired before the forget: a restart is not enough
+        // (round 3: the forgotten id goes only to a device paired since).
         node.stop().await.unwrap();
-        let _node = member_node(&relay, &fixture, "desktop").await;
+        let node = member_node(&relay, &fixture, "desktop").await;
+        let since = Utc::now();
+        reported_after(&home, "reinstalled", since).await;
+        assert!(home.owner.call_on(id, ListSessions).await.is_err());
+        // Invited again and joined from there: granted.
+        join_again(&home, &fixture, "reinstalled again").await;
         assert!(
             reaches(&home, id).await,
             "still refused after the home forgot it"
         );
+        drop(node);
         relay.stop().await;
     })
     .await;
@@ -700,6 +708,121 @@ async fn stopping_a_member_does_not_wait_for_its_grant() {
         assert!(dialed.load(std::sync::atomic::Ordering::Acquire) > 0);
         let stopped = tokio::time::timeout(Duration::from_secs(5), node.stop()).await;
         assert!(stopped.is_ok(), "stopping waited for the grant");
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// The review's round 3, finding 1: while a member's device is revoked, a
+/// `sync` device's own node (its own id and key) took the member's name;
+/// the member was then refused for the clash when it joined again, and
+/// calls by that name went to the other node. The name stays the member's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_revoked_members_name_stays_reserved() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let someone = sync_device(&relay, &home)
+            .await
+            .connect(client())
+            .await
+            .unwrap();
+        let victim = member_granting(
+            &relay,
+            &home,
+            "desktop",
+            vec![Scope::Sync],
+            DEFAULT_GRANT.to_vec(),
+        )
+        .await;
+        let member_device = home
+            .owner
+            .devices()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|device| device.label == "desktop")
+            .unwrap()
+            .id;
+        home.owner.revoke_device(member_device).await.unwrap();
+
+        let (_fixture, _own, owner) = stock_node(&relay, "desktop", None).await;
+        let (refusal, message) = code(
+            someone
+                .call(GrantHome {
+                    link: link(&owner, "home").await,
+                })
+                .await,
+        );
+        assert_eq!(refusal, ErrorCode::Conflict, "{message}");
+        assert!(message.contains("named `desktop`"), "{message}");
+
+        join_again(&home, &victim.fixture, "desktop again").await;
+        assert!(
+            reaches(&home, victim.id()).await,
+            "the member's own grant was refused"
+        );
+        let named: Vec<vessel_proto::NodeId> = home
+            .owner
+            .call(ListPeers)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|peer| peer.name == "desktop")
+            .map(|peer| peer.node)
+            .collect();
+        assert_eq!(named, [victim.id()]);
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// The review's round 3, finding 2: right after `vessel fleet forget` the
+/// id and the name are known and free, and an impostor's grant took them
+/// before the reinstalled node's. Now only a device paired after the
+/// forget takes them: devices from before are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn after_a_forget_no_earlier_device_takes_the_id_or_the_name() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let someone = sync_device(&relay, &home)
+            .await
+            .connect(client())
+            .await
+            .unwrap();
+        let victim = member_granting(
+            &relay,
+            &home,
+            "desktop",
+            vec![Scope::Sync],
+            DEFAULT_GRANT.to_vec(),
+        )
+        .await;
+        let _forgot = fleet::forget(&FleetFiles::new(&home.fixture.data_dir()), victim.id())
+            .unwrap()
+            .unwrap();
+
+        let (_fixture, _impostor, bait) = impostor_link(&relay, victim.id()).await;
+        let (refusal, message) = code(someone.call(GrantHome { link: bait }).await);
+        assert_eq!(refusal, ErrorCode::Conflict, "{message}");
+        assert!(message.contains("forgot"), "{message}");
+        let (_fixture, _own, owner) = stock_node(&relay, "desktop", None).await;
+        let (refusal, message) = code(
+            someone
+                .call(GrantHome {
+                    link: link(&owner, "home").await,
+                })
+                .await,
+        );
+        assert_eq!(refusal, ErrorCode::Conflict, "{message}");
+        assert!(message.contains("forgot"), "{message}");
+
+        // The member itself, invited again: granted.
+        join_again(&home, &victim.fixture, "desktop again").await;
+        assert!(reaches(&home, victim.id()).await);
         relay.stop().await;
     })
     .await;
