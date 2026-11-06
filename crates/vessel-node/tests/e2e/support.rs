@@ -3,8 +3,10 @@
 //! (`claude-agent-acp`), so both session modes run through the real lookup
 //! and launch code.
 
+use std::fmt;
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Once;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -22,16 +24,87 @@ use vessel_testkit::Fake;
 
 const SAFETY_NET: Duration = Duration::from_secs(60);
 
+/// How long one awaited step may take ([`step`], [`collect_until`]): well
+/// under [`SAFETY_NET`], so a hang fails naming the step it is in rather
+/// than as "test timed out".
+pub(crate) const STEP: Duration = Duration::from_secs(20);
+
+/// What the logs show by default ([`logs`]); `RUST_LOG` replaces it.
+const LOG_FILTER: &str = "info,vessel_node=debug,vessel_relay=debug,vessel_client=debug,\
+    vessel_rpc=debug,vessel_secure=debug,vessel_session=debug,vessel_pty=debug,\
+    vessel_testkit=debug";
+
 /// The safety net starts after the fakes are built: the first build of a
 /// run can take a minute on a cold machine (see `vessel_testkit::within`).
 /// The test is boxed at once, so the future handed around stays small.
 pub(crate) fn within<F: Future>(test: F) -> impl Future<Output = F::Output> {
+    logs();
     let test = Box::pin(test);
     async move {
         vessel_testkit::within(SAFETY_NET, test)
             .await
             .expect("test timed out")
     }
+}
+
+/// Send the node's, relay's and client's logs (debug, see [`LOG_FILTER`])
+/// to the output libtest keeps for each test and prints only for one that
+/// fails, once per test binary.
+///
+/// [Decision Log]
+/// - Purpose: a hang seen once on one CI runner (a Windows run of the
+///   tampering-relay test) left nothing but "test timed out". The logs of
+///   that run say which connection ended, when, and why.
+/// - How it reaches the right test: libtest captures output per thread,
+///   and a thread inherits the capture of the thread that spawned it.
+///   `#[tokio::test]` builds its runtime on the test's thread, so its
+///   workers, their blocking threads and the node's PTY threads all write
+///   into that test's capture; [`step`] logs each step there too, so the
+///   logs read in the test's own order.
+/// - Alternatives: logs only when a test asks for them (the next hang may
+///   be in a test that did not); a per-test subscriber (`set_default` is
+///   per thread and does not follow tasks onto other workers).
+/// - Cost: formatting debug events for every test, kept in memory until
+///   the test ends. Nothing is printed for a test that passes.
+fn logs() {
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_unset| tracing_subscriber::EnvFilter::new(LOG_FILTER));
+        let installed = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_test_writer()
+            .try_init();
+        // Another subscriber was installed first: its logs are kept instead.
+        drop(installed);
+    });
+}
+
+/// Await `future`, failing with `what` if it takes longer than [`STEP`].
+/// A test that hangs then says which step, of which round, it hung in,
+/// and the step is in the test's logs ([`logs`]) in order with the node's.
+/// Logged when called, so call it where it is awaited. `future` is boxed,
+/// so a step's future stays small whatever it wraps.
+pub(crate) fn step<F: Future>(
+    what: impl fmt::Display,
+    future: F,
+) -> impl Future<Output = F::Output> {
+    let what = what.to_string();
+    tracing::info!("step: {what}");
+    let future = Box::pin(future);
+    async move {
+        tokio::time::timeout(STEP, future)
+            .await
+            .unwrap_or_else(|_elapsed| panic!("stuck for {} s: {what}", STEP.as_secs()))
+    }
+}
+
+/// The last `chars` characters of `text`, for a failure message.
+pub(crate) fn tail(text: &str, chars: usize) -> String {
+    let mut last: Vec<char> = text.chars().rev().take(chars).collect();
+    last.reverse();
+    last.into_iter().collect()
 }
 
 /// A data directory and a harness directory, shared by every node started
@@ -196,20 +269,32 @@ pub(crate) fn output_of(records: &[EventRecord]) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// Read records into `seen` until the output contains `needle`.
+/// Read records into `seen` until the output contains `needle`. Fails
+/// after [`STEP`] showing the end of the output, escaped: a terminal's
+/// output can hold the text with control sequences inside it.
 pub(crate) async fn collect_until(
     stream: &mut SessionStream,
     seen: &mut Vec<EventRecord>,
     needle: &str,
 ) {
-    while !output_of(seen).contains(needle) {
-        let record = stream
-            .next()
-            .await
-            .unwrap_or_else(|| panic!("stream ended before {needle:?}"))
-            .unwrap();
-        seen.push(record);
-    }
+    tracing::info!("step: reading the output until {needle:?}");
+    let reading = async {
+        while !output_of(seen).contains(needle) {
+            let record = stream
+                .next()
+                .await
+                .unwrap_or_else(|| panic!("stream ended before {needle:?}"))
+                .unwrap();
+            seen.push(record);
+        }
+    };
+    let read = tokio::time::timeout(STEP, reading).await;
+    assert!(
+        read.is_ok(),
+        "no {needle:?} in the output after {} s; it ends with {:?}",
+        STEP.as_secs(),
+        tail(&output_of(seen), 600)
+    );
 }
 
 pub(crate) fn seqs(records: &[EventRecord]) -> Vec<u64> {

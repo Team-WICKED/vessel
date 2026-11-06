@@ -75,7 +75,7 @@ pub async fn run(dir: DataDir) -> ProxyExit {
     match attach(&dir).await {
         Ok(exit) => exit,
         Err(error) => {
-            tracing::error!(error = %chain(&error), "vesseld attach failed");
+            tracing::error!(error = %crate::error::chain(&error), "vesseld attach failed");
             error.exit()
         }
     }
@@ -148,16 +148,4 @@ async fn read_token(dir: &DataDir) -> Result<NodeToken, AttachError> {
         .await
         .map_err(|error| AttachError::Spawn(io::Error::other(error)))?
         .map_err(AttachError::Token)
-}
-
-/// An error and its causes on one line.
-fn chain(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut text = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        text.push_str(": ");
-        text.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    text
 }
