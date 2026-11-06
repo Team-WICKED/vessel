@@ -272,3 +272,40 @@ async fn agents_are_held_to_the_count_and_depth_limits() {
     })
     .await;
 }
+
+/// Once a session's end is visible, its agent is done here, even before
+/// the node retires it (which waits for the actor to finish): a new
+/// connection is refused, and one still open can start nothing. Without
+/// the `has_ended` checks this failed only when the test won the race
+/// against `retire`; with them it holds every time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ended_sessions_agent_starts_nothing() {
+    within(async {
+        let fixture = Fixture::new();
+        let node = fixture
+            .start_with(|config| config.vessel_mcp = Some(vessel_mcp(&fixture)))
+            .await;
+        let owner = fixture.connect(&node).await;
+        let mut session = structured(&owner, &fixture).await;
+        let (_program, socket, auth) = credential(&owner, &mut session).await;
+        let agent = as_agent(&socket, &auth).await;
+
+        owner.kill(session.id).await.unwrap();
+        read_until(&mut session.stream, &mut session.seen, |record| {
+            status_of(record).is_some_and(|status| !status.is_live())
+        })
+        .await;
+
+        assert!(
+            agent
+                .create_session(terminal_spec(&fixture, HarnessKind::ClaudeCode))
+                .await
+                .is_err()
+        );
+        assert!(refused(
+            NodeClient::connect_local(&socket, &LocalCredential::Agent(auth), client()).await
+        ));
+        node.stop().await.unwrap();
+    })
+    .await;
+}
