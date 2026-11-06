@@ -23,6 +23,35 @@ use crate::support::{
     Fixture, agent_of, ask, prompt, read_until, status_of, structured_spec, within,
 };
 
+/// Where an import into `home` for directory `cwd` puts Claude Code's
+/// project: named after the directory's resolved form, as Claude Code
+/// names it (macOS's temporary directories are behind `/var` ->
+/// `/private/var`); Windows keeps the given form.
+fn project_in(home: &Path, cwd: &Path) -> PathBuf {
+    #[cfg(unix)]
+    let cwd = cwd.canonicalize().unwrap();
+    #[cfg(not(unix))]
+    let cwd = cwd.to_owned();
+    claude_project(home, &cwd).unwrap()
+}
+
+/// A directory reached through a symbolic link on Unix, so its given and
+/// resolved spellings differ here as macOS's temporary directories do
+/// everywhere; the directory itself elsewhere.
+#[cfg(unix)]
+fn through_link(dir: &Path) -> PathBuf {
+    let real = dir.join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    link
+}
+
+#[cfg(not(unix))]
+fn through_link(dir: &Path) -> PathBuf {
+    dir.to_owned()
+}
+
 fn name(text: &str) -> ProfileName {
     text.parse().unwrap()
 }
@@ -267,11 +296,17 @@ async fn a_conversation_is_copied_to_another_profile_and_resumed_there() {
         // is not written again.
         let session = &source.session;
         let other = tempfile::tempdir().unwrap();
-        let again = import(from, "claude-work", Some(other.path().to_owned()), false);
+        let elsewhere = through_link(other.path());
+        let again = import(from, "claude-work", Some(elsewhere.clone()), false);
         let again = client.import_session(again).await.unwrap();
         assert_eq!((again.written, again.session.is_none()), (2, true));
-        let renamed = claude_project(&work, other.path()).unwrap();
+        let renamed = project_in(&work, &elsewhere);
         assert!(renamed.join(format!("{session}.jsonl")).is_file());
+        #[cfg(unix)]
+        assert!(
+            !claude_project(&work, &elsewhere).unwrap().exists(),
+            "named after the resolved directory, not the link"
+        );
         assert!(
             renamed
                 .join(format!("{session}/subagents/a.jsonl"))
@@ -286,6 +321,7 @@ async fn a_conversation_is_copied_to_another_profile_and_resumed_there() {
             code(client.import_session(blocked).await),
             ErrorCode::Conflict
         );
+        assert!(!project_in(&work, third.path()).exists());
         assert!(!claude_project(&work, third.path()).unwrap().exists());
         assert_eq!(
             std::fs::read_to_string(work.join(&source.history)).unwrap(),
@@ -346,7 +382,7 @@ async fn memory_goes_beside_what_differs_and_terminal_sessions_stay() {
         elsewhere.project = Some(other.path().to_owned());
         let moved = client.import_memory(elsewhere).await.unwrap();
         assert_eq!(moved.written, 2);
-        let other_memory = claude_project(&work, other.path()).unwrap().join("memory");
+        let other_memory = project_in(&work, other.path()).join("memory");
         assert!(other_memory.join("notes/a.md").is_file());
 
         // All of a profile's memory into one project: refused.

@@ -152,32 +152,40 @@ mod tests {
         fs::write(path, "x").unwrap();
     }
 
+    /// An absolute directory that does not exist, so it is named as
+    /// given (`/srv/...` is not absolute on Windows), and its project's
+    /// name.
+    fn directory(name: &str) -> (PathBuf, String) {
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("vessel-test-absent")
+            .join(name);
+        let slug = crate::harnesses::claude_slug(&path).unwrap();
+        (path, slug)
+    }
+
     #[test]
     fn claude_memory_is_per_project_and_links_are_not_followed() {
         let home = tempfile::tempdir().unwrap();
         let root = home.path();
-        // Absolute, not existing: named as given.
-        let project = Path::new("/srv/work/app");
-        write(&root.join("projects/-srv-work-app/memory/MEMORY.md"));
-        write(&root.join("projects/-srv-work-app/memory/notes/a.md"));
-        write(&root.join("projects/-srv-work-app/abc.jsonl"));
-        write(&root.join("projects/-srv-other/memory/b.md"));
+        let (project, slug) = directory("app");
+        let (_, other) = directory("other");
+        let projects = root.join("projects");
+        write(&projects.join(&slug).join("memory/MEMORY.md"));
+        write(&projects.join(&slug).join("memory/notes/a.md"));
+        write(&projects.join(&slug).join("abc.jsonl"));
+        write(&projects.join(&other).join("memory/b.md"));
         let outside = tempfile::tempdir().unwrap();
         write(&outside.path().join("secret.md"));
         #[cfg(unix)]
-        std::os::unix::fs::symlink(
-            outside.path(),
-            root.join("projects/-srv-work-app/memory/linked"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), projects.join(&slug).join("memory/linked"))
+            .unwrap();
 
-        let one = memory_files(HarnessKind::ClaudeCode, root, Some(project)).unwrap();
+        let one = memory_files(HarnessKind::ClaudeCode, root, Some(&project)).unwrap();
+        let mine = Path::new("projects").join(&slug).join("memory");
         assert_eq!(
             one,
-            [
-                PathBuf::from("projects/-srv-work-app/memory/MEMORY.md"),
-                PathBuf::from("projects/-srv-work-app/memory/notes/a.md"),
-            ]
+            [mine.join("MEMORY.md"), mine.join("notes").join("a.md")]
         );
         let all = memory_files(HarnessKind::ClaudeCode, root, None).unwrap();
         assert_eq!(all.len(), 3, "{all:?}");
@@ -208,20 +216,21 @@ mod tests {
 
     #[test]
     fn claude_paths_follow_the_project_and_codex_paths_stay() {
-        let (from, to) = (Path::new("/srv/work/app"), Path::new("/home/u/app"));
+        let ((from, source), (to, target)) = (directory("work/app"), directory("u/app"));
         let renamed =
-            |path: &str| rebase(HarnessKind::ClaudeCode, Path::new(path), from, to).unwrap();
+            |path: &str| rebase(HarnessKind::ClaudeCode, Path::new(path), &from, &to).unwrap();
+        let projects = Path::new("projects");
         assert_eq!(
-            renamed("projects/-srv-work-app/abc.jsonl"),
-            Path::new("projects/-home-u-app/abc.jsonl")
+            renamed(&format!("projects/{source}/abc.jsonl")),
+            projects.join(&target).join("abc.jsonl")
         );
         assert_eq!(
-            renamed("projects/-srv-work-app/abc/subagents/x.jsonl"),
-            Path::new("projects/-home-u-app/abc/subagents/x.jsonl")
+            renamed(&format!("projects/{source}/abc/subagents/x.jsonl")),
+            projects.join(&target).join("abc/subagents/x.jsonl")
         );
         assert_eq!(
             renamed("projects/-private-srv-work-app/abc.jsonl"),
-            Path::new("projects/-home-u-app/abc.jsonl"),
+            projects.join(&target).join("abc.jsonl"),
             "a spelling of the directory only the source node could resolve"
         );
         assert_eq!(
@@ -232,14 +241,14 @@ mod tests {
         assert_eq!(renamed("projects/x"), Path::new("projects/x"), "no project");
         let rollout = Path::new("sessions/2026/11/06/rollout-x-abc.jsonl");
         assert_eq!(
-            rebase(HarnessKind::Codex, rollout, from, to).unwrap(),
+            rebase(HarnessKind::Codex, rollout, &from, &to).unwrap(),
             rollout
         );
         assert!(
             rebase(
                 HarnessKind::ClaudeCode,
                 rollout,
-                from,
+                &from,
                 Path::new("relative")
             )
             .is_err()
