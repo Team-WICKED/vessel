@@ -256,9 +256,13 @@ It is idempotent: running it again fills gaps and changes nothing else.
   created exclusively under a random name in the directory the node gives
   (`<data_dir>/mcp`, owner-only and emptied at start, so a crash leaves
   nothing behind; there is no shared fallback), written right before the
-  program starts, and removed when the session ends. On Windows, where
-  Vessel sets no ACLs, it is written only inside the user's profile
-  directory, whose inherited ACL admits only that user.
+  program starts, and removed when the session ends.
+- **Windows (decision, 2026-11-06):** the file is owner-only because it is
+  written inside the user's profile directory, whose inherited ACL admits
+  only that user, the protection the node's `token` and `node.key` rely
+  on; anywhere else it is refused. Trade-off: Vessel sets no explicit
+  DACL, since that needs `unsafe` Win32 calls or a Win32 crate. Revisit if
+  Vessel ever has to write the file outside the profile directory.
 - **Codex** has no file flag that leaves its home alone, so each server is
   one `-c mcp_servers.<name>={...}` override that replaces any server of
   that name whole. Values go into Codex's environment: a stdio server's
