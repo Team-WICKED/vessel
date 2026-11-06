@@ -291,7 +291,8 @@ pub(crate) async fn run<C: Connector>(
         failures = 0;
         tracing::info!(home = %client.node().id, "connected to the fleet's home");
         links.connected_home(client.clone());
-        links.grant(&client, &membership, &stop).await;
+        let granted = links.grant(&client, &membership, &stop).await;
+        note_grant(&local, granted.err().map(|error| error.message)).await;
         session(&client, &local, pacing, &mut applied, &stop).await;
         links.lost_home();
     }
@@ -420,6 +421,16 @@ async fn note_error(local: &Arc<Local>, message: String) {
     let local = Arc::clone(local);
     let _written = tokio::task::spawn_blocking(move || {
         local.state.update(|state| state.error = Some(message));
+    })
+    .await;
+}
+
+/// Why the home did not take this node's grant on this connection, or
+/// `None` once it did (or nothing was asked).
+async fn note_grant(local: &Arc<Local>, refused: Option<String>) {
+    let local = Arc::clone(local);
+    let _written = tokio::task::spawn_blocking(move || {
+        local.state.update(|state| state.grant = refused);
     })
     .await;
 }

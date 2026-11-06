@@ -45,7 +45,7 @@ and 0013).
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `node.key`, `vessel.db`, `profiles.toml`, `mcp/`) and its locks, SQLite event log (schema 2: paired devices; schema 3: sessions' current profile and creator; schema 4: where a session came from, `origin` and `via`, protocol 6), retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting; this node's secrets) (milestone 4); transfers (`transfers`: `session.export`/`memory.export` snapshots held for whoever opened them, `transfer.read`/`close`, expiry, and `session.import`/`memory.import` pulling through a `Source`: this node, or another through the envelope as the caller) (protocol 6, F4); `envelope` and `fleet/links` (protocol 6, Track X): `fleet.forward`/`relay`/`deliver` with the delegated principal (the delivering device's scopes ∩ the origin's, ownership and agent limits applied to the origin), the mutual grant (`fleet.grant`, `fleet/granted.json` on a member, `fleet/grants/` and the binding record `fleet/bindings.json` on the home, `vessel fleet forget`), `fleet.peers`/`nodes`, and `session.read` waiting with its shares (`waits`). | proto, rpc, harness, session, store, secure, relay, fleet, client |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting; this node's secrets) (milestone 4); transfers (`transfers`: `session.export`/`memory.export` snapshots held for whoever opened them, `transfer.read`/`close`, expiry, and `session.import`/`memory.import` pulling through a `Source`: this node, or another through the envelope as the caller) (protocol 6, F4); `envelope` and `fleet/links` (protocol 6, Track X): `fleet.forward`/`relay`/`deliver` with the delegated principal (the delivering device's scopes ∩ the origin's, ownership and agent limits applied to the origin), the mutual grant (`fleet.grant`, `fleet/granted.json` on a member, `fleet/grants/` and the binding record `fleet/bindings.json` on the home, `fleet.forget`, which withdraws the home's outstanding invitations), `fleet.peers`/`nodes`, and `session.read` waiting with its shares (`waits`). | proto, rpc, harness, session, store, secure, relay, fleet, client |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4); fetching a file chunk by chunk into a caller's `ChunkSink` (`fetch_chunks`, protocol 6). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
@@ -160,8 +160,10 @@ they started.
   through a local relay (pairing, every command through it, revocation).
   Still to do by hand: `wss://` behind an HTTPS proxy on a public host.
 - **Milestone 4** (the fleet; `docs/plans/backend-m4.md`, ADRs 0011 to
-  0013, protocols 5 and 6): Tracks H, F and X and the review fixes
-  (Track R) are merged on `backend/m4`, green on Linux, macOS and Windows.
+  0013, protocols 5 and 6): Tracks H, F and X are merged on `backend/m4`,
+  green on Linux, macOS and Windows. An independent security review of
+  the fleet and the envelope (Track R) ran five rounds and is closed; its
+  findings and fixes are recorded round by round in the plan.
   Still to do by hand: the plan's two smokes (four profiles on one node; a
   fresh machine joining), with the scripts in `docs/smoke/`.
 
@@ -175,7 +177,7 @@ In the crate table's order.
   every method, the node's public key. 5: profiles, `session.move_profile`,
   creators, agent credentials, fleet manifests, `fleet.*` and MCP server
   definitions. 6: the `relay` scope, the envelope (`forward`: `Origin`,
-  `fleet.forward`/`relay`/`deliver`), `fleet.grant`/`peers`/`nodes`,
+  `fleet.forward`/`relay`/`deliver`), `fleet.grant`/`forget`/`peers`/`nodes`,
   `session.read` with `wait`, transfers (`transfer`, with the size
   limits) and secrets (`secret`: `SecretValue`, redacted in `Debug`).
   Every method has a first version (`since`), and a call that uses a
@@ -327,11 +329,19 @@ In the crate table's order.
     agent limits applied to the origin); `fleet/links` (the mutual grant:
     a member grants its home the scopes chosen at join, once per join,
     `fleet/granted.json`; the home keeps the credentials under
-    `fleet/grants/` and binds each member device to the node id and key of
-    its first grant, `fleet/bindings.json`, released by `vessel fleet
-    forget`); `fleet.peers` and `fleet.nodes`; `session.read` with `wait`
-    and its shares (`waits`: at most half of a connection's calls, and 8
-    per origin on a node).
+    `fleet/grants/`); `fleet.peers` and `fleet.nodes`; `session.read` with
+    `wait` and its shares (`waits`: 8 per origin, 16 per other node, 16 per
+    relaying member device, 32 per connection).
+  - Fleet identity, after the security review: the home binds each
+    member's node id, key and name for good (`fleet/bindings.json`); a
+    name stays reserved while its node's device is revoked, and the home
+    refuses a member named like itself or another member (the fix is the
+    node's `--name`). Rebinding a reinstalled or renamed node takes the
+    owner's `fleet.forget { node }` on the home (admin, not forwardable):
+    it withdraws every outstanding invitation and records the devices that
+    exist then, and the forgotten id or name goes only to a device paired
+    afterwards, the first to claim it keeping it. Refusals about revoked
+    or forgotten nodes carry no ids or times.
   - Transfers (F4, protocol 6): `transfers` keeps `session.export` and
     `memory.export` snapshots under `<data_dir>/transfers/<id>/` for the
     caller that opened them (another caller gets `not_found`), at most 16
@@ -432,7 +442,8 @@ In the crate table's order.
   from standard input only), every command to a paired node through
   `Pinned<SecureConnector<WsDialer>>`. Milestone 4: `profiles`, `run
   --profile`, `session move-profile|copy|move`, `fleet
-  init|invite|join|leave|status|members|forget|restore`, `fleet secret
+  init|invite|join|leave|status|members|forget|restore` (`forget` against
+  the home over `--node`), `fleet secret
   set|list|delete|copy` (values from a prompt without echo or stdin,
   never argv), `fleet memory copy`, `init` (idempotent steps: node
   identity, harnesses, install offers, profiles for other accounts' homes,

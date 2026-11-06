@@ -225,9 +225,22 @@ vessel fleet members
   restore <path>`. Files Vessel did not write are never touched.
 - `vessel fleet join` joins a node that is already set up; `vessel fleet
   leave` stops following, and the files stay.
-- The home binds each member's node id to its key. A member reinstalled
-  with a new key is refused until `vessel fleet forget <node id>` on the
-  home.
+- Names pick nodes (`--to`, the agents' `node`), so the home refuses a
+  member named like itself or another member. A node takes its machine's
+  name unless told otherwise, and machines cloned from one image share
+  one: name each node when you join it (`vessel node start --name <name>`,
+  `VESSEL_NAME`, or `--name` in the service unit `vessel init --service`
+  wrote). A refused member says why in `vessel fleet status` and asks
+  again after a restart under its new name.
+- The home binds each member's node id to its key and name for good, and
+  keeps a name reserved while its node's device is revoked. A member
+  reinstalled with a new key, or renamed, is refused until you run `vessel
+  fleet forget <node id> --node <home>` (it needs `admin` there) and then
+  invite it again: forgetting withdraws every invitation still outstanding
+  on the home, and the id and name then go to the first member device
+  paired afterwards that claims them, so invite only that node next and
+  others once it has joined. Revoke its old device there too if it should
+  not sync any more.
 
 ### MCP servers and secrets
 

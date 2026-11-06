@@ -37,8 +37,8 @@
 //!   each hop.
 
 use vessel_proto::{
-    Ack, Call, Deliver, ErrorCode, FleetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers,
-    Method, NodeId, Origin, OriginBy, RelayCall, Reply, Scope, WireError,
+    Ack, Call, Deliver, ErrorCode, FleetNode, ForgetNode, Forward, Forwarded, GrantHome, ListNodes,
+    ListPeers, Method, NodeForgotten, NodeId, Origin, OriginBy, RelayCall, Reply, Scope, WireError,
 };
 
 use crate::guard::Guarded;
@@ -247,6 +247,15 @@ impl NodeService {
             .map(|()| Ack)
     }
 
+    /// `fleet.forget` (the home's owner; `admin`).
+    pub(crate) async fn forget_node(
+        &self,
+        _: &Connection,
+        request: ForgetNode,
+    ) -> Result<NodeForgotten, WireError> {
+        self.links.forget_node(request.node).await
+    }
+
     /// `fleet.peers` (the home).
     pub(crate) async fn list_peers(
         &self,
@@ -359,6 +368,7 @@ async fn run_here(
         | Call::Relay(_)
         | Call::Deliver(_)
         | Call::GrantHome(_)
+        | Call::ForgetNode(_)
         | Call::ListPeers(_)
         | Call::ListNodes(_)
         | Call::GetManifest(_)

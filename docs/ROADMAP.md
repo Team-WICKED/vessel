@@ -87,6 +87,9 @@ Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
 - A relay grant with capped scopes (a read-only relay), which needs a
   field on invitations and devices, so a protocol change (ADR 0013).
 - Agent grants per profile (`[profiles.X.agent]`, ADR 0013).
+- A node id derived from the node's key, so pairing proves the id and the
+  home's first-grant binding follows from the key alone (proposed by the
+  security review; a protocol version and a migration of existing ids).
 - `vessel init --service` on Windows (systemd and launchd only today).
 - The first tagged release, and signing: the release workflow exists but
   has never run.

@@ -27,7 +27,8 @@ use crate::fleet::{
     ReportApplied, WatchFleet,
 };
 use crate::forward::{
-    Deliver, FleetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers, RelayCall,
+    Deliver, FleetNode, ForgetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers,
+    NodeForgotten, RelayCall,
 };
 use crate::harness::Harness;
 use crate::name::SecretName;
@@ -294,6 +295,8 @@ rpc_methods! {
     ListPeers / list_peers / "fleet.peers" [Sync, 6]: ListPeers => Vec<FleetNode>;
     /// The fleet as this node knows it (protocol 6).
     ListNodes / list_nodes / "fleet.nodes" [Read, 6]: ListNodes => Vec<FleetNode>;
+    /// The home forgets a member node's binding (protocol 6).
+    ForgetNode / forget_node / "fleet.forget" [Admin, 6]: ForgetNode => NodeForgotten;
     /// Snapshot a session's harness files (protocol 6).
     ExportSession / export_session / "session.export" [Operate, 6]: ExportSession => TransferManifest;
     /// Copy a session here from a node of the fleet (protocol 6).
@@ -361,6 +364,7 @@ impl Call {
             | Self::Relay(_)
             | Self::Deliver(_)
             | Self::GrantHome(_)
+            | Self::ForgetNode(_)
             | Self::ListPeers(_)
             | Self::ListNodes(_)
             | Self::ExportSession(_)
