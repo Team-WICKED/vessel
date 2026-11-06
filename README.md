@@ -154,16 +154,21 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   | `--max-clients-per-node` | relayed connections to one node at once | 128 |
   | `--max-bytes-per-second` | bytes a second each way through one connection, after a one-second burst (0: no limit; at least 64 KiB) | 16 MiB |
   | `--max-connections` | sockets open at once, of every kind, counted from accept | 1000 |
-  | `--max-unauthenticated` | of `--max-connections`, sockets that have not authenticated yet; the rest is kept for registered nodes and paired clients | 500 |
-  | `--max-connections-per-address` | sockets not authenticated yet from one address, counted from accept; not applied to a trusted proxy's sockets | 16 |
-  | `--max-registering-per-address` | nodes still registering at once from one address | 8 |
+  | `--max-unauthenticated` | of `--max-connections`, sockets that have not authenticated yet; the rest is kept for registered nodes and paired clients. Less than half of `--max-connections` | 400 |
+  | `--max-connections-per-address` | sockets not authenticated yet from one address, counted from accept; not applied to a trusted proxy's sockets. 4 × it under half of `--max-unauthenticated` | 16 |
+  | `--max-registering-per-address` | nodes still registering at once from one address. 4 × it under half of `--max-registering` | 7 |
   | `--reserved-registering` | of `--max-registering`, places kept for nodes that registered here before (at most half) | 16 |
-  | `--max-clients-per-address` | relayed connections at once from one address | 16 |
+  | `--max-clients-per-address` | relayed connections at once from one address. 4 × it under half of `--max-clients` | 16 |
   | `--trusted-proxy` | a proxy whose `--client-address-header` is believed (above); repeatable | none |
 
   Per address means an IPv4 address, or an IPv6 `/64`; a `/56` may hold
   twice each per-address limit and a `/48` four times, so walking the
-  prefixes of one allocation gains little. New connections from one
+  prefixes of one allocation gains little. So that one `/48` never holds
+  half of anything, the relay refuses to start unless four times each
+  per-address limit is less than half of its pool, and
+  `--max-unauthenticated` less than half of `--max-connections` (the
+  rules in the table); the refusal names both flags, the largest value
+  that would pass and the smallest pool that would. New connections from one
   address are rate-limited from accept (30 at once, then one a second;
   scaled the same way); a socket that authenticates gives its share of
   the rate back, so only sockets that never do spend it. A socket has
@@ -415,7 +420,7 @@ start a session on another machine and read its answer.
 | `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
 | `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` (needs a trusted proxy) | unset: the peer's address |
 | `VESSEL_RELAY_TRUSTED_PROXY` | `vesseld relay --trusted-proxy`, comma-separated | none |
-| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND`, `VESSEL_RELAY_MAX_CONNECTIONS`, `VESSEL_RELAY_MAX_UNAUTHENTICATED`, `VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS`, `VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS`, `VESSEL_RELAY_RESERVED_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB, 1000, 500, 16, 8, 16, 16 |
+| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND`, `VESSEL_RELAY_MAX_CONNECTIONS`, `VESSEL_RELAY_MAX_UNAUTHENTICATED`, `VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS`, `VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS`, `VESSEL_RELAY_RESERVED_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB, 1000, 400, 16, 7, 16, 16 |
 | `VESSEL_NODE_SOCKET`, `VESSEL_AGENT_SESSION`, `VESSEL_AGENT_SECRET` | `vessel mcp` only: set by the node in each session's `vessel` MCP server | set by the node |
 
 ## Layout

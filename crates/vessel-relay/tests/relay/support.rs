@@ -70,6 +70,9 @@ impl Relay {
         config.limits = limits;
         config.client_address_header = header.map(|name| name.parse().unwrap());
         config.trusted_proxies = trusted.iter().map(|proxy| proxy.parse().unwrap()).collect();
+        // Each test exercises one cap at a tiny scale, which the bar's
+        // startup check would refuse (`Limits::check`, tested on its own).
+        config.check_limits = false;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let shutdown = CancellationToken::new();

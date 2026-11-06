@@ -254,3 +254,23 @@ async fn a_relay_with_an_address_header_and_no_trusted_proxy_does_not_start() {
     let error = served.expect("it kept serving").unwrap_err();
     assert!(error.to_string().contains("trusted"), "{error}");
 }
+
+#[tokio::test]
+async fn a_relay_whose_limits_let_one_48_hold_half_a_pool_does_not_start() {
+    let mut config = RelayConfig::new(token());
+    config.limits.max_registering = 16;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let served = timeout(
+        SOON,
+        vessel_relay::serve(listener, config, CancellationToken::new()),
+    )
+    .await;
+    let error = served.expect("it kept serving").unwrap_err();
+    let text = error.to_string();
+    assert!(
+        text.contains("--max-registering-per-address 7")
+            && text.contains("--max-registering 16")
+            && text.contains("--max-registering-per-address 1 at most"),
+        "{text}"
+    );
+}

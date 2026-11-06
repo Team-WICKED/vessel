@@ -84,6 +84,9 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
     let dir = tempfile::tempdir().unwrap();
     let token = dir.path().join("relay.token");
     std::fs::write(&token, "a-relay-token\n").unwrap();
+    // Values that keep the bar (`Limits::check`): four times each
+    // per-address limit under half its pool, the unauthenticated share
+    // under half of all.
     let mut child = vesseld()
         .args(["relay", "--bind", "127.0.0.1:0", "--token-file"])
         .arg(&token)
@@ -91,16 +94,16 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
             "--max-nodes",
             "7",
             "--max-registering",
-            "3",
+            "40",
             "--max-clients",
-            "21",
+            "70",
         ])
         .args(["--max-clients-per-node", "5", "--max-bytes-per-second", "0"])
         .args([
             "--max-connections",
-            "40",
+            "100",
             "--max-connections-per-address",
-            "9",
+            "5",
         ])
         .args([
             "--max-registering-per-address",
@@ -112,7 +115,7 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
             "--max-clients-per-address",
             "4",
             "--max-unauthenticated",
-            "30",
+            "45",
         ])
         .spawn()
         .unwrap();
@@ -130,16 +133,16 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
     .unwrap();
     for field in [
         "max_nodes=7",
-        "max_registering=3",
-        "max_clients=21",
+        "max_registering=40",
+        "max_clients=70",
         "max_clients_per_node=5",
         "max_bytes_per_second=0",
-        "max_connections=40",
-        "max_connections_per_address=9",
+        "max_connections=100",
+        "max_connections_per_address=5",
         "max_registering_per_address=2",
         "reserved_registering=1",
         "max_clients_per_address=4",
-        "max_unauthenticated=30",
+        "max_unauthenticated=45",
     ] {
         assert!(limits.contains(field), "{field}: {limits}");
     }
@@ -165,6 +168,35 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("must be at least 1"), "{stderr}");
+}
+
+#[tokio::test]
+async fn vesseld_relay_refuses_limits_that_let_one_48_hold_half_a_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let token = dir.path().join("relay.token");
+    std::fs::write(&token, "a-relay-token\n").unwrap();
+    // The default 16 per address, four times over for a /48, is half of
+    // 128 client places.
+    let output = tokio::time::timeout(
+        SAFETY,
+        vesseld()
+            .args(["relay", "--bind", "127.0.0.1:0", "--token-file"])
+            .arg(&token)
+            .args(["--max-clients", "128"])
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--max-clients-per-address 16")
+            && stderr.contains("--max-clients 128")
+            && stderr.contains("--max-clients-per-address 15 at most passes")
+            && !stderr.contains("relay listening"),
+        "{stderr}"
+    );
 }
 
 #[tokio::test]
