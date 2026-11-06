@@ -16,6 +16,8 @@ bytes.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
 getrandom.workspace = true
 hmac.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true
@@ -26,6 +28,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "time", "sync", "macros", "rt"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 tokio-util.workspace = true
+tower.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

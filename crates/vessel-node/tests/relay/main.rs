@@ -96,6 +96,19 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
             "21",
         ])
         .args(["--max-clients-per-node", "5", "--max-bytes-per-second", "0"])
+        .args([
+            "--max-connections",
+            "40",
+            "--max-connections-per-address",
+            "9",
+        ])
+        .args([
+            "--max-registering-per-address",
+            "2",
+            "--reserved-registering",
+            "1",
+        ])
+        .args(["--max-clients-per-address", "4"])
         .spawn()
         .unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -116,6 +129,11 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
         "max_clients=21",
         "max_clients_per_node=5",
         "max_bytes_per_second=0",
+        "max_connections=40",
+        "max_connections_per_address=9",
+        "max_registering_per_address=2",
+        "reserved_registering=1",
+        "max_clients_per_address=4",
     ] {
         assert!(limits.contains(field), "{field}: {limits}");
     }

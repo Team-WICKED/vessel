@@ -409,7 +409,13 @@ In the crate table's order.
   (refused `full`), nodes still registering and relayed clients per node
   and in all (closed `4503`), and a byte rate per direction of a relayed
   connection (`server::throttle`); refusals logged at info, throttled,
-  never with a token. Registration takes the token or a ticket for the
+  never with a token. Its own accept loop (`server::accept`, hyper's
+  HTTP/1 with a 10 s header deadline) counts every socket from `accept`,
+  in all and per address (`503` past either), and drops what is left 5 s
+  into a stop; registering places and clients are also counted per
+  address, a registering node and a spliced client have 2 s for their
+  first message, and some registering places are kept for nodes that
+  registered before (ADR 0009's amendments). Registration takes the token or a ticket for the
   registering key (`ticket`, ADR 0009's amendment); a ticket's
   registration counts against the node cap and ends when the ticket
   expires. `NodeLink` keeps a node registered (jittered backoff,

@@ -19,7 +19,7 @@
 //!   is forwarded, so the sender is pushed back by TCP). A splice silent
 //!   in one direction past the idle timeout ends (pongs count).
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -56,7 +56,8 @@ pub(super) async fn connect(
     Query(query): Query<ConnectQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let admitted = relay.admit(peer, &headers);
+    let address = relay.client_address(peer, &headers);
+    let admitted = relay.admit(address);
     relay
         .limit(upgrade)
         .on_upgrade(move |mut client| async move {
@@ -64,7 +65,7 @@ pub(super) async fn connect(
                 close_with(&mut client, RelayClose::RateLimited).await;
                 return;
             }
-            pair(&relay, query.node, client).await;
+            pair(&relay, query.node, client, address).await;
         })
 }
 
@@ -114,7 +115,7 @@ fn new_conn() -> Option<ConnId> {
 
 /// Announce `client` to `node`, wait for the node's data connection, then
 /// splice them.
-async fn pair(relay: &Relay, node: RoutingId, mut client: WebSocket) {
+async fn pair(relay: &Relay, node: RoutingId, mut client: WebSocket, address: IpAddr) {
     let slot = lock(&relay.nodes).get(&node).map(|registration| {
         (
             registration.incoming.clone(),
@@ -126,7 +127,7 @@ async fn pair(relay: &Relay, node: RoutingId, mut client: WebSocket) {
         return;
     };
     // Held until this function returns: through the wait and the splice.
-    let Some(_client) = relay.client(node) else {
+    let Some(_client) = relay.client(node, address) else {
         close_with(&mut client, RelayClose::Full).await;
         return;
     };
@@ -182,8 +183,10 @@ async fn splice(relay: &Relay, client: WebSocket, node: WebSocket) {
     let (mut node_tx, mut node_rx) = node.split();
     let limits = &relay.limits;
     let (end, client_sent) = tokio::select! {
-        end = forward(&mut client_rx, &mut node_tx, limits) => (end, true),
-        end = forward(&mut node_rx, &mut client_tx, limits) => (end, false),
+        // The client speaks first (its handshake message): one that says
+        // nothing gives its place back within `first_message_timeout`.
+        end = forward(&mut client_rx, &mut node_tx, limits, Some(limits.first_message_timeout)) => (end, true),
+        end = forward(&mut node_rx, &mut client_tx, limits, None) => (end, false),
         () = relay.shutdown.cancelled() => (End::Gone, true),
     };
     let (sender, receiver) = if client_sent {
@@ -213,6 +216,7 @@ async fn forward(
     from: &mut SplitStream<WebSocket>,
     to: &mut SplitSink<WebSocket, Message>,
     limits: &Limits,
+    first_record: Option<std::time::Duration>,
 ) -> End {
     let largest = u64::try_from(limits.max_message).unwrap_or(u64::MAX);
     let mut rate = ByteRate::new(
@@ -223,11 +227,18 @@ async fn forward(
     let mut ping = tokio::time::interval_at(after(limits.ping_interval), limits.ping_interval);
     let idle = sleep(limits.idle_timeout);
     tokio::pin!(idle);
+    // Pings and pongs do not count here: only a record shows a client.
+    let mut awaiting_first = first_record.is_some();
+    let first = sleep(first_record.unwrap_or(limits.idle_timeout));
+    tokio::pin!(first);
     loop {
         tokio::select! {
             message = from.next() => {
                 let record = match message {
-                    Some(Ok(Message::Binary(record))) => record,
+                    Some(Ok(Message::Binary(record))) => {
+                        awaiting_first = false;
+                        record
+                    }
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => {
                         idle.as_mut().reset(after(limits.idle_timeout));
                         continue;
@@ -257,6 +268,7 @@ async fn forward(
                 }
             }
             () = &mut idle => return End::Idle,
+            () = &mut first, if awaiting_first => return End::Idle,
         }
     }
 }

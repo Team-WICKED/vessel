@@ -29,7 +29,7 @@ use vessel_secure::proof_challenge;
 
 use crate::ticket::{check_ticket, unix_now};
 
-use super::{Registration, Relay, close_with, too_large};
+use super::{RegisteringSlot, Registration, Relay, close_with, too_large};
 
 pub(super) async fn upgrade(
     State(relay): State<Arc<Relay>>,
@@ -37,7 +37,8 @@ pub(super) async fn upgrade(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let admitted = relay.admit(peer, &headers);
+    let address = relay.client_address(peer, &headers);
+    let admitted = relay.admit(address);
     relay
         .limit(upgrade)
         .on_upgrade(move |mut socket| async move {
@@ -46,13 +47,14 @@ pub(super) async fn upgrade(
                 return;
             }
             // A connection that has not registered yet holds a place among
-            // those registering (`Limits::max_registering`) until it has.
-            let Some(registering) = relay.registering() else {
+            // those registering, in all and for its address, until it has
+            // (`Limits::max_registering`, `max_registering_per_address`).
+            let Some(registering) = relay.registering(address) else {
                 close_with(&mut socket, RelayClose::Full).await;
                 return;
             };
             let registered = tokio::select! {
-                registered = register(&relay, &mut socket) => registered,
+                registered = register(&relay, &mut socket, &registering) => registered,
                 () = relay.shutdown.cancelled() => None,
             };
             drop(registering);
@@ -74,8 +76,28 @@ enum Read {
 }
 
 async fn read(relay: &Relay, socket: &mut WebSocket) -> Read {
+    read_within(socket, relay.limits.registration_timeout).await
+}
+
+/// The registration's first message, within `first_message_timeout` (a
+/// connection that says nothing gives its place back soon). In a place
+/// kept for known nodes (`RegisteringSlot::confirm`), a node not
+/// registered here before is refused as `full` once it names itself, and
+/// the read ends as `Gone`, answered.
+async fn read_first(relay: &Relay, socket: &mut WebSocket, place: &RegisteringSlot<'_>) -> Read {
+    let read = read_within(socket, relay.limits.first_message_timeout).await;
+    if let Read::Message(NodeToRelay::Register { routing_id, .. }) = &read
+        && !place.confirm(routing_id)
+    {
+        refuse(socket, Read::Malformed, RegistrationRefusal::Full).await;
+        return Read::Gone;
+    }
+    read
+}
+
+async fn read_within(socket: &mut WebSocket, within: std::time::Duration) -> Read {
     let deadline = Instant::now()
-        .checked_add(relay.limits.registration_timeout)
+        .checked_add(within)
         .unwrap_or_else(Instant::now);
     loop {
         let message = match tokio::time::timeout_at(deadline, socket.recv()).await {
@@ -148,8 +170,12 @@ fn admitted(
 
 /// Run the registration; the node's routing id once it proved its key,
 /// and when a ticket it registered with expires.
-async fn register(relay: &Relay, socket: &mut WebSocket) -> Option<(RoutingId, Option<u64>)> {
-    let (routing_id, key, until) = match read(relay, socket).await {
+async fn register(
+    relay: &Relay,
+    socket: &mut WebSocket,
+    place: &RegisteringSlot<'_>,
+) -> Option<(RoutingId, Option<u64>)> {
+    let (routing_id, key, until) = match read_first(relay, socket, place).await {
         Read::Message(NodeToRelay::Register {
             routing_id,
             key,

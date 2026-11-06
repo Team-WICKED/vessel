@@ -54,8 +54,15 @@ impl Relay {
     }
 
     pub(crate) async fn with_limits(limits: Limits) -> Self {
+        Self::with_config(limits, None).await
+    }
+
+    /// A relay that takes the client's address from `header`, as behind a
+    /// reverse proxy: how tests stand for many client addresses.
+    pub(crate) async fn with_config(limits: Limits, header: Option<&str>) -> Self {
         let mut config = RelayConfig::new(token());
         config.limits = limits;
+        config.client_address_header = header.map(|name| name.parse().unwrap());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let shutdown = CancellationToken::new();
@@ -174,6 +181,20 @@ pub(crate) type RawSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// A websocket to `url` with the library's default (large) limits.
 pub(crate) async fn raw(url: &str) -> RawSocket {
     tokio_tungstenite::connect_async(url).await.unwrap().0
+}
+
+/// [`raw`], saying through `header` that it comes from `address` (for a
+/// relay made with [`Relay::with_config`]).
+pub(crate) async fn raw_from(url: &str, header: &str, address: &str) -> RawSocket {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let mut request = url.into_client_request().unwrap();
+    let _previous = request.headers_mut().insert(
+        header
+            .parse::<tokio_tungstenite::tungstenite::http::HeaderName>()
+            .unwrap(),
+        address.parse().unwrap(),
+    );
+    tokio_tungstenite::connect_async(request).await.unwrap().0
 }
 
 pub(crate) async fn send_json<T: serde::Serialize>(socket: &mut RawSocket, message: &T) {

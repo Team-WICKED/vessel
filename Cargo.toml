@@ -95,6 +95,13 @@ vessel-testkit = { path = "crates/vessel-testkit" }
 # vessel-agent (and the fake agent in vessel-testkit). ADR 0003.
 agent-client-protocol = "5.0"
 axum = { version = "0.8", features = ["ws"] }
+# The relay's own accept loop (vessel-relay `server::accept`): HTTP/1 with
+# a header-read timeout and per-address counts from `accept`, which
+# `axum::serve` cannot give (the security review, round 7). All three are
+# already in the tree through axum, at these versions.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+tower = { version = "0.5", features = ["util"] }
 base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }

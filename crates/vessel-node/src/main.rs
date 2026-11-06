@@ -138,6 +138,28 @@ struct RelayArgs {
     #[arg(long, env = "VESSEL_RELAY_MAX_BYTES_PER_SECOND",
         default_value_t = vessel_relay::Limits::default().max_bytes_per_second)]
     max_bytes_per_second: u64,
+    /// Connections open at once, of every kind, counted from accept.
+    #[arg(long, env = "VESSEL_RELAY_MAX_CONNECTIONS", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_connections)]
+    max_connections: usize,
+    /// Connections open at once from one address (an IPv6 /64), counted
+    /// from accept; not applied with --client-address-header.
+    #[arg(long, env = "VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_connections_per_address)]
+    max_connections_per_address: usize,
+    /// Nodes registering at once from one address.
+    #[arg(long, env = "VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_registering_per_address)]
+    max_registering_per_address: usize,
+    /// Of --max-registering, the places kept for nodes that registered
+    /// here before (at most half).
+    #[arg(long, env = "VESSEL_RELAY_RESERVED_REGISTERING",
+        default_value_t = vessel_relay::Limits::default().reserved_registering)]
+    reserved_registering: usize,
+    /// Relayed client connections at once from one address.
+    #[arg(long, env = "VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_clients_per_address)]
+    max_clients_per_address: usize,
 }
 
 /// A count of at least one: a relay with no room for anything would only
@@ -229,12 +251,22 @@ async fn relay(args: RelayArgs) -> ExitCode {
     limits.max_clients = args.max_clients;
     limits.max_clients_per_node = args.max_clients_per_node;
     limits.max_bytes_per_second = args.max_bytes_per_second;
+    limits.max_connections = args.max_connections;
+    limits.max_connections_per_address = args.max_connections_per_address;
+    limits.max_registering_per_address = args.max_registering_per_address;
+    limits.reserved_registering = args.reserved_registering;
+    limits.max_clients_per_address = args.max_clients_per_address;
     tracing::info!(
         max_nodes = limits.max_nodes,
         max_registering = limits.max_registering,
         max_clients = limits.max_clients,
         max_clients_per_node = limits.max_clients_per_node,
         max_bytes_per_second = limits.max_bytes_per_second,
+        max_connections = limits.max_connections,
+        max_connections_per_address = limits.max_connections_per_address,
+        max_registering_per_address = limits.max_registering_per_address,
+        reserved_registering = limits.reserved_registering,
+        max_clients_per_address = limits.max_clients_per_address,
         "relay limits"
     );
     let listener = match tokio::net::TcpListener::bind(args.bind).await {
