@@ -237,12 +237,15 @@ fn fakes(bin: &Path) {
     }
 }
 
-/// A node linked to `relay` with the fakes in `bin`, fleet files written
-/// into `<data>/fleet-claude`, `vessel mcp` as its agents' tools, and
-/// `prepare` run on its data directory first.
-async fn node(relay: &RouteUrl, bin: &Path, prepare: impl FnOnce(&Path)) -> Fixture {
+/// A node named `name` (a home refuses a member named like itself or
+/// another member, and nodes default to the machine's name), linked to
+/// `relay` with the fakes in `bin`, fleet files written into
+/// `<data>/fleet-claude`, `vessel mcp` as its agents' tools, and `prepare`
+/// run on its data directory first.
+async fn node(name: &str, relay: &RouteUrl, bin: &Path, prepare: impl FnOnce(&Path)) -> Fixture {
     let fixture = Fixture::start_with(|config, data| {
         prepare(data);
+        config.name = Some(name.to_owned());
         let token = data.join("relay-token");
         std::fs::write(&token, "canary-relay\n").unwrap();
         config.relays = vec![relay.clone()];
@@ -850,7 +853,7 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         let bin = tempfile::tempdir().unwrap();
         fakes(bin.path());
         let relay = relay().await;
-        let home = node(&relay.url, bin.path(), |data| {
+        let home = node("canary-home", &relay.url, bin.path(), |data| {
             std::fs::write(
                 DataDir::new(data).profiles_path(),
                 profiles_toml(data, &planted.profile),
@@ -858,7 +861,7 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
             .unwrap();
         })
         .await;
-        let member = node(&relay.url, bin.path(), |_data| {}).await;
+        let member = node("canary-member", &relay.url, bin.path(), |_data| {}).await;
         let client = owner(&home).await;
         let mut captured = Captured::default();
 
