@@ -33,8 +33,8 @@ use vessel_proto::{ConnId, NodeToRelay, RegistrationRefusal, RelayToNode, RelayT
 use vessel_secure::{NodeKeypair, answer_proof, routing_id};
 
 use crate::backoff::Backoff;
+use crate::carrier::Keepalive;
 use crate::carrier::WsCarrier;
-use crate::dial::IDLE;
 use crate::socket::{self, Socket};
 use crate::tls::TlsConfig;
 use crate::{ACCEPT_PATH, NODE_PATH, endpoint};
@@ -165,7 +165,7 @@ impl NodeLink {
         tracing::info!(relay = %self.relay, "registered with the relay");
         let _previous = self.state.send_replace(LinkState::Registered);
         loop {
-            let message = match timeout(IDLE, socket.next()).await {
+            let message = match timeout(Keepalive::DEFAULT.silence, socket.next()).await {
                 Ok(Some(Ok(message))) => message,
                 Ok(Some(Err(error))) => {
                     tracing::debug!(relay = %self.relay, %error, "lost the relay");
@@ -234,7 +234,7 @@ impl NodeLink {
         let tls = self.tls.clone();
         drop(tokio::spawn(async move {
             match timeout(STEP, socket::open(&url, &tls)).await {
-                Ok(Ok(socket)) => accept(WsCarrier::new(socket, Some(IDLE))),
+                Ok(Ok(socket)) => accept(WsCarrier::new(socket, Some(Keepalive::DEFAULT.silence))),
                 Ok(Err(error)) => tracing::debug!(%error, "could not accept a relayed client"),
                 Err(_elapsed) => tracing::debug!("accepting a relayed client timed out"),
             }
