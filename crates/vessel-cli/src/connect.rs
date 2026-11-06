@@ -52,7 +52,9 @@ pub(crate) struct Connected {
 #[derive(Debug)]
 pub(crate) enum NodeConnector {
     Ws(Pinned<WsConnector>),
-    Ssh(Pinned<SshConnector>),
+    /// Boxed: an SSH connector is a few hundred bytes (its `ssh` command
+    /// line, data dir, provisioner), several times a websocket one.
+    Ssh(Box<Pinned<SshConnector>>),
 }
 
 /// Why [`NodeConnector`] could not connect.
@@ -131,10 +133,10 @@ pub(crate) async fn connect_to(
                 resolved.pinned,
             ))
         }
-        NodeAddress::Ssh(node) => NodeConnector::Ssh(Pinned::new(
+        NodeAddress::Ssh(node) => NodeConnector::Ssh(Box::new(Pinned::new(
             remote::connector(target, node).await?,
             resolved.pinned,
-        )),
+        ))),
     };
     let client = connector
         .connect(client_info())
