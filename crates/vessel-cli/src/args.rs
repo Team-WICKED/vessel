@@ -243,10 +243,10 @@ pub(crate) enum NodeCommand {
     },
 }
 
-/// `vessel fleet ...`. `init`, `join`, `leave`, `status`, `restore` and
-/// `forget` act on the node of this machine's data directory
-/// (`--data-dir`), running or not; `invite` and `members` talk to a node
-/// (`--node`, the home).
+/// `vessel fleet ...`. `init`, `join`, `leave`, `status` and `restore` act
+/// on the node of this machine's data directory (`--data-dir`), running or
+/// not; `invite`, `members` and `forget` talk to a node (`--node`, the
+/// home).
 #[derive(Debug, Subcommand)]
 pub(crate) enum FleetCommand {
     /// Make this node the fleet's home: write `fleet.toml`, naming the
@@ -296,10 +296,11 @@ pub(crate) enum FleetCommand {
     Status,
     /// The home's members and what each last applied (needs `admin`).
     Members,
-    /// On the home: let a member node grant again under a new key (it was
-    /// reinstalled) or a new name. The home binds each node id to the key
-    /// and name of its first grant for good; this forgets that binding and
-    /// the node's grants, and records that it did. The node is then invited
+    /// Let a member node grant again under a new key (it was reinstalled)
+    /// or a new name (needs `admin` on the home). The home binds each node
+    /// id to the key and name of its first grant for good; this forgets
+    /// that binding and the node's grants, withdraws the invitations
+    /// outstanding on the home, and records it. The node is then invited
     /// again: only a device paired after this may take its id and name.
     /// Revoke any of its old devices that should not sync any more.
     Forget {

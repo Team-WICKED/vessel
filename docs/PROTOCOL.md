@@ -8,10 +8,10 @@ an entry here. Additive, optional fields do not need a bump.
 
 Nodes speak 2..=6; version 6 only adds. Milestone 4's F3, F4 and Track X
 implement it (`docs/plans/backend-m4.md`, "Protocol 6 (accepted)"), all
-built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes`,
-`session.read` with `wait`, the transfers and the secret rows. (Until
-each landed, its methods answered `unsupported`, "not built on this node
-yet", after the scope check like every method.)
+built: the envelope, `fleet.grant`, `fleet.forget`, `fleet.peers`,
+`fleet.nodes`, `session.read` with `wait`, the transfers and the secret
+rows. (Until each landed, its methods answered `unsupported`, "not built
+on this node yet", after the scope check like every method.)
 
 - Scope `relay`: passing calls on to other fleet nodes. Independent of
   `sync`, and a member gets it only when the home's owner asks (`vessel
@@ -48,12 +48,19 @@ yet", after the scope check like every method.)
   holds (also while that member's device is revoked). The same id and key
   through another device is the node joined again, and replaces the
   older grant. An id goes to a new key, or a node to a new name, only
-  after the home's owner runs `vessel fleet forget <node>`, and then only
-  for a member device paired after it (the node is invited again); `conflict` also while the same device
-  has a grant in progress; `invalid_request` to a link with no route or
-  more than 8; and `unavailable`, without details, when it cannot pair
-  (within 30 s); `fleet.peers`
-  (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
+  after `fleet.forget { node }` (admin, not forwardable; `vessel fleet
+  forget <node>` against the home) and then only for a member device
+  paired after it: the call withdraws the invitations outstanding on the
+  home, a pairing that redeemed one before and completes after is
+  revoked, and it returns `NodeForgotten { key, name?, devices,
+  withdrawn }`, so the node is invited again and joins from there. A
+  refusal over a revoked or forgotten node says only that the name is
+  reserved for, or the key bound to, another node, without ids or times;
+  one over a live member's name names that member; the home's log has the
+  details. `conflict` also while the same device has a grant in
+  progress; `invalid_request` to a link with no route or more than 8; and
+  `unavailable`, without details, when it cannot pair (within 30 s);
+  `fleet.peers` (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
   `protocol`, `reachable`), the home included.
 - Transfers (F4): `session.export { session, force? }` (operate,
   ownership-checked for agents) and `memory.export { profile?, project? }`

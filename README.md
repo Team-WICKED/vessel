@@ -218,9 +218,10 @@ vessel fleet members
   and asks again after a restart under its new name.
 - The home binds each member's node id to its key and name for good. A
   member reinstalled with a new key, or renamed, is refused until you run
-  `vessel fleet forget <node id>` on the home (`--data-dir` of the home's
-  node) and then invite it again (`vessel fleet invite`): only a device
-  paired after the forget may take the id and name. Revoke its old device
+  `vessel fleet forget <node id>` against the home (it needs `admin`
+  there) and then invite it again (`vessel fleet invite`): forgetting
+  withdraws the invitations still outstanding on the home, and only a
+  device paired after it may take the id and name. Revoke its old device
   there too if it should not sync any more.
 
 - Edit the sources on the home; members follow within seconds (the home
