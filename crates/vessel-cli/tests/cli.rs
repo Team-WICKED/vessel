@@ -409,10 +409,12 @@ async fn remote_nodes_need_an_explicit_token_and_an_absolute_cwd() {
         // Compare canonical forms: on Windows the program may report a short
         // (8.3) name while `canonicalize` gives the verbatim `\\?\` form of
         // the same directory.
+        // The answer may follow fake-tui's `> ` prompt on the same line, and
+        // the echoed command `cwd` (no path) has no space after it.
         let reported = attach
             .stdout
             .lines()
-            .find_map(|line| line.trim().strip_prefix("cwd "))
+            .find_map(|line| line.split_once("cwd ").map(|(_, path)| path))
             .unwrap_or_else(|| panic!("no cwd line in {}", attach.stdout));
         assert_eq!(
             std::fs::canonicalize(reported.trim()).unwrap(),
