@@ -72,7 +72,8 @@ pub async fn initiate_with<C: Carrier>(
         read_handshake(&mut state, &second)
     })
     .await?;
-    SecureChannel::new(carrier, state, config)
+    let noise = state.into_transport_mode().map_err(SecureError::Noise)?;
+    Ok(SecureChannel::new(carrier, noise, config))
 }
 
 /// Node side: answer a client's handshake with the node's key pair.
@@ -93,22 +94,55 @@ pub async fn respond<C: Carrier>(
 /// # Errors
 /// As [`respond`].
 pub async fn respond_with<C: Carrier>(
-    mut carrier: C,
+    carrier: C,
     keypair: &NodeKeypair,
     config: &Config,
 ) -> Result<SecureChannel<C>, SecureError> {
-    let mut state = responder(PROLOGUE, keypair).map_err(SecureError::Handshake)?;
-    within(config, async {
-        let first = receive(&mut carrier).await?;
-        read_handshake(&mut state, &first)?;
-        let second = write_handshake(&mut state)?;
-        carrier
-            .send(second.into())
-            .await
-            .map_err(SecureError::Carrier)
-    })
-    .await?;
-    SecureChannel::new(carrier, state, config)
+    try_respond(carrier, keypair, config)
+        .await
+        .map_err(|failed| failed.error)
+}
+
+/// A node's handshake that failed, with the carrier handed back so the node
+/// can say why on it (a websocket close code, `vessel_proto::NodeClose`)
+/// before closing it.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RespondError<C> {
+    /// Why the handshake failed.
+    pub error: SecureError,
+    /// The carrier, as the handshake left it.
+    pub carrier: C,
+}
+
+/// [`respond_with`] that gives the carrier back on failure.
+///
+/// # Errors
+/// As [`respond`], with the carrier.
+pub async fn try_respond<C: Carrier>(
+    mut carrier: C,
+    keypair: &NodeKeypair,
+    config: &Config,
+) -> Result<SecureChannel<C>, RespondError<C>> {
+    let answered = async {
+        let mut state = responder(PROLOGUE, keypair).map_err(SecureError::Handshake)?;
+        within(config, async {
+            let first = receive(&mut carrier).await?;
+            read_handshake(&mut state, &first)?;
+            let second = write_handshake(&mut state)?;
+            carrier
+                .send(second.into())
+                .await
+                .map_err(SecureError::Carrier)
+        })
+        .await?;
+        state.into_transport_mode().map_err(SecureError::Noise)
+    }
+    .await;
+    match answered {
+        Ok(noise) => Ok(SecureChannel::new(carrier, noise, config)),
+        Err(error) => Err(RespondError { error, carrier }),
+    }
 }
 
 async fn within<T>(

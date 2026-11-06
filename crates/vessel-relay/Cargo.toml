@@ -1,0 +1,33 @@
+[package]
+name = "vessel-relay"
+description = "Vessel's relay: the dumb splicing server, a node's registration link, and the client's dial"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proto.workspace = true
+vessel-secure.workspace = true
+
+axum.workspace = true
+bytes.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+getrandom.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "time", "sync", "macros", "rt"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "test-util"] }
+
+[lints]
+workspace = true

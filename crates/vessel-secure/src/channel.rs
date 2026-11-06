@@ -25,8 +25,8 @@ use std::task::{Context, Poll, ready};
 
 use bytes::Bytes;
 use futures_util::{Sink, Stream};
+use snow::TransportState;
 use snow::error::StateProblem;
-use snow::{HandshakeState, TransportState};
 
 use crate::Config;
 use crate::carrier::Carrier;
@@ -62,15 +62,8 @@ impl<C> fmt::Debug for SecureChannel<C> {
 }
 
 impl<C: Carrier> SecureChannel<C> {
-    pub(crate) fn new(
-        carrier: C,
-        handshake: HandshakeState,
-        config: &Config,
-    ) -> Result<Self, SecureError> {
-        let noise = handshake
-            .into_transport_mode()
-            .map_err(SecureError::Noise)?;
-        Ok(Self {
+    pub(crate) fn new(carrier: C, noise: TransportState, config: &Config) -> Self {
+        Self {
             carrier,
             noise,
             max_frame: config.max_frame,
@@ -79,7 +72,7 @@ impl<C: Carrier> SecureChannel<C> {
             scratch: Vec::new(),
             read_ended: false,
             broken: false,
-        })
+        }
     }
 
     /// Close the channel for good and pass `error` on.

@@ -80,6 +80,7 @@ vessel-node = { path = "crates/vessel-node" }
 vessel-proc = { path = "crates/vessel-proc" }
 vessel-proto = { path = "crates/vessel-proto" }
 vessel-pty = { path = "crates/vessel-pty" }
+vessel-relay = { path = "crates/vessel-relay" }
 vessel-remote = { path = "crates/vessel-remote" }
 vessel-rpc = { path = "crates/vessel-rpc" }
 vessel-secure = { path = "crates/vessel-secure" }
@@ -127,6 +128,13 @@ qrcode = { version = "0.14", default-features = false }
 rusqlite = { version = "0.41", features = ["bundled"] }
 # Safe `tcgetwinsize` for the fake-tui test binary (vessel-testkit only).
 rustix = { version = "1", default-features = false, features = ["std", "termios"] }
+# TLS for `wss://` relays (vessel-relay; plan decision 1): rustls with the
+# `ring` provider chosen explicitly (ADR 0005's amendment: the M1 panic came
+# from a provider nobody picked), not rustls's default `aws-lc-rs`, which
+# needs CMake and NASM on Windows. TLS 1.2 kept for older reverse proxies.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# The operating system's root certificates for those `wss://` relays.
+rustls-native-certs = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # SHA-256 of a vesseld build (vessel-remote): its `-dev-<hash>` name and the

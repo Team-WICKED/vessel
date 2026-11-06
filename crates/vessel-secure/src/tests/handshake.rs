@@ -139,3 +139,20 @@ async fn a_carrier_that_ends_during_the_handshake_is_transient() {
     let error = initiate(client_end, keypair.public()).await.unwrap_err();
     assert!(error.is_transient(), "{error:?}");
 }
+
+#[tokio::test]
+async fn a_failed_node_handshake_hands_the_carrier_back() {
+    let keypair = NodeKeypair::generate().unwrap();
+    let other = NodeKeypair::generate().unwrap();
+    let (client_end, node_end) = carriers();
+    let client = tokio::spawn(async move { initiate(client_end, other.public()).await });
+    let failed = crate::try_respond(node_end, &keypair, &Config::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(failed.error, SecureError::Handshake(_)));
+    // The node can still write on it (to say why) before closing.
+    let mut carrier = failed.carrier;
+    carrier.send(Bytes::from_static(b"why")).await.unwrap();
+    drop(carrier);
+    assert!(client.await.unwrap().is_err());
+}

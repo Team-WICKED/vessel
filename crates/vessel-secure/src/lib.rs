@@ -47,7 +47,7 @@ use std::time::Duration;
 pub use carrier::{Carrier, LengthPrefixed, MemoryCarrier, memory_pair};
 pub use channel::SecureChannel;
 pub use error::{SecureError, Tamper};
-pub use handshake::{initiate, initiate_with, respond, respond_with};
+pub use handshake::{RespondError, initiate, initiate_with, respond, respond_with, try_respond};
 pub use keys::{NodeKeypair, fingerprint, routing_id};
 pub use proof::{PROOF_PROLOGUE, ProofChallenge, answer_proof, proof_challenge};
 pub use record::MAX_RECORD;
