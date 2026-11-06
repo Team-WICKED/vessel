@@ -130,6 +130,7 @@ impl<S> FrameTransport for Framed<S> { type TransportError = FramedError; }
 ### `vesseld` command line (Track N owns it; Track C calls it)
 ```text
 vesseld [--bind ADDR|none] [--data-dir DIR] [--name N]   run in the foreground (M1)
+        [--agent-handshake-timeout SECONDS]   ACP handshake deadline, default 60 (N8)
 vesseld attach [--data-dir DIR]     proxy: stdio <-> local socket; exits with ProxyExit
 vesseld version                     one line: "<version> <target-triple>"
 vesseld cleanup [--data-dir DIR] [--keep N]   delete unused bin/vesseld-* (ADR 0008)
@@ -238,6 +239,12 @@ Owns `vessel-rpc`, `vessel-store`, `vessel-node`, `vessel-testkit`.
   - `FAKE_SSH_DROP_AFTER` (bytes) cuts both directions, simulating a dropped
     connection.
   - A missing command gives 127, as a real shell does.
+- **N8. ACP handshake timeout** (added by the coordinator, 2026-11-06).
+  `AgentSetup::handshake_timeout` (Track R) is set from
+  `RuntimeConfig::agent_handshake_timeout`, node `Config`, and `vesseld
+  --agent-handshake-timeout` (`VESSEL_AGENT_HANDSHAKE_TIMEOUT`), default
+  60 s. A node started by `attach` inherits the variable from the login
+  environment.
 - **N done when:**
   - An in-process test reaches a node through `vesseld attach` started under
     `fake-ssh`, including the node auto-start.

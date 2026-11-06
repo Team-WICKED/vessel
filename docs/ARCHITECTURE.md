@@ -110,7 +110,9 @@ depend on the node, so there is no cycle).
     ordered channel. The model is chosen through the `model` config option.
     The whole handshake has a deadline (`AgentSetup::handshake_timeout`,
     60 s by default); a stuck adapter fails the session instead of leaving
-    it `Starting`. The `mapper` is pure and tested against fixtures in
+    it `Starting`. A node sets it through
+    `RuntimeConfig::agent_handshake_timeout` (`vesseld
+    --agent-handshake-timeout SECONDS`). The `mapper` is pure and tested against fixtures in
     `crates/vessel-agent/tests/fixtures/acp/`.
   - `vessel-session`: the R6 API (`SessionRuntime`, `SessionHandle`,
     `Follow`/`FollowError`, `Created::durable`; records shared as
@@ -138,7 +140,11 @@ depend on the node, so there is no cycle).
     both ends (ADR 0006), in-memory transport for tests, and `Framed`
     (length-delimited frames over any byte stream: SSH stdio and the
     node's local socket, PROTOCOL.md version 3). The `Welcome`'s
-    `NodeInfo` is read from a watch, so a draining node says so.
+    `NodeInfo` is read from a watch, so a draining node says so. A
+    connection the server closes still answers the calls already running
+    (within the close timeout) and writes every frame it took off its
+    queue, so `node.stop{now}` gets its `ack`; a client whose `Hello`
+    cannot be sent still reports a waiting `rejected`.
   - `vessel-store`: owner-only data directory (Unix: 0700, an existing
     one tightened or refused if another user's; `node.id`, `token` and
     the event log with its `-wal`/`-shm` files 0600), SQLite event
@@ -168,7 +174,8 @@ depend on the node, so there is no cycle).
     proxy SSH runs, which starts the node in the background through a login
     shell when none answers (start lock, readiness line, `ProxyExit` codes);
     `vesseld version` and `vesseld cleanup`; `node.stop` (`now`, or drain:
-    refuse new sessions and stop once none is live); the node lock. Tested
+    refuse new sessions and stop once none is live); the node lock;
+    `--agent-handshake-timeout` (seconds, default 60). Tested
     in process (`tests/e2e/local.rs`) and with real processes through
     `fake-ssh` (`tests/e2e/remote.rs`, Unix).
   - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,

@@ -255,3 +255,43 @@ async fn a_structured_session_is_shared_answered_interrupted_and_resumed() {
     })
     .await;
 }
+
+/// The node's `agent_handshake_timeout` reaches the agent: an adapter that
+/// never answers `initialize` fails its session after the configured
+/// second, not after the 60 s default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stuck_agent_fails_after_the_configured_handshake_timeout() {
+    within(async {
+        let fixture = Fixture::with_stuck_adapter();
+        let node = fixture
+            .start_with(|config| {
+                config.agent_handshake_timeout = std::time::Duration::from_secs(1);
+            })
+            .await;
+        let client = fixture.connect(&node).await;
+        let id = client
+            .create_session(structured_spec(&fixture, None))
+            .await
+            .unwrap()
+            .id;
+        let mut stream = client.follow(id, EventSeq::ZERO).await.unwrap();
+        let mut seen = Vec::new();
+        let ended =
+            |record: &EventRecord| status_of(record).is_some_and(|status| !status.is_live());
+        // Far below the default, so only the configured value can end it.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            read_until(&mut stream, &mut seen, ended),
+        )
+        .await
+        .expect("the configured handshake timeout did not apply");
+        let Some(SessionStatus::Failed { message }) = seen.last().and_then(status_of) else {
+            panic!("expected a failed session, got {:?}", seen.last());
+        };
+        assert!(message.contains("within 1 s"), "{message}");
+
+        drop((stream, client));
+        node.stop().await.unwrap();
+    })
+    .await;
+}

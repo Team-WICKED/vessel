@@ -29,8 +29,8 @@ mod support {
     use vessel_harness::fakes::{Role, install};
     use vessel_proto::{EventRecord, EventSeq, HarnessKind, SessionEvent, SessionStatus};
     use vessel_session::{
-        DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, Follow, RuntimeConfig, SessionHandle,
-        SessionRuntime,
+        DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY, Follow,
+        RuntimeConfig, SessionHandle, SessionRuntime,
     };
     use vessel_testkit::Fake;
 
@@ -101,6 +101,7 @@ mod support {
                     harness_lookup: Lookup::new([bin.clone()]),
                     ring_capacity: DEFAULT_RING_CAPACITY,
                     durable_capacity: DEFAULT_DURABLE_CAPACITY,
+                    agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
                 },
                 CancellationToken::new(),
             );
