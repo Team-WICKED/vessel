@@ -141,10 +141,15 @@ depend on the node, so there is no cycle).
     as its ACP adapter), including restart, `Interrupted` and resume.
   - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
     `sessions`, `run`, `attach`, `send`, `log`, `kill`; sessions named by
-    id prefix; terminal attach in raw mode with `Ctrl-]` to detach (live
-    resize on Unix, initial size only on Windows); structured attach as a
-    conversation with numbered permission answers. Tested through the
-    binary (`tests/cli.rs`).
+    id prefix; terminal attach in raw mode with `Ctrl-]` to detach, also
+    under the kitty keyboard protocol and `modifyOtherKeys`, and on
+    `SIGTERM`/`SIGHUP`/`SIGINT`; the terminal is reset on every way out;
+    keystrokes go through one ordered sender task so output never waits on
+    input (live resize on Unix, initial size only on Windows); structured
+    attach as a conversation with numbered permission answers; `log` in
+    record order across stdout and stderr. The local token file is sent
+    only to a loopback `--node`, and a relative `--cwd` is resolved only
+    for one. Tested through the binary (`tests/cli.rs`).
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

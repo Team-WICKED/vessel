@@ -3,30 +3,48 @@
 //! The local terminal goes into raw mode so every key (arrows, Ctrl-C,
 //! escape sequences) reaches the harness untouched; its output bytes are
 //! written to stdout as they come. `Ctrl-]` detaches, as in telnet and
-//! `docker attach`, because the harness never needs that key.
+//! `docker attach`, because the harness never needs that key; it is
+//! recognised in every keyboard mode a harness can switch the terminal to
+//! (`detach`). `SIGTERM`, `SIGHUP` and `SIGINT` detach too (`signals`).
+//! However the attach ends, the terminal is reset and leaves raw mode
+//! (`guard`).
+//!
+//! Keystrokes never hold up the screen: they are queued and sent in order
+//! by one sender task (`sender`), while this loop keeps showing output and
+//! scanning keys.
 //!
 //! Window size: the size is sent when attaching, and again on every change
 //! on Unix (`SIGWINCH`). On Windows only the initial size is sent; following
 //! console resizes would need a console event loop, which would also take
 //! the raw keystrokes this module forwards.
 
-use std::io::IsTerminal as _;
+mod detach;
+mod guard;
+mod sender;
+mod signals;
 
-use bytes::Bytes;
+use std::io::IsTerminal as _;
+use std::time::Duration;
+
 use tokio::sync::mpsc;
 #[cfg(unix)]
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::time::Instant;
 use vessel_client::NodeClient;
-use vessel_proto::{
-    EventSeq, SessionEvent, SessionId, SessionInput, TerminalBytes, TerminalInput, TerminalSize,
-};
+use vessel_proto::{EventSeq, SessionEvent, SessionId, TerminalSize};
 
-use super::{Ended, send};
+use super::Ended;
 use crate::error::CliError;
 use crate::io;
+use detach::{ESCAPE_WAIT, Scanner};
+use guard::RawMode;
+use sender::{Item, Pending};
+use signals::Stop;
 
-/// `Ctrl-]`.
-const DETACH: u8 = 0x1d;
+/// How long a detach waits for keys typed before `Ctrl-]` to be sent. They
+/// normally go at once; a harness that stopped reading its input must not
+/// keep the user from leaving.
+const DETACH_FLUSH: Duration = Duration::from_secs(1);
 
 pub(super) async fn attach(
     client: &NodeClient,
@@ -38,16 +56,30 @@ pub(super) async fn attach(
     if raw.is_some() {
         io::note("[vessel] attached; Ctrl-] detaches\r\n").await?;
     }
+    let mut stop = Stop::listen();
+    let (batches, mut sending) = sender::spawn(client.clone(), session);
+    let mut pending = Pending::default();
     if let Some(size) = window_size() {
-        let _accepted = send(client, session, resize(size)).await?;
+        pending.resize(size);
     }
+    let mut scanner = Scanner::default();
+    let mut escape_deadline = Instant::now();
     let mut keys = io::input_chunks()?;
     let mut size_changes = resizes();
     let mut size_changes_open = true;
     let mut input_open = true;
     let mut last_status = None;
+    // `break` detaches; every other way out returns. The detach runs after
+    // the loop, once the `select!` no longer borrows the sender.
     loop {
         tokio::select! {
+            () = stop.requested() => break,
+            sent = &mut sending => {
+                // The sender only ends when the connection is lost (the
+                // loop still holds its queue).
+                sent??;
+                return Ok(Ended::Session(last_status));
+            }
             item = stream.next() => match item {
                 None => return Ok(Ended::Session(last_status)),
                 Some(Ok(record)) => match record.event {
@@ -64,47 +96,68 @@ pub(super) async fn attach(
                 }
                 Some(Err(error)) => return Err(error.into()),
             },
-            chunk = keys.recv(), if input_open => {
+            chunk = keys.recv(), if input_open && pending.has_room() => {
                 // End of input (piped stdin ran out; a terminal in raw mode
                 // never ends): stop reading, keep showing output until the
                 // session ends, as `cmd | ssh host` does.
                 let Some(chunk) = chunk else {
                     input_open = false;
+                    pending.keys(&scanner.release());
                     continue;
                 };
-                let (keys, detach) = until_detach(chunk);
-                if !keys.is_empty() {
-                    let data = TerminalInput::Data { data: TerminalBytes::new(keys) };
-                    let _accepted =
-                        send(client, session, SessionInput::Terminal { input: data }).await?;
+                let typed = scanner.feed(&chunk);
+                pending.keys(&typed.keys);
+                if typed.detach {
+                    break;
                 }
-                if detach {
-                    return Ok(Ended::Detached);
+                if scanner.is_holding() {
+                    escape_deadline = Instant::now()
+                        .checked_add(ESCAPE_WAIT)
+                        .unwrap_or_else(Instant::now);
+                }
+            }
+            () = tokio::time::sleep_until(escape_deadline), if scanner.is_holding() => {
+                pending.keys(&scanner.release());
+            }
+            permit = batches.reserve(), if !pending.is_empty() => {
+                // Fails only if the sender ended; its arm reports why.
+                if let Ok(permit) = permit {
+                    permit.send(pending.take());
                 }
             }
             notice = size_changes.recv(), if size_changes_open => {
                 if notice.is_none() {
                     size_changes_open = false;
                 } else if let Some(size) = window_size() {
-                    let _accepted = send(client, session, resize(size)).await?;
+                    pending.resize(size);
                 }
             }
         }
     }
+    Ok(leave(batches, sending, pending).await)
 }
 
-/// The keys before a detach key, and whether there was one.
-fn until_detach(chunk: Bytes) -> (Bytes, bool) {
-    match chunk.iter().position(|&byte| byte == DETACH) {
-        Some(at) => (chunk.slice(..at), true),
-        None => (chunk, false),
+/// Detach: hand the sender what is still queued and give it a moment to
+/// send it (keys typed before `Ctrl-]` should arrive), then leave.
+async fn leave(
+    batches: mpsc::Sender<Vec<Item>>,
+    sending: tokio::task::JoinHandle<Result<(), CliError>>,
+    mut pending: Pending,
+) -> Ended {
+    let flush = async move {
+        if !pending.is_empty() && batches.send(pending.take()).await.is_err() {
+            return;
+        }
+        // Closing the queue lets the sender finish once it is empty.
+        drop(batches);
+        if let Ok(Err(error)) = sending.await {
+            tracing::debug!(%error, "keys before the detach were not all sent");
+        }
+    };
+    if tokio::time::timeout(DETACH_FLUSH, flush).await.is_err() {
+        tracing::debug!("the session did not take the last keys in time");
     }
-}
-
-fn resize(size: TerminalSize) -> SessionInput {
-    SessionInput::Terminal {
-        input: TerminalInput::Resize { size },
-    }
+    Ended::Detached
 }
 
 /// The local terminal's size, if stdout is a terminal.
@@ -115,29 +168,6 @@ pub(crate) fn window_size() -> Option<TerminalSize> {
     crossterm::terminal::size()
         .ok()
         .map(|(cols, rows)| TerminalSize { cols, rows })
-}
-
-/// Raw mode while alive; the terminal is restored when it drops, on every
-/// path out of `attach` (detach, session end, error).
-struct RawMode;
-
-impl RawMode {
-    /// `None` when stdin is not a terminal (piped input stays as it is).
-    fn enable() -> std::io::Result<Option<Self>> {
-        if !std::io::stdin().is_terminal() {
-            return Ok(None);
-        }
-        crossterm::terminal::enable_raw_mode()?;
-        Ok(Some(Self))
-    }
-}
-
-impl Drop for RawMode {
-    fn drop(&mut self) {
-        if let Err(error) = crossterm::terminal::disable_raw_mode() {
-            tracing::warn!(%error, "could not restore the terminal; run `reset`");
-        }
-    }
 }
 
 /// Notices that the local terminal changed size. On Unix a task turns
@@ -171,17 +201,4 @@ fn listen_for_resizes(sender: mpsc::Sender<()>) {
             }
         }
     }));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_detach_key_cuts_the_input() {
-        let (keys, detach) = until_detach(Bytes::from_static(b"ls\r\x1dmore"));
-        assert_eq!((keys.as_ref(), detach), (&b"ls\r"[..], true));
-        let (keys, detach) = until_detach(Bytes::from_static(b"plain"));
-        assert_eq!((keys.as_ref(), detach), (&b"plain"[..], false));
-    }
 }
