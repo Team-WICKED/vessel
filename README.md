@@ -63,7 +63,10 @@ profile (`vessel session move-profile`), and agent tools: every session's
 agent gets the `vessel` MCP server (`vessel mcp`) with a credential of its
 own, to start and drive sessions of its own.
 
-Not yet: fleet sync across machines, model routing, the LSP bridge. See
+Fleet sync is built: one node, the home, shares its instructions and
+skills, and every member node follows it into every profile (below).
+
+Not yet: secrets for fleet MCP servers, model routing, the LSP bridge. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Try it
@@ -173,6 +176,31 @@ vessel node devices revoke 3fa9       # its open connections close
 - The device's credential is a file in `~/.config/vessel/credentials/`
   (0600); the book points to it and never holds the secret. Moving a
   device means pairing it again.
+
+### A fleet: one home, many members
+
+One node keeps your instructions and skills (the home); every other node
+gets copies in each of its harness profiles, keeping any local edit
+(ADR 0012).
+
+```bash
+# on the home
+vessel fleet init --instructions ~/.codex/AGENTS.md --skills ~/.codex/skills --skip 'paseo*'
+vessel fleet invite --label laptop    # a single-use link with the `sync` scope
+# on the laptop: paste the link at the prompt, never on the command line
+vessel fleet join
+vessel fleet status                   # generation, and files left as they are
+# on the home
+vessel fleet members
+```
+
+- Edit the sources on the home; members follow within seconds (the home
+  watches `<data_dir>/fleet.toml` and its sources).
+- A file you edited is kept, with the home's version beside it as
+  `<name>.vessel-incoming`; a fleet file you deleted stays deleted until
+  `vessel fleet restore <path>`. Files Vessel did not write are never
+  touched.
+- `vessel fleet leave` stops following; the files stay.
 
 ### Environment
 
