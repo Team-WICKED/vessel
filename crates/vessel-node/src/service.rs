@@ -32,6 +32,7 @@ use crate::subscribe;
 use crate::transfers::export::Exporter;
 use crate::transfers::import::{Importer, Local, Pull, Remote};
 use crate::transfers::{Holder, Transfers};
+use crate::waits::{ConnectionWaits, WaitSlot, Waiter, Waits};
 
 /// The node's protocol implementation.
 #[derive(Debug)]
@@ -55,6 +56,8 @@ pub(crate) struct NodeService {
     pub(crate) links: Arc<Links>,
     /// Open transfers (protocol 6).
     transfers: Arc<Transfers>,
+    /// Waiting reads by origin (`waits`).
+    waits: Arc<Waits>,
 }
 
 /// The parts a [`NodeService`] serves.
@@ -99,7 +102,30 @@ impl NodeService {
             fleet,
             links,
             transfers,
+            waits: Arc::default(),
         }
+    }
+
+    /// A place for the wait of a read `waiter` makes on `connection`, if it
+    /// waits and both shares have room (`waits`); otherwise the wait is
+    /// dropped and the read answers at once.
+    pub(crate) fn wait_slot(
+        &self,
+        connection: &Connection,
+        waiter: Waiter,
+        wait: &mut Option<u32>,
+    ) -> Option<WaitSlot> {
+        let _seconds = wait.as_ref()?;
+        let slot = self.waits.take(&connection.waiting, waiter);
+        if slot.is_none() {
+            *wait = None;
+            tracing::debug!(
+                ?waiter,
+                "a waiting read answers at once: its connection's or its origin's share of waits \
+                 is taken"
+            );
+        }
+        slot
     }
 }
 
@@ -109,6 +135,8 @@ impl NodeService {
 pub(crate) struct Connection {
     outbound: Outbound,
     principal: Principal,
+    /// Its waiting reads, against its share (`waits`).
+    waiting: ConnectionWaits,
 }
 
 impl Connection {
@@ -122,6 +150,7 @@ impl Connection {
         Self {
             outbound: peer.outbound,
             principal,
+            waiting: ConnectionWaits::default(),
         }
     }
 
@@ -141,6 +170,7 @@ impl Connection {
         Self {
             outbound: self.outbound.clone(),
             principal,
+            waiting: Arc::clone(&self.waiting),
         }
     }
 }
@@ -270,9 +300,11 @@ impl NodeService {
 
     pub(crate) async fn read_events(
         &self,
-        _: &Connection,
-        request: ReadEvents,
+        connection: &Connection,
+        mut request: ReadEvents,
     ) -> Result<EventPage, WireError> {
+        let waiter = Waiter::of(connection.principal(), self.links.node());
+        let _slot = self.wait_slot(connection, waiter, &mut request.wait);
         let read = match request.wait {
             Some(seconds) => {
                 let wait = Duration::from_secs(seconds.min(ReadEvents::MAX_WAIT).into());

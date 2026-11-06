@@ -28,6 +28,39 @@
 //!   once the membership is gone or names another home (`reconcile`), so
 //!   a former home loses its access even if `vessel fleet leave` ran while
 //!   the node was stopped.
+//! - Once per join (the review, item 2): the record names the join it was
+//!   made for, and a join's grant is never made again, whatever became of
+//!   its device. An owner who revoked the home's device here cut the home
+//!   off until the node joins again; before, every connection made a new
+//!   grant for a revoked device, so a restart, or a home dropping the
+//!   connection, undid the revocation.
+//! - No device for a home without a record (item 4): grants and
+//!   `reconcile` take one lock; a revoked grant's record is deleted only if
+//!   it still names that device (a home switch may have written the next
+//!   one meanwhile); a grant that fails withdraws its invitation and
+//!   revokes the device if one was made; and `reconcile` revokes any device
+//!   labelled for a fleet home (`fleet home <id>`, a label reserved for
+//!   this) that is not the one on record, which also catches a redemption
+//!   that landed after the member stopped waiting.
+//! - Who a member device speaks for (the review of 2026-11-06): a node id
+//!   is a name the node chose (`node.id`), not something its key proves,
+//!   and pairing checks only that the node answering a link claims the
+//!   link's id; the key is what the secure channel authenticates. So the
+//!   home binds each member device to the `(id, key)` of its first grant
+//!   and refuses a grant that would make one node's id or key another's:
+//!   a device rebinding to another pair, an id or key another device's
+//!   grant holds, the home's own id, a name another member (or the home)
+//!   uses. Without this, any `sync` device could grant a link from a stock
+//!   node whose `node.id` names another member, and the home's calls to
+//!   that member (prompts, input, secrets copied) went to it. The same
+//!   pair through another device is the same node joined again (only it
+//!   holds the key), and its newer grant replaces the older one. Deriving
+//!   the id from the key would remove the question; that is a protocol
+//!   change, proposed in the plan.
+//! - A grant's link names the routes the home dials: at most
+//!   [`MAX_GRANT_ROUTES`], and a failure to pair answers the device in
+//!   general terms (the details go to the home's log), so a `sync` device
+//!   cannot use the home to probe addresses.
 //! - Connections: the member's to its home is the pull loop's, shared here
 //!   while it lasts. The home connects to a member on first use and keeps
 //!   the connection while it stays open; a call that loses it fails as
@@ -64,6 +97,15 @@ const GRANT_TTL_SECS: u32 = 600;
 /// after the home said it was.
 const REDEEMED_WITHIN: Duration = Duration::from_secs(30);
 
+/// The most routes (relays and direct addresses together) a grant's link
+/// may name: a node has a few; more is a device using the home to dial.
+const MAX_GRANT_ROUTES: usize = 8;
+
+/// What the device that sent a grant hears when the home could not pair
+/// with the node its link names.
+const CANNOT_PAIR: &str = "the home could not pair with the node the link names; the home's \
+                           log says why";
+
 /// What a member granted its home (`fleet/granted.json`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +118,32 @@ struct Granted {
     scopes: Vec<Scope>,
     /// When.
     since: DateTime<Utc>,
+    /// The join it was made for (`Membership::joined_at`). A record from
+    /// before this field counts as the current join's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    joined: Option<DateTime<Utc>>,
+}
+
+impl Granted {
+    /// Whether this records the grant of `membership`'s join.
+    fn is_for(&self, membership: &Membership) -> bool {
+        self.home == membership.home
+            && self
+                .joined
+                .is_none_or(|joined| joined == membership.joined_at)
+    }
+}
+
+/// The label of the device a member's grant makes for its home `home`.
+fn home_device_label(home: NodeId) -> String {
+    format!("fleet home {home}")
+}
+
+/// Whether `label` is one [`home_device_label`] makes.
+fn is_home_device(label: &str) -> bool {
+    label
+        .strip_prefix("fleet home ")
+        .is_some_and(|home| home.parse::<NodeId>().is_ok())
 }
 
 /// A member's grant as its home keeps it (`fleet/grants/<device>.json`, the
@@ -116,6 +184,84 @@ pub(crate) struct Links {
     home: Mutex<Option<NodeClient>>,
     /// The home's open connections to its members.
     members: tokio::sync::Mutex<HashMap<NodeId, NodeClient>>,
+    /// Held while a grant is made or accepted (and while `reconcile`
+    /// revokes): two grants cannot both pass the checks against the
+    /// grants held, and a revocation never races a grant being recorded.
+    granting: tokio::sync::Mutex<()>,
+}
+
+/// A grant's claim: the member device that sent it, and the node its link
+/// names (the name once the home has paired with it).
+#[derive(Debug, Clone, Copy)]
+struct Claim<'a> {
+    member: DeviceId,
+    node: NodeId,
+    key: &'a NodePublicKey,
+    name: Option<&'a str>,
+}
+
+fn conflict(message: String) -> WireError {
+    WireError::new(ErrorCode::Conflict, message)
+}
+
+/// Whether `claim` may be granted, given the grants of active member
+/// devices `held` and the home's own id and name; the member devices whose
+/// grants it replaces (the same node, joined again through another
+/// device). See the module's Decision Log.
+fn check_claim(
+    claim: Claim<'_>,
+    home: NodeId,
+    home_name: &str,
+    held: &[MemberGrant],
+) -> Result<Vec<DeviceId>, WireError> {
+    if claim.node == home {
+        return Err(conflict(format!(
+            "the link names node {home}, which is this home itself"
+        )));
+    }
+    if claim.name == Some(home_name) {
+        return Err(conflict(format!(
+            "the node is named `{home_name}`, as this home is; rename one of them"
+        )));
+    }
+    let mut replaced = Vec::new();
+    for grant in held {
+        let same_node = grant.node == claim.node;
+        let same_key = grant.key == *claim.key;
+        if grant.member == claim.member {
+            if !same_node || !same_key {
+                return Err(conflict(format!(
+                    "this device speaks for node {} on this home; a device's node never \
+                     changes (join again from the other node)",
+                    grant.node
+                )));
+            }
+            continue;
+        }
+        if same_node && same_key {
+            replaced.push(grant.member);
+            continue;
+        }
+        if same_node {
+            return Err(conflict(format!(
+                "node {} has granted this home access already, with another key",
+                claim.node
+            )));
+        }
+        if same_key {
+            return Err(conflict(format!(
+                "the link's key belongs to node {} on this home",
+                grant.node
+            )));
+        }
+        if claim.name == Some(grant.name.as_str()) {
+            return Err(conflict(format!(
+                "another member, node {}, is named `{}`; rename one of them",
+                grant.node, grant.name
+            )));
+        }
+    }
+    Ok(replaced)
 }
 
 fn client_info() -> ClientInfo {
@@ -177,6 +323,7 @@ impl Links {
             devices,
             home: Mutex::new(None),
             members: tokio::sync::Mutex::new(HashMap::new()),
+            granting: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -238,65 +385,122 @@ impl Links {
             .map_err(|error| hop_error(home, error))
     }
 
-    /// Give the home of `membership` a credential on this node, once: the
-    /// scopes the membership names (none, for a membership from before
-    /// grants). Called by the pull loop right after it connects.
+    /// Give the home of `membership` a credential on this node, once per
+    /// join: the scopes the membership names (none, for a membership from
+    /// before grants). Called by the pull loop right after it connects.
     pub(crate) async fn grant(&self, client: &NodeClient, membership: &Membership) {
         if membership.grant.is_empty() {
             return;
         }
-        match self.granted().await {
-            Ok(Some(granted)) if granted.home == membership.home => {
-                if self.device_is_valid(granted.device).await {
-                    return;
+        let _granting = self.granting.lock().await;
+        let previous = match self.granted().await {
+            Ok(Some(granted)) if granted.is_for(membership) => {
+                if !self.device_is_valid(granted.device).await {
+                    tracing::info!(
+                        home = %membership.home,
+                        "the home's credential here was revoked; it is not granted again until \
+                         this node joins again"
+                    );
                 }
+                return;
             }
-            Ok(_) => {}
+            Ok(previous) => previous,
             Err(error) => {
                 tracing::warn!(%error, "cannot read what this node granted its home");
                 return;
             }
-        }
-        if let Err(error) = self.make_grant(client, membership).await {
-            tracing::warn!(home = %membership.home, %error, "could not grant the fleet's home a credential here");
+        };
+        match self.make_grant(client, membership).await {
+            Ok(device) => {
+                // An earlier join's (or another home's) device is done with.
+                if let Some(previous) = previous.filter(|previous| previous.device != device) {
+                    self.revoke(previous.device, "the device of an earlier grant")
+                        .await;
+                }
+            }
+            Err(error) => {
+                tracing::warn!(home = %membership.home, %error, "could not grant the fleet's home a credential here");
+            }
         }
     }
 
+    /// Make the grant and record it; the device made. On failure nothing is
+    /// left that could be redeemed or used.
     async fn make_grant(
         &self,
         client: &NodeClient,
         membership: &Membership,
-    ) -> Result<(), WireError> {
-        let (invitation, redeemed) = self
+    ) -> Result<DeviceId, WireError> {
+        let (invitation, mut redeemed) = self
             .devices
             .invite_tracked(&InviteDevice {
-                label: Some(format!("fleet home {}", membership.home)),
+                label: Some(home_device_label(membership.home)),
                 ttl_secs: GRANT_TTL_SECS,
                 scopes: Some(membership.grant.clone()),
             })
             .map_err(|error| error.to_wire())?;
-        let _ack = client
-            .call(GrantHome {
-                link: invitation.link,
-            })
+        let invite = invitation
+            .link
+            .decode()
+            .map_err(|error| internal(&error))?
+            .invite;
+        let device = match self
+            .redeemed_by(client, membership.home, invitation.link, &mut redeemed)
             .await
-            .map_err(|error| hop_error(membership.home, error))?;
-        let device = tokio::time::timeout(REDEEMED_WITHIN, redeemed)
-            .await
-            .map_err(|_elapsed| {
-                unavailable("the home said it redeemed the link, but it was not".to_owned())
-            })?
-            .map_err(|_dropped| unavailable("the link was dropped unredeemed".to_owned()))?;
+        {
+            Ok(device) => device,
+            Err(error) => {
+                self.devices.withdraw(&invite);
+                if let Ok(device) = redeemed.try_recv() {
+                    self.revoke(device, "the device of a failed grant").await;
+                }
+                return Err(error);
+            }
+        };
         let granted = Granted {
             home: membership.home,
             device,
             scopes: membership.grant.clone(),
             since: Utc::now(),
+            joined: Some(membership.joined_at),
         };
         let path = self.granted_path();
-        blocking(move || files::write_json(&path, &granted)).await?;
+        if let Err(error) = blocking(move || files::write_json(&path, &granted)).await {
+            self.revoke(device, "the device of a grant that could not be recorded")
+                .await;
+            return Err(error);
+        }
         tracing::info!(home = %membership.home, %device, "granted the fleet's home a credential here");
-        Ok(())
+        Ok(device)
+    }
+
+    /// Hand `link` to `home` and wait until it was redeemed: the device it
+    /// made.
+    async fn redeemed_by(
+        &self,
+        client: &NodeClient,
+        home: NodeId,
+        link: PairingLink,
+        redeemed: &mut tokio::sync::oneshot::Receiver<DeviceId>,
+    ) -> Result<DeviceId, WireError> {
+        let _ack = client
+            .call(GrantHome { link })
+            .await
+            .map_err(|error| hop_error(home, error))?;
+        tokio::time::timeout(REDEEMED_WITHIN, redeemed)
+            .await
+            .map_err(|_elapsed| {
+                unavailable("the home said it redeemed the link, but it was not".to_owned())
+            })?
+            .map_err(|_dropped| unavailable("the link was dropped unredeemed".to_owned()))
+    }
+
+    /// Revoke `device` (`what` it is, for the log); a failure is logged.
+    async fn revoke(&self, device: DeviceId, what: &str) {
+        match self.devices.revoke(device).await {
+            Ok(()) => tracing::info!(%device, "revoked {what}"),
+            Err(error) => tracing::warn!(%device, %error, "cannot revoke {what}"),
+        }
     }
 
     fn granted_path(&self) -> PathBuf {
@@ -330,29 +534,94 @@ impl Links {
     }
 
     /// A grant to a home this node no longer follows is revoked and
-    /// forgotten. Called by the fleet loop on every look.
-    pub(crate) async fn reconcile(&self, membership: Option<&Membership>) {
+    /// forgotten, and so is any device made for a fleet home that is not
+    /// the one on record. Called by the fleet loop on every look; skipped
+    /// while a grant is being made (it holds the lock for up to
+    /// [`REDEEMED_WITHIN`]).
+    ///
+    /// [Decision Log]
+    /// - Revoking is the one thing here that cannot be undone, so it needs
+    ///   to know the membership is gone (or names another home), not merely
+    ///   to have failed to read it: a read error keeps the grant.
+    /// - The membership is read here, after the grant, not taken from the
+    ///   loop's earlier look: a grant is only ever written while a
+    ///   membership exists, so reading in this order cannot pair a new
+    ///   grant with a membership read from before the join (which revoked
+    ///   the grant a join had just made).
+    pub(crate) async fn reconcile(&self) {
+        let Ok(_granting) = self.granting.try_lock() else {
+            return;
+        };
         let granted = match self.granted().await {
-            Ok(Some(granted)) => granted,
-            Ok(None) => return,
+            Ok(granted) => granted,
             Err(error) => {
                 tracing::warn!(%error, "cannot read what this node granted its home");
                 return;
             }
         };
-        if membership.is_some_and(|membership| membership.home == granted.home) {
-            return;
-        }
+        let files = self.files.clone();
+        let membership = match blocking(move || super::member::membership(&files)).await {
+            Ok(membership) => membership,
+            Err(error) => {
+                tracing::warn!(%error, "cannot read this node's fleet membership; its home's grant stays");
+                return;
+            }
+        };
+        let kept = match (&granted, &membership) {
+            (Some(granted), Some(membership)) if granted.home == membership.home => {
+                Some(granted.device)
+            }
+            (Some(granted), Some(_) | None) => {
+                self.forget(granted).await;
+                None
+            }
+            (None, Some(_) | None) => None,
+        };
+        self.sweep(kept).await;
+    }
+
+    /// Revoke the former home's device and delete the record, if it still
+    /// names that device.
+    async fn forget(&self, granted: &Granted) {
         if let Err(error) = self.devices.revoke(granted.device).await {
             tracing::warn!(%error, "cannot revoke the former home's device");
             return;
         }
         let path = self.granted_path();
-        match blocking(move || files::remove(&path)).await {
+        let device = granted.device;
+        let forgotten = blocking(move || match files::read_json::<Granted>(&path)? {
+            Some(current) if current.device == device => files::remove(&path),
+            Some(_) | None => Ok(()),
+        })
+        .await;
+        match forgotten {
             Ok(()) => {
                 tracing::info!(home = %granted.home, "revoked the former fleet home's access here");
             }
             Err(error) => tracing::warn!(%error, "cannot forget the former home's grant"),
+        }
+    }
+
+    /// Revoke every live device made for a fleet home but `kept`.
+    async fn sweep(&self, kept: Option<DeviceId>) {
+        let devices = match self.devices.list().await {
+            Ok(devices) => devices,
+            Err(error) => {
+                tracing::warn!(%error, "cannot list this node's devices");
+                return;
+            }
+        };
+        for device in devices {
+            if device.revoked_at.is_none()
+                && is_home_device(&device.label)
+                && kept != Some(device.id)
+            {
+                self.revoke(
+                    device.id,
+                    "a device made for a fleet home with no record here",
+                )
+                .await;
+            }
         }
     }
 
@@ -367,7 +636,8 @@ impl Links {
     }
 
     /// `fleet.grant`: redeem the link member device `member` sent, and keep
-    /// the credential.
+    /// the credential, if the node it names may be that device's (see the
+    /// module's Decision Log).
     pub(crate) async fn accept_grant(
         &self,
         member: DeviceId,
@@ -382,11 +652,35 @@ impl Links {
         let offer = link.decode().map_err(|error| {
             WireError::new(ErrorCode::InvalidRequest, format!("the link: {error}"))
         })?;
-        let dialer = WsDialer::for_routes(offer.direct.iter().chain(&offer.relays))
-            .map_err(|error| internal(&error))?;
+        let routes = offer.direct.len().saturating_add(offer.relays.len());
+        if routes == 0 || routes > MAX_GRANT_ROUTES {
+            return Err(WireError::new(
+                ErrorCode::InvalidRequest,
+                format!("a grant's link names 1 to {MAX_GRANT_ROUTES} routes, not {routes}"),
+            ));
+        }
+        let _granting = self.granting.lock().await;
+        let mut claim = Claim {
+            member,
+            node: offer.node,
+            key: &offer.key,
+            name: None,
+        };
+        let _replaced = check_claim(claim, self.node, &self.name, &self.grants().await)?;
+        let dialer = WsDialer::for_routes(offer.direct.iter().chain(&offer.relays)).map_err(
+            |error| {
+                tracing::warn!(%member, %error, "a member's grant link names routes this home cannot dial");
+                unavailable(CANNOT_PAIR.to_owned())
+            },
+        )?;
         let (paired, _route) = pair_over(&dialer, &offer, &self.name, RouteTimeouts::default())
             .await
-            .map_err(|error| unavailable(format!("cannot reach the member to pair: {error}")))?;
+            .map_err(|error| {
+                tracing::warn!(%member, node = %offer.node, %error, "cannot pair with the node a member's grant names");
+                unavailable(CANNOT_PAIR.to_owned())
+            })?;
+        claim.name = Some(&paired.node.name);
+        let replaced = check_claim(claim, self.node, &self.name, &self.grants().await)?;
         let grant = MemberGrant {
             member,
             node: offer.node,
@@ -400,16 +694,25 @@ impl Links {
         let (json, credential_path) = self.grant_paths(member);
         let credential = paired.credential;
         let dir = self.files.dir().join("grants");
+        let stale: Vec<(PathBuf, PathBuf)> = replaced
+            .iter()
+            .map(|device| self.grant_paths(*device))
+            .collect();
         blocking(move || {
             files::create_private_dir(&dir).map_err(|error| FileError::io(&dir, error))?;
             credential
                 .write(&credential_path)
                 .map_err(|error| FileError::io(&credential_path, std::io::Error::other(error)))?;
-            files::write_json(&json, &grant)
+            files::write_json(&json, &grant)?;
+            for (json, credential) in &stale {
+                files::remove(json)?;
+                files::remove(credential)?;
+            }
+            Ok(())
         })
         .await?;
         drop(self.members.lock().await.remove(&offer.node));
-        tracing::info!(member = %offer.node, "a member granted this home a credential");
+        tracing::info!(member = %offer.node, device = %member, replaced = ?replaced, "a member granted this home a credential");
         Ok(())
     }
 
@@ -460,20 +763,33 @@ impl Links {
         {
             return Ok(client.clone());
         }
-        let grant = self
+        // By the member device bound to `node`: exactly one, as grants are
+        // checked when made. Two can only come from grants kept before
+        // that check; neither is trusted.
+        let mut bound = self
             .grants()
             .await
             .into_iter()
-            .find(|grant| grant.node == node)
-            .ok_or_else(|| {
-                WireError::new(
+            .filter(|grant| grant.node == node);
+        let grant = match (bound.next(), bound.next()) {
+            (Some(grant), None) => grant,
+            (None, _) => {
+                return Err(WireError::new(
                     ErrorCode::NotFound,
                     format!(
-                        "node {node} is not a member of this fleet that granted the home access \
-                         (`vessel fleet nodes`)"
+                        "node {node} is not a member of this fleet that granted the home \
+                         access (`vessel fleet nodes`)"
                     ),
-                )
-            })?;
+                ));
+            }
+            (Some(first), Some(second)) => {
+                return Err(conflict(format!(
+                    "member devices {} and {} both claim node {node}; revoke the wrong one \
+                     (`vessel fleet members`)",
+                    first.member, second.member
+                )));
+            }
+        };
         let (_json, credential_path) = self.grant_paths(grant.member);
         let credential = blocking(move || {
             DeviceCredential::read(&credential_path)
@@ -523,5 +839,136 @@ impl Links {
             });
         }
         nodes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(byte: u8) -> NodePublicKey {
+        NodePublicKey::from_bytes([byte; 32])
+    }
+
+    fn held(member: DeviceId, node: NodeId, key_byte: u8, name: &str) -> MemberGrant {
+        MemberGrant {
+            member,
+            node,
+            name: name.to_owned(),
+            key: key(key_byte),
+            relays: Vec::new(),
+            direct: Vec::new(),
+            protocol: PROTOCOL_VERSION,
+            granted_at: Utc::now(),
+        }
+    }
+
+    fn refused(result: Result<Vec<DeviceId>, WireError>) -> String {
+        let error = result.unwrap_err();
+        assert_eq!(error.code, ErrorCode::Conflict, "{error:?}");
+        error.message
+    }
+
+    /// The checks of a grant against the grants held (the review of
+    /// 2026-11-06: a `sync` device claimed another member's node id).
+    #[test]
+    fn a_grant_may_not_make_one_nodes_id_or_key_another_s() {
+        let home = NodeId::random();
+        let (desktop, laptop, newcomer) =
+            (DeviceId::random(), DeviceId::random(), DeviceId::random());
+        let (desktop_node, laptop_node) = (NodeId::random(), NodeId::random());
+        let grants = [
+            held(desktop, desktop_node, 1, "desktop"),
+            held(laptop, laptop_node, 2, "laptop"),
+        ];
+        let keys = [key(0), key(1), key(2), key(3)];
+        let claim = |member, node, key_byte: usize, name| Claim {
+            member,
+            node,
+            key: &keys[key_byte],
+            name,
+        };
+
+        // A new node: nothing replaced.
+        let new_node = NodeId::random();
+        assert_eq!(
+            check_claim(
+                claim(newcomer, new_node, 3, Some("tablet")),
+                home,
+                "home",
+                &grants
+            )
+            .unwrap(),
+            Vec::<DeviceId>::new()
+        );
+        // Another member's id with another key: the reported attack.
+        let message = refused(check_claim(
+            claim(newcomer, desktop_node, 3, None),
+            home,
+            "home",
+            &grants,
+        ));
+        assert!(message.contains("another key"), "{message}");
+        // Another member's key under another id.
+        let message = refused(check_claim(
+            claim(newcomer, new_node, 1, None),
+            home,
+            "home",
+            &grants,
+        ));
+        assert!(message.contains("belongs to node"), "{message}");
+        // The home's own id, and its name.
+        let _own = refused(check_claim(
+            claim(newcomer, home, 3, None),
+            home,
+            "home",
+            &grants,
+        ));
+        let _named = refused(check_claim(
+            claim(newcomer, new_node, 3, Some("home")),
+            home,
+            "home",
+            &grants,
+        ));
+        // A device that granted once keeps its node and its key.
+        for (node, key_byte) in [(new_node, 1_usize), (desktop_node, 3), (laptop_node, 2)] {
+            let message = refused(check_claim(
+                claim(desktop, node, key_byte, None),
+                home,
+                "home",
+                &grants,
+            ));
+            assert!(message.contains("never changes"), "{message}");
+        }
+        assert!(
+            check_claim(
+                claim(desktop, desktop_node, 1, Some("desktop")),
+                home,
+                "home",
+                &grants
+            )
+            .unwrap()
+            .is_empty()
+        );
+        // Another member's name, once the home knows the node's.
+        let message = refused(check_claim(
+            claim(newcomer, new_node, 3, Some("laptop")),
+            home,
+            "home",
+            &grants,
+        ));
+        assert!(message.contains("named `laptop`"), "{message}");
+        // The same node joined again through a new device: it replaces the
+        // older grant.
+        assert_eq!(
+            check_claim(
+                claim(newcomer, desktop_node, 1, Some("desktop")),
+                home,
+                "home",
+                &grants
+            )
+            .unwrap(),
+            vec![desktop]
+        );
     }
 }

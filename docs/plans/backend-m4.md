@@ -478,15 +478,110 @@ Progress (2026-11-06):
   `fleet/grants/`. Leaving revokes that device once the node notices.
   `vessel fleet invite --relay` adds the `relay` scope.
 - **`fleet.peers`, `fleet.nodes` and `session.read` with `wait` (built).**
+  A waiting read follows the session's ring from `from` and wakes at the
+  first record there or when the session ends (the info watch does not
+  notify for `next_seq` alone, so a wait on it slept through a turn).
+- **`vessel mcp` across nodes (built):** every tool but `list_nodes` takes
+  `node` (an id, or a name from `list_nodes`; left out or naming this
+  node, the call stays here) and goes in `fleet.forward` for another node;
+  `list_nodes` is `fleet.nodes`; `wait_turn` and a new session's wait to
+  be ready are loops of `session.read` with `wait` (30 s per poll), the
+  same code path on every node.
+- **Leaving, checked in order:** the fleet loop revokes the home's device
+  only when it reads the membership after the grant and finds it gone or
+  naming another home; a membership it cannot read keeps the grant.
 - **Tests:** an e2e fleet of a home and two members on an in-process relay
   (calls from the home to a member and from member to member through the
   home; the home refusing a member without `relay`; members holding
   nothing on the home but `sync`/`relay`; a long poll across two hops; an
   agent on one member creating and killing its own session on another and
-  refused another's); a member taking deliveries from its home's device
-  only, cut down to the origin.
-- **Next:** `vessel mcp` taking `node`, `list_nodes`, and `wait_turn` as a
-  long poll.
+  refused another's; an agent's `vessel` tools on one member starting a
+  session on another by name and reading its reply through `wait_turn`);
+  a member taking deliveries from its home's device only, cut down to the
+  origin. The long-poll test lets the session run before the wait starts
+  and requires the read to return well before its wait, so only records
+  can wake it.
+- **Done.** Left to Track S: F4's cross-node `Source` over `pass_on`, and
+  `secret.copy` over the envelope. A member's agents reach other members
+  but not the home itself (members hold only `sync`/`relay` there).
+
+### Track X: the security review (2026-11-06)
+
+An independent review of the envelope and the delegated principals
+reproduced problems, fixed in this order:
+
+- **1 (high): a member device could speak for another member's node.** A
+  grant named its node by the id the node chose (`node.id`), which its key
+  does not prove: pairing checks only that the answering node claims the
+  link's id. A `sync` device granted a link from a stock node whose
+  `node.id` held another member's id; the home listed that member twice
+  and sent its calls to the impostor (prompts, input, copied secrets, and
+  forged `created_by`/`origin` through the relay check). Fixed in
+  `fleet/links.rs`: a member device is bound to the id and key of its
+  first grant; a grant that rebinds it, names an id or key another
+  device's grant holds, the home's own id, or a name in use is refused
+  (`conflict`); the same pair through another device is the node joined
+  again and replaces the older grant; calls go to the one device bound
+  to a node, never the first match. Tested by the review's proof of
+  concept turned into a refusal (`e2e/grants.rs`) and the checks one by
+  one (`fleet::links` unit test).
+  - **Proposed, not done: derive `NodeId` from the node's key** (for
+    example the first 16 bytes of a hash of it, as a UUID). Then the
+    pairing handshake would prove the id, the binding above would follow
+    from the key alone, and the trust-on-first-grant window (a device
+    claiming an id before the real node grants) would close. It changes
+    every existing node's id, so it needs a protocol version and a
+    migration (an alias table on homes and in node books); not for
+    milestone 4.
+- **2 (medium): revoking the home's device on a member did not hold.** The
+  pull loop made a new grant on every connection whose recorded device was
+  revoked, so a restart, or a home dropping the connection, gave the home
+  its access back. A member now grants once per join (`granted.json`
+  records the join it was made for): after a revocation the home stays
+  cut off until the node joins again (`e2e/grants.rs`).
+- **3 (medium): waiting reads filled the one connection between two
+  nodes.** A waiting read holds a call for up to a minute and a connection
+  runs 64; 64 waits through the home's connection to a member (or a
+  member's pull connection, which also carries `fleet.watch`) made every
+  other call on it fail. Now waiting reads hold at most half of a
+  connection's calls and one origin at most 8 on a node (`waits.rs`);
+  past either a read answers at once, and a passed-on read goes without
+  its wait. `vessel mcp` pauses a second after an early empty page, so a
+  waiter past the share polls once a second (`e2e/waiting.rs`: 64 waits
+  from one origin through the home's connection and through a member's,
+  8 wait, the rest answer, other calls pass; it fails without the shares).
+  Considered: a connection or pool of its own for long polls, which keeps
+  one more authenticated link per pair and still leaves the caller's own
+  connection to fill.
+- **4 (medium-low): devices for a home without a record.** A home switch
+  could delete the next home's fresh record (`reconcile` deleted the file
+  unconditionally), and a grant failing after the home redeemed the link
+  left a device nobody recorded. Grants and `reconcile` now take one
+  lock; a record is deleted only if it still names the revoked device; a
+  failed grant withdraws its invitation and revokes the device it made;
+  and `reconcile` revokes every live device labelled for a fleet home
+  (`fleet home <id>`, reserved: a device paired by hand under such a label
+  is revoked too) that is not the one on record (`e2e/grants.rs`: one
+  paired by hand, and one left by a grant the home refused after pairing).
+- **5 (low): `vessel mcp` took the first node of a name.** Names are each
+  node's own; a duplicate picked the first match, and a member named like
+  the agent's own node ran the call locally. A name more than one node has
+  (this one and another included) is now an error giving their ids
+  (`vessel-mcp` unit test), and the home refuses a grant from a node named
+  like itself or another member (item 1).
+- **6 (low): a grant made the home dial any routes.** A link names at most
+  8 routes, and a failure to pair answers in general terms; the details go
+  to the home's log (`e2e/grants.rs`).
+- **Documented, not changed** (ADR 0013, "Known limits"): an agent's
+  limits are per node, so 8 live sessions on each node it reaches (8 × N);
+  and a relaying member's own scopes on the home do not cap the calls it
+  relays (no read-only relay; a capped relay grant is sketched there).
+- **Found sound by the review:** deny-by-default forwarding, no nesting,
+  the origin built from the principal and not the request, deliveries only
+  from the recorded home device, the scope intersection, ownership and
+  depth across hops, the transfer holder binding, the waiting read's
+  wake-up, and the isolation of library code from the process
+  environment.
 
 ## Protocol 6 (accepted)
 
@@ -542,7 +637,7 @@ Envelope (Track X):
 | `fleet.forward` | Read | `Forward { node: NodeId, call: Call }` → `Forwarded { reply: Reply }` | A client (CLI, device, agent) asks its own node to run `call` on fleet node `node`. The node checks `call`'s own row scope (and, for an agent, the ownership and limits it can check locally) against the caller, as if the call were local, builds the `Origin` (below), and sends `fleet.relay` to its home (or, on the home, `fleet.deliver` to the member). `node` equal to the node itself runs the call locally. |
 | `fleet.relay` | Relay | `RelayCall { node, call, origin: Origin }` → `Forwarded` | A member asks the home to pass a call on. The home refuses an `origin.node` other than the member's own node (a member speaks only for its own principals), then sends `fleet.deliver` to `node` with its credential there, or, when `node` is the home itself, runs the call as `fleet.deliver` would. |
 | `fleet.deliver` | Read | `Deliver { call, origin }` → `Forwarded` | The home asks a member to run a call on behalf of `origin`. The member runs it as a delegated principal (below), and accepts it only from its home's device (the one `fleet.grant` made). Never passed on: delivering is the last hop, so there are no loops and at most two hops. |
-| `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member. |
+| `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member until the member joins again (a member grants once per join). |
 | `fleet.peers` | Sync | `ListPeers` → `Vec<FleetNode>` | The home's view of the fleet for members: `FleetNode { node, name, protocol, reachable }`, the home included. |
 | `fleet.nodes` | Read | `ListNodes` → `Vec<FleetNode>` | What any node knows of its fleet (a member asks its home with `fleet.peers`); the agents' `list_nodes`. |
 

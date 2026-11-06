@@ -69,7 +69,7 @@ pub use resume::{Backoff, ResumingStream, follow_resuming};
 pub use stream::SessionStream;
 pub use token::{BearerToken, InvalidToken};
 pub use url::{InvalidNodeUrl, NodeUrl};
-pub use vessel_rpc::{CallError, ClientConfig, Subscription, SubscriptionItem};
+pub use vessel_rpc::{CallError, ClientConfig, Subscription, SubscriptionItem, Unary};
 /// The short fingerprint people compare to recognise a node's key.
 pub use vessel_secure::fingerprint;
 pub use ws::WsTransportError;

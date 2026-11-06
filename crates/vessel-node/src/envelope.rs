@@ -44,6 +44,7 @@ use vessel_proto::{
 use crate::guard::Guarded;
 use crate::principal::Principal;
 use crate::service::{Connection, NodeService};
+use crate::waits::{WaitSlot, Waiter};
 
 fn forbidden(message: &str) -> WireError {
     WireError::new(ErrorCode::Forbidden, message.to_owned())
@@ -77,12 +78,14 @@ impl NodeService {
         request: Forward,
         guard: &Guarded,
     ) -> Result<Forwarded, WireError> {
-        let Forward { node, call } = request;
+        let Forward { node, mut call } = request;
         if node == self.links.node() {
             forwardable(call.method())?;
             connection.principal().permit(call.method())?;
             return forwarded(run_here(guard, connection, *call).await);
         }
+        let waiter = Waiter::of(connection.principal(), self.links.node());
+        let _slot = self.passed_wait(connection, waiter, &mut call);
         self.pass_on(connection.principal(), node, call).await
     }
 
@@ -144,6 +147,8 @@ impl NodeService {
             let delegated = Principal::delegated(*id, scopes, origin, self.links.node());
             return forwarded(run_here(guard, &connection.acting_as(delegated), *call).await);
         }
+        let mut call = call;
+        let _slot = self.passed_wait(connection, Waiter::origin(&origin), &mut call);
         self.links.call_member(node, Deliver { call, origin }).await
     }
 
@@ -168,6 +173,22 @@ impl NodeService {
         }
         let delegated = Principal::delegated(*id, scopes, origin, home);
         forwarded(run_here(guard, &connection.acting_as(delegated), *call).await)
+    }
+
+    /// A waiting read passed on to another node holds a call of this
+    /// connection until it is answered: within this connection's and the
+    /// waiter's share (`waits`), or it goes without its wait.
+    fn passed_wait(
+        &self,
+        connection: &Connection,
+        waiter: Waiter,
+        call: &mut Call,
+    ) -> Option<WaitSlot> {
+        if let Call::ReadEvents(read) = call {
+            self.wait_slot(connection, waiter, &mut read.wait)
+        } else {
+            None
+        }
     }
 
     /// Who a caller here is, for a call passed on to another node.
