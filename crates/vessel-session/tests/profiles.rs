@@ -12,7 +12,7 @@ use vessel_proto::{
     ContentBlock, Creator, DeviceId, ErrorCode, HarnessKind, HarnessSessionId, SessionInput,
     SessionStatus, StopReason,
 };
-use vessel_session::{LaunchOptions, MoveError, SessionError};
+use vessel_session::{LaunchOptions, MoveError, ProfileMove, SessionError};
 
 use support::{
     Fixture, Reader, SECRETS, inherited, named, profiles, same_file, servers, structured, terminal,
@@ -166,6 +166,7 @@ mod support {
                 from_home: self.home_of(from),
                 to_home: self.home_of(to),
                 mcp_servers: ResolvedMcpServers::new(),
+                notices: Vec::new(),
                 force,
             }
         }
@@ -316,6 +317,8 @@ mod support {
         pub(super) stops: Vec<StopReason>,
         /// Every `ProfileChanged`, as `(from, to)`.
         pub(super) changes: Vec<(Option<ProfileName>, Option<ProfileName>)>,
+        /// Every `HarnessLog` line that starts with `vessel:`.
+        pub(super) logs: Vec<String>,
     }
 
     impl Reader {
@@ -329,6 +332,7 @@ mod support {
                 turns: 0,
                 stops: Vec::new(),
                 changes: Vec::new(),
+                logs: Vec::new(),
             }
         }
 
@@ -363,6 +367,9 @@ mod support {
                 SessionEvent::ProfileChanged { from, to } => {
                     self.changes.push((from.clone(), to.clone()));
                 }
+                SessionEvent::Agent {
+                    event: AgentEvent::HarnessLog { line },
+                } if line.starts_with("vessel:") => self.logs.push(line.clone()),
                 SessionEvent::Agent { .. } | SessionEvent::Status { .. } => {}
             }
             Some(record)
@@ -575,6 +582,7 @@ async fn a_terminal_session_reads_its_servers_from_a_file_removed_with_it() {
                     profile: Some(named(&profiles(fixture.homes()), "claude-alt")),
                     mcp_servers: servers(),
                     mcp_dir: Some(fixture.homes().to_owned()),
+                    notices: vec!["vessel: one".to_owned(), "vessel: two".to_owned()],
                     ..LaunchOptions::default()
                 },
             )
@@ -583,6 +591,8 @@ async fn a_terminal_session_reads_its_servers_from_a_file_removed_with_it() {
         drop(created.durable);
         let mut reader = Reader::new(created.handle);
         let _ready = reader.line("ready").await;
+        // Notices come first, as log lines, in terminal mode too.
+        assert_eq!(reader.logs, ["vessel: one", "vessel: two"]);
         reader.type_line("args").await;
         let args = reader.line("args [").await;
         for secret in SECRETS {
@@ -664,6 +674,7 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
             mcp_servers: servers(),
             mcp_dir: None,
             created_by: device.clone(),
+            notices: vec!["vessel: a notice".to_owned()],
         };
         let created = fixture
             .create(structured(None), options.clone())
@@ -676,6 +687,7 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
         assert_eq!(info.profile.as_ref(), Some(alt.name()));
         let mut reader = Reader::new(created.handle);
         reader.until_status(&SessionStatus::Running).await;
+        assert_eq!(reader.logs, ["vessel: a notice"]);
 
         let home = home(&alt, fixture.homes(), |name| std::env::var_os(name)).unwrap();
         assert_eq!(
@@ -736,11 +748,11 @@ async fn a_moved_session_continues_its_conversation_in_the_other_home() {
         let id = reader.handle().id();
         let session = reader.handle().info().harness_session.unwrap();
 
-        let info = fixture
-            .runtime
-            .move_profile(id, fixture.request(&alt, &work, false))
-            .await
-            .unwrap();
+        let request = ProfileMove {
+            notices: vec!["vessel: moved".to_owned()],
+            ..fixture.request(&alt, &work, false)
+        };
+        let info = fixture.runtime.move_profile(id, request).await.unwrap();
         assert_eq!(info.profile.as_ref(), Some(work.name()));
         assert_eq!(info.status, SessionStatus::Running);
         assert_eq!(info.harness_session.as_ref(), Some(&session));
@@ -757,6 +769,7 @@ async fn a_moved_session_continues_its_conversation_in_the_other_home() {
         );
         // The log has the conversation already; the replay is not repeated.
         assert!(!reader.text.contains("replayed"), "{}", reader.text);
+        assert_eq!(reader.logs, ["vessel: moved"]);
 
         let (from, to) = (fixture.project(&alt), fixture.project(&work));
         assert!(same_file(

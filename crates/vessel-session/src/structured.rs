@@ -58,9 +58,7 @@ pub(crate) struct MoveState {
 impl StructuredActor {
     /// Run until the agent has exited and the final status is published.
     pub(crate) async fn run(mut self) {
-        self.life
-            .status(&mut self.agent, SessionStatus::Starting)
-            .await;
+        self.life.starting(&mut self.agent).await;
 
         let mut control_open = true;
         let code = loop {

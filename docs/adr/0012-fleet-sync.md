@@ -286,3 +286,13 @@ It is idempotent: running it again fills gaps and changes nothing else.
 - A test asserts that no value appears on any harness command line, in
   `vessel-harness` (the command) and in `vessel-session` (the arguments the
   fakes actually received).
+- **Where the servers come from (node side, 2026-11-06).** The node asks an
+  `McpSource` (`vessel-node`, `profiles/launch.rs`) once per launch and
+  per profile move, with the session's spec. Fleet sync implements it over
+  the fleet's definitions and this node's secrets (`vessel_fleet::resolve`)
+  and replaces the empty source where the node is put together; the
+  source answers from memory, since it is called on the async runtime.
+  Secrets it reports missing are named in the session's log, as
+  `vessel:` log lines right after `starting` (and after a move), and in
+  the node's log; the session starts without the servers that need them.
+  The agent's own `vessel` server (ADR 0013) joins the same list.

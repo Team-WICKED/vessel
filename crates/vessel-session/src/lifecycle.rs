@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 use vessel_agent::AgentProcess;
-use vessel_proto::{SessionEvent, SessionStatus};
+use vessel_proto::{AgentEvent, SessionEvent, SessionStatus};
 use vessel_pty::{PtyProcess, Signal};
 
 use crate::publish::Publisher;
@@ -69,9 +69,33 @@ impl Stoppable for AgentProcess {
 pub(crate) struct Lifecycle {
     pub(crate) out: Publisher,
     pub(crate) stop: Stopper,
+    /// Vessel's own lines for the log, published right after `Starting`
+    /// (`LaunchOptions::notices`).
+    pub(crate) notices: Vec<String>,
 }
 
 impl Lifecycle {
+    /// The first records: `Status{Starting}`, then the notices, each a
+    /// `HarnessLog` line.
+    pub(crate) async fn starting<P: Stoppable>(&mut self, process: &mut P) {
+        self.status(process, SessionStatus::Starting).await;
+        let lines = std::mem::take(&mut self.notices);
+        self.notices(process, lines).await;
+    }
+
+    /// Publish Vessel's own lines, each a `HarnessLog` record.
+    pub(crate) async fn notices<P: Stoppable>(&mut self, process: &mut P, lines: Vec<String>) {
+        for line in lines {
+            self.publish(
+                process,
+                SessionEvent::Agent {
+                    event: AgentEvent::HarnessLog { line },
+                },
+            )
+            .await;
+        }
+    }
+
     /// Publish one event, staying responsive to `kill` while the durable
     /// channel is full.
     pub(crate) async fn publish<P: Stoppable>(&mut self, process: &mut P, event: SessionEvent) {

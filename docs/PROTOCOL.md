@@ -67,6 +67,11 @@ session as created by the owner, and never emit `profile_changed`.
   to B" } }` at the same `seq` (the log stays gap-free), in subscriptions
   and in `session.read` pages alike, and `device.list` leaves out scopes
   the client's version does not have.
+- Vessel's own notices in a session's log are `agent { harness_log {
+  line: "vessel: ..." } }` records, in terminal sessions too (for example
+  right after `starting`, an MCP server left out because this node lacks
+  a secret, naming the secret, never a value). A terminal client that
+  shows only terminal output can ignore them; `vessel log` prints them.
 
 ## Version 4 (2026-11-06)
 

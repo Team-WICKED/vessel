@@ -456,8 +456,10 @@ they started.
     start (a broken file stops the node) and on `profile.reload` (a broken
     one leaves the set in effect); `profiles::launch` turns a spec and the
     caller's principal into `LaunchOptions` (the profile resolved, an
-    owner-only `<data_dir>/mcp`, `created_by`), and is where fleet sync's
-    MCP servers will come in. The store's schema 3 keeps each session's
+    owner-only `<data_dir>/mcp`, `created_by`). Its `McpSource` is where
+    fleet sync's resolved MCP servers come in (H3, node side; empty until
+    Track F plugs in); missing secrets become `vessel:` lines in the
+    session's log (`LaunchOptions::notices`). The store's schema 3 keeps each session's
     current profile (following `ProfileChanged`) and its creator. The terminal actor holds the
     MCP file until the session ends.
   - `vessel-node` (H2): `profiles::moving::plan` resolves the target
