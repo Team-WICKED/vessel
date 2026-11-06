@@ -79,6 +79,17 @@ pub(crate) enum Refusal {
     Clients,
     /// A client past `Limits::max_clients_per_node`.
     NodeClients,
+    /// A control connection past `Limits::max_registering_per_address`.
+    AddressRegistering,
+    /// A node not registered before, in a place kept for those that were
+    /// (`Limits::reserved_registering`).
+    NotKnown,
+    /// A client past `Limits::max_clients_per_address`.
+    AddressClients,
+    /// A socket past `Limits::max_connections`, at `accept`.
+    Connections,
+    /// A socket past `Limits::max_connections_per_address`, at `accept`.
+    AddressConnections,
 }
 
 /// How often each kind of refusal is logged at most.

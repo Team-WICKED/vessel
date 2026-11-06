@@ -140,12 +140,29 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   | `--max-clients` | relayed connections at once, in all | 384 |
   | `--max-clients-per-node` | relayed connections to one node at once | 128 |
   | `--max-bytes-per-second` | bytes a second each way through one connection, after a one-second burst (0: no limit; at least 64 KiB) | 16 MiB |
+  | `--max-connections` | sockets open at once, of every kind, counted from accept | 1000 |
+  | `--max-connections-per-address` | sockets open at once from one address (an IPv6 `/64`), counted from accept; not applied with `--client-address-header` | 128 |
+  | `--max-registering-per-address` | nodes still registering at once from one address | 8 |
+  | `--reserved-registering` | of `--max-registering`, places kept for nodes that registered here before (at most half) | 16 |
+  | `--max-clients-per-address` | relayed connections at once from one address | 32 |
 
   A node past `--max-nodes` is told the relay is full and tries again
-  every 30 s; a client past a connection limit is closed with code `4503`
-  and may try again. The relay logs each kind of refusal at info, at most
-  once every 10 s with the count in between, and new connections from one
-  address are limited too (30 at once, then one a second).
+  every 30 s; a client or a registering node past a connection limit is
+  closed with code `4503`, and a socket past an accept limit is answered
+  `503`, both free to try again. The relay logs each kind of refusal at
+  info, at most once every 10 s with the count in between, and new
+  connections from one address are limited too (30 at once, then one a
+  second).
+- Deadlines, not configurable: a request's headers within 10 s; a
+  registering node's first message, and a client's first record once its
+  node answered, within 2 s; and a stopping relay drops what is still open
+  5 s after it was asked to stop. A node registered before (since the
+  relay started) may take one of the places `--reserved-registering`
+  keeps, so it gets back in while strangers hold the others.
+- Behind a proxy, the proxy should limit connections per client itself
+  (nginx's `limit_conn`): every connection reaches the relay from the
+  proxy's address, so the relay counts per client only from the header,
+  once a request arrives.
 - A fleet's home that registers with the relay gives its members, those
   started without `--relay` of their own, tickets for their own keys
   (`fleet.callback`), never the token: a ticket registers that one node,
@@ -154,7 +171,8 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
 - Each relayed connection holds two sockets on the relay, each node one:
   keep `max-nodes + 2 × max-clients` under the relay's open-file limit
   (`ulimit -n`, or `LimitNOFILE` in a systemd unit), which the defaults
-  do for the common 1024, and raise both together.
+  do for the common 1024, and raise both together; `--max-connections`
+  (1000) caps every socket, so the relay refuses before it runs out.
 
 ### A node behind NAT: pairing a device
 
@@ -366,7 +384,7 @@ start a session on another machine and read its answer.
 | `VESSEL_RELAY_BIND` | `vesseld relay --bind` | `127.0.0.1:7078` |
 | `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
 | `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` | unset: the peer's address |
-| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB |
+| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND`, `VESSEL_RELAY_MAX_CONNECTIONS`, `VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS`, `VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS`, `VESSEL_RELAY_RESERVED_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB, 1000, 128, 8, 16, 32 |
 | `VESSEL_NODE_SOCKET`, `VESSEL_AGENT_SESSION`, `VESSEL_AGENT_SECRET` | `vessel mcp` only: set by the node in each session's `vessel` MCP server | set by the node |
 
 ## Layout
