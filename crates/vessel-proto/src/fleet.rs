@@ -31,8 +31,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::id::DeviceId;
 use crate::key::{KeyTextError, hex_array, serde_via_text, write_hex};
 use crate::name::{EnvName, HeaderName, McpServerName, SecretName};
 
@@ -477,6 +480,83 @@ pub type McpDefinitions = McpServers<ConfigValue>;
 
 /// MCP servers ready to hand to a harness at launch.
 pub type ResolvedMcpServers = McpServers<ResolvedValue>;
+
+/// `fleet.manifest` (protocol 5): the home's current bundle. Needs `Sync`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetManifest;
+
+/// `fleet.blob` (protocol 5): part of a blob, from `offset`. A member asks
+/// only for blobs it lacks, chunk by chunk. Needs `Sync`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadBlob {
+    /// Which blob.
+    pub hash: BlobHash,
+    /// Where to start, in bytes.
+    #[serde(default)]
+    pub offset: u64,
+}
+
+/// Reply to `fleet.blob`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlobChunk {
+    /// Bytes from the requested offset: at most `MAX_LEN`, fewer at the end.
+    #[serde(with = "crate::base64_bytes")]
+    pub data: Bytes,
+    /// The blob's whole size, so the member knows when it is done.
+    pub total: u64,
+}
+
+impl BlobChunk {
+    /// The most a chunk carries: 1 MiB, about 1.4 MiB as base64, well under
+    /// the 16 MiB frame limit and small enough not to hold up other replies
+    /// on the connection.
+    pub const MAX_LEN: usize = 1 << 20;
+}
+
+/// `fleet.watch` (protocol 5): wait for a generation newer than `after`.
+/// A long poll, not a subscription, so it needs no new frame type: the home
+/// answers as soon as one is published, or with its current generation
+/// (possibly `after` itself) when its wait limit passes, and the member asks
+/// again. Needs `Sync`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchFleet {
+    /// The generation the member has.
+    pub after: Generation,
+}
+
+/// `fleet.report` (protocol 5): a member says what it applied and which
+/// files it left alone because they were edited locally. Needs `Sync`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportApplied {
+    /// The generation applied.
+    pub generation: Generation,
+    /// Files kept as edited, with the incoming version written beside them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<BundlePath>,
+}
+
+/// `fleet.members` (protocol 5): the home's members and what each last
+/// reported. Needs `Admin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListMembers;
+
+/// A member as its home reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetMember {
+    /// The member's device on the home.
+    pub device: DeviceId,
+    /// Its label.
+    pub label: String,
+    /// The generation it last applied, if it has reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied: Option<Generation>,
+    /// Files it kept as edited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<BundlePath>,
+    /// When it last reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_at: Option<DateTime<Utc>>,
+}
 
 #[cfg(test)]
 mod tests {

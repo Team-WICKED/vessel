@@ -45,7 +45,7 @@ use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
-    Call, ClientFrame, ErrorCode, Handler, Outcome, RequestId, WireError, dispatch,
+    Call, ClientFrame, ErrorCode, Handler, Outcome, ProtocolVersion, RequestId, WireError, dispatch,
 };
 
 use super::outbound::Outgoing;
@@ -61,6 +61,9 @@ pub(super) struct Calls<H: Handler> {
     /// unknown call is a no-op.
     running: HashMap<RequestId, AbortHandle>,
     limit: NonZeroUsize,
+    /// The connection's negotiated version: a call that needs a later one
+    /// is refused without reaching the handler.
+    protocol: ProtocolVersion,
 }
 
 impl<H> Calls<H>
@@ -68,13 +71,19 @@ where
     H: Handler + Send + 'static,
     H::Context: Send + 'static,
 {
-    pub(super) fn new(handler: Arc<H>, context: Arc<H::Context>, limit: NonZeroUsize) -> Self {
+    pub(super) fn new(
+        handler: Arc<H>,
+        context: Arc<H::Context>,
+        limit: NonZeroUsize,
+        protocol: ProtocolVersion,
+    ) -> Self {
         Self {
             handler,
             context,
             tasks: JoinSet::new(),
             running: HashMap::new(),
             limit,
+            protocol,
         }
     }
 
@@ -90,7 +99,21 @@ where
         tracing::trace!(%id, method = call.method().as_str(), "call");
         let handler = Arc::clone(&self.handler);
         let context = Arc::clone(&self.context);
+        let protocol = self.protocol;
+        // Refused calls take the same path as answered ones, so their
+        // answers keep the same ordering and cancellation rules.
         let task = self.tasks.spawn(async move {
+            let needs = call.since();
+            if needs > protocol {
+                let error = WireError::new(
+                    ErrorCode::Unsupported,
+                    format!(
+                        "`{}` as sent needs protocol {needs}; this connection speaks {protocol}",
+                        call.method().as_str()
+                    ),
+                );
+                return (id, Outcome::Err(error));
+            }
             let outcome = dispatch(&*handler, &*context, call).await;
             (id, outcome)
         });
@@ -173,7 +196,7 @@ where
                 return Ok(());
             }
             Some((id, outcome)) = calls.next_finished() => {
-                if queue.send(Outgoing::Response { id, outcome }).await.is_err() {
+                if queue.send(Outgoing::Response { id, outcome: Box::new(outcome) }).await.is_err() {
                     // The writer is gone, so the connection is over.
                     return Ok(());
                 }
@@ -193,7 +216,7 @@ where
                             ErrorCode::Unavailable,
                             "too many calls in flight on this connection; retry when one finishes",
                         );
-                        let answer = Outgoing::Response { id, outcome: Outcome::Err(error) };
+                        let answer = Outgoing::Response { id, outcome: Box::new(Outcome::Err(error)) };
                         if queue.send(answer).await.is_err() {
                             return Ok(());
                         }
@@ -204,7 +227,7 @@ where
                             ErrorCode::InvalidRequest,
                             format!("invalid request: {error}"),
                         );
-                        let answer = Outgoing::Response { id, outcome: Outcome::Err(error) };
+                        let answer = Outgoing::Response { id, outcome: Box::new(Outcome::Err(error)) };
                         if queue.send(answer).await.is_err() {
                             return Ok(());
                         }
@@ -234,7 +257,10 @@ where
     let answered = async {
         while let Some((id, outcome)) = calls.next_finished().await {
             if queue
-                .send(Outgoing::Response { id, outcome })
+                .send(Outgoing::Response {
+                    id,
+                    outcome: Box::new(outcome),
+                })
                 .await
                 .is_err()
             {

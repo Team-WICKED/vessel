@@ -97,14 +97,14 @@ mod support {
     }
 
     pub(super) fn terminal(harness: HarnessKind) -> SessionSpec {
-        SessionSpec {
+        SessionSpec::new(
             harness,
-            cwd: Some(std::env::temp_dir()),
-            mode: SessionMode::Terminal {
+            SessionMode::Terminal {
                 args: Vec::new(),
                 size: TerminalSize::default(),
             },
-        }
+        )
+        .with_cwd(std::env::temp_dir())
     }
 
     pub(super) fn keys(text: &'static str) -> SessionInput {
@@ -199,7 +199,9 @@ mod support {
             while self.next().await.is_some() {}
             match &self.records.last().unwrap().event {
                 SessionEvent::Status { status } => status.clone(),
-                other @ (SessionEvent::Terminal(_) | SessionEvent::Agent { .. }) => {
+                other @ (SessionEvent::Terminal(_)
+                | SessionEvent::Agent { .. }
+                | SessionEvent::ProfileChanged { .. }) => {
                     panic!("last record is not a status: {other:?}")
                 }
             }
@@ -477,14 +479,13 @@ async fn launch_problems_are_typed_errors() {
         let error = fixture.runtime.create(relative).await.unwrap_err();
         assert_eq!(error.code(), ErrorCode::InvalidRequest);
 
-        let structured = SessionSpec {
-            harness: HarnessKind::ClaudeCode,
-            cwd: None,
-            mode: SessionMode::Structured {
+        let structured = SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Structured {
                 model: Some(ModelId::new("cheap")),
                 resume: None,
             },
-        };
+        );
         let error = fixture.runtime.create(structured).await.unwrap_err();
         assert_eq!(error.code(), ErrorCode::Unsupported);
         assert!(fixture.runtime.list().is_empty());

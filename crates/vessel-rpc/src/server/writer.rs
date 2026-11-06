@@ -36,6 +36,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{Sink, SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use vessel_proto::ProtocolVersion;
 
 use super::encode::Frame;
 use super::outbound::Outgoing;
@@ -89,6 +90,7 @@ impl Unflushed {
 /// queued, all within `close_timeout`.
 pub(super) async fn write<K, E>(
     mut sink: K,
+    protocol: ProtocolVersion,
     mut queue: mpsc::Receiver<Outgoing>,
     closing: CancellationToken,
     settled: CancellationToken,
@@ -135,7 +137,7 @@ where
                 break 'serve;
             };
             ready.map_err(ServeError::Transport)?;
-            let text = frame.encode().map_err(ServeError::Encode)?;
+            let text = frame.encode(protocol).map_err(ServeError::Encode)?;
             let burst = unflushed.add(text.len());
             sink.start_send_unpin(text).map_err(ServeError::Transport)?;
             if burst {
@@ -150,6 +152,7 @@ where
         close_timeout,
         finish(
             &mut sink,
+            protocol,
             carried,
             &mut queue,
             &mut subscriptions,
@@ -193,6 +196,7 @@ where
 /// close must not wait for them.
 async fn finish<K, E>(
     sink: &mut K,
+    protocol: ProtocolVersion,
     carried: Vec<Frame>,
     queue: &mut mpsc::Receiver<Outgoing>,
     subscriptions: &mut Subscriptions,
@@ -202,7 +206,7 @@ async fn finish<K, E>(
     K: Sink<String, Error = E> + Unpin,
 {
     for frame in carried {
-        if !feed_closing(sink, frame).await {
+        if !feed_closing(sink, protocol, frame).await {
             return;
         }
     }
@@ -214,14 +218,14 @@ async fn finish<K, E>(
         };
         // `None`: every sender is gone, the reader's included.
         let Some(item) = item else { break };
-        if !write_closing(sink, item, subscriptions, departures).await {
+        if !write_closing(sink, protocol, item, subscriptions, departures).await {
             return;
         }
     }
     let queued = queue.len();
     for _ in 0..queued {
         let Ok(item) = queue.try_recv() else { break };
-        if !write_closing(sink, item, subscriptions, departures).await {
+        if !write_closing(sink, protocol, item, subscriptions, departures).await {
             return;
         }
     }
@@ -233,6 +237,7 @@ async fn finish<K, E>(
 /// Write one queued item while closing; `false` once the client is gone.
 async fn write_closing<K, E>(
     sink: &mut K,
+    protocol: ProtocolVersion,
     item: Outgoing,
     subscriptions: &mut Subscriptions,
     departures: &mut FuturesUnordered<Departure>,
@@ -241,7 +246,7 @@ where
     K: Sink<String, Error = E> + Unpin,
 {
     for frame in subscriptions.apply(item, departures).into_iter().flatten() {
-        if !feed_closing(sink, frame).await {
+        if !feed_closing(sink, protocol, frame).await {
             return false;
         }
     }
@@ -249,11 +254,11 @@ where
 }
 
 /// Write one frame while closing; `false` once the client is gone.
-async fn feed_closing<K, E>(sink: &mut K, frame: Frame) -> bool
+async fn feed_closing<K, E>(sink: &mut K, protocol: ProtocolVersion, frame: Frame) -> bool
 where
     K: Sink<String, Error = E> + Unpin,
 {
-    let Ok(text) = frame.encode() else {
+    let Ok(text) = frame.encode(protocol) else {
         return false;
     };
     if sink.feed(text).await.is_err() {

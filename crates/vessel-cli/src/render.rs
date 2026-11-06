@@ -4,7 +4,8 @@
 use std::fmt::Write as _;
 
 use vessel_proto::{
-    Harness, NodeInfo, NodeState, SessionInfo, SessionMode, SessionStatus, StructuredSupport,
+    Harness, NodeInfo, NodeState, ProfileName, SessionInfo, SessionMode, SessionStatus,
+    StructuredSupport,
 };
 
 /// A session's status in a few words.
@@ -17,6 +18,11 @@ pub(crate) fn status(status: &SessionStatus) -> String {
         SessionStatus::Failed { message } => format!("failed: {message}"),
         SessionStatus::Interrupted => "interrupted".to_owned(),
     }
+}
+
+/// A profile's name, or `default` for the harness's implicit one.
+pub(crate) fn profile(profile: Option<&ProfileName>) -> &str {
+    profile.map_or("default", ProfileName::as_str)
 }
 
 /// `terminal` or `structured`, plus what matters about the mode.
@@ -118,27 +124,26 @@ pub(crate) fn sessions(sessions: &[SessionInfo]) -> String {
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
-    use vessel_proto::{EventSeq, HarnessKind, SessionId, SessionSpec, TerminalSize};
+    use vessel_proto::{HarnessKind, SessionId, SessionSpec, TerminalSize};
 
     use super::*;
 
     #[test]
     fn sessions_render_one_line_each() {
-        let session = SessionInfo {
-            id: SessionId::random(),
-            spec: SessionSpec {
-                harness: HarnessKind::Codex,
-                cwd: None,
-                mode: SessionMode::Terminal {
-                    args: vec!["--full-auto".to_owned()],
-                    size: TerminalSize::default(),
-                },
-            },
-            status: SessionStatus::Exited { code: None },
-            created_at: DateTime::UNIX_EPOCH,
-            ended_at: None,
-            next_seq: EventSeq::ZERO,
-            harness_session: None,
+        let session = {
+            let mut info = SessionInfo::new(
+                SessionId::random(),
+                SessionSpec::new(
+                    HarnessKind::Codex,
+                    SessionMode::Terminal {
+                        args: vec!["--full-auto".to_owned()],
+                        size: TerminalSize::default(),
+                    },
+                ),
+                DateTime::UNIX_EPOCH,
+            );
+            info.status = SessionStatus::Exited { code: None };
+            info
         };
         let text = sessions(std::slice::from_ref(&session));
         assert!(text.starts_with(&session.id.to_string()));

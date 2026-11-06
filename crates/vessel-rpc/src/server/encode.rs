@@ -12,16 +12,23 @@
 //! - Cost: the event frame's shape is stated twice. The test fails on any
 //!   drift; if `vessel-proto` ever carries `Arc<EventRecord>` in
 //!   `ServerFrame::Event`, this module goes away.
+//! - Protocol 5: encoding is also where a frame is adapted to the
+//!   connection's negotiated version (`ServerFrame::for_protocol`): the one
+//!   place that knows both the frame and the version. Frames that need no
+//!   change are written as they are, without a copy.
+//! - `Frame::Server` is boxed: frames wait in the connection's bounded
+//!   queue, and an inline `ServerFrame` (264 bytes since `SessionInfo` grew)
+//!   would size every slot for the rare large reply.
 
 use std::sync::Arc;
 
 use serde::Serialize;
-use vessel_proto::{EventRecord, ServerFrame, SubscriptionId};
+use vessel_proto::{EventRecord, ProtocolVersion, ServerFrame, SubscriptionId};
 
 /// A frame ready to be written.
 pub(super) enum Frame {
     /// Anything but a subscription event.
-    Server(ServerFrame),
+    Server(Box<ServerFrame>),
     /// A subscription event, record shared with other subscribers.
     Event {
         subscription: SubscriptionId,
@@ -38,16 +45,31 @@ struct EventFrame<'a> {
 }
 
 impl Frame {
-    pub(super) fn encode(&self) -> serde_json::Result<String> {
+    /// A frame that is not a subscription event.
+    pub(super) fn server(frame: ServerFrame) -> Self {
+        Self::Server(Box::new(frame))
+    }
+
+    /// The frame's text for a client speaking `protocol`.
+    pub(super) fn encode(&self, protocol: ProtocolVersion) -> serde_json::Result<String> {
         match self {
-            Self::Server(frame) => serde_json::to_string(frame),
+            Self::Server(frame) => match frame.for_protocol(protocol) {
+                Some(adapted) => serde_json::to_string(&adapted),
+                None => serde_json::to_string(frame),
+            },
             Self::Event {
                 subscription,
                 record,
-            } => serde_json::to_string(&EventFrame {
-                subscription: *subscription,
-                record,
-            }),
+            } => match record.for_protocol(protocol) {
+                Some(adapted) => serde_json::to_string(&EventFrame {
+                    subscription: *subscription,
+                    record: &adapted,
+                }),
+                None => serde_json::to_string(&EventFrame {
+                    subscription: *subscription,
+                    record,
+                }),
+            },
         }
     }
 }
@@ -73,7 +95,7 @@ mod tests {
             subscription,
             record: Arc::new(record.clone()),
         }
-        .encode()
+        .encode(vessel_proto::PROTOCOL_VERSION)
         .unwrap();
         let owned = serde_json::to_string(&ServerFrame::Event {
             subscription,

@@ -81,18 +81,21 @@ impl Subscriptions {
     ) -> Frames {
         match item {
             Outgoing::Response { id, outcome } => {
-                let announced = match &outcome {
+                let announced = match &*outcome {
                     Outcome::Ok(Reply::Subscribe(subscribed)) => Some(subscribed.subscription),
                     Outcome::Ok(_) | Outcome::Err(_) => None,
                 };
-                let response = Some(Frame::Server(ServerFrame::Response { id, outcome }));
+                let response = Some(Frame::server(ServerFrame::Response {
+                    id,
+                    outcome: *outcome,
+                }));
                 let orphan = announced
                     .filter(|&subscription| !self.announce(subscription))
                     .map(|subscription| {
                         // Named but not open (its sink is already gone): end
                         // it right away so the client does not wait.
                         let resume_from = self.take_released(subscription);
-                        Frame::Server(ServerFrame::SubscriptionEnded {
+                        Frame::server(ServerFrame::SubscriptionEnded {
                             subscription,
                             end: SubscriptionEnd::Lagged { resume_from },
                         })
@@ -136,7 +139,7 @@ impl Subscriptions {
             }
             Outgoing::End { subscription, end } => {
                 let frame = self.open.remove(&subscription).map(|_open| {
-                    Frame::Server(ServerFrame::SubscriptionEnded { subscription, end })
+                    Frame::server(ServerFrame::SubscriptionEnded { subscription, end })
                 });
                 [frame, None]
             }
@@ -147,7 +150,7 @@ impl Subscriptions {
                 let closed = self.open.remove(&subscription);
                 let frame = closed.as_ref().map(|open| {
                     open.cancel.cancel();
-                    Frame::Server(ServerFrame::SubscriptionEnded {
+                    Frame::server(ServerFrame::SubscriptionEnded {
                         subscription,
                         end: SubscriptionEnd::Unsubscribed,
                     })
@@ -211,7 +214,7 @@ impl Subscriptions {
             return None;
         }
         tracing::debug!(%subscription, "subscription released without an end");
-        Some(Frame::Server(ServerFrame::SubscriptionEnded {
+        Some(Frame::server(ServerFrame::SubscriptionEnded {
             subscription,
             end: SubscriptionEnd::Lagged {
                 resume_from: open.next,

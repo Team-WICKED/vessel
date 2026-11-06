@@ -185,14 +185,14 @@ mod support {
 }
 
 fn structured(model: Option<&str>) -> SessionSpec {
-    SessionSpec {
-        harness: HarnessKind::ClaudeCode,
-        cwd: Some(std::env::temp_dir()),
-        mode: SessionMode::Structured {
+    SessionSpec::new(
+        HarnessKind::ClaudeCode,
+        SessionMode::Structured {
             model: model.map(ModelId::new),
             resume: None,
         },
-    }
+    )
+    .with_cwd(std::env::temp_dir())
 }
 
 fn prompt(text: &str) -> SessionInput {
@@ -210,7 +210,9 @@ fn agent(wanted: fn(&AgentEvent) -> bool) -> impl Fn(&SessionEvent) -> bool {
 const fn status(event: &SessionEvent) -> Option<&SessionStatus> {
     match event {
         SessionEvent::Status { status } => Some(status),
-        SessionEvent::Terminal(_) | SessionEvent::Agent { .. } => None,
+        SessionEvent::Terminal(_)
+        | SessionEvent::Agent { .. }
+        | SessionEvent::ProfileChanged { .. } => None,
     }
 }
 

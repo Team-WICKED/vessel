@@ -3,7 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Call, Outcome};
+use super::{Call, Outcome, Reply};
+use crate::device::Scope;
 use crate::error::WireError;
 use crate::event::EventRecord;
 use crate::id::{EventSeq, RequestId, SubscriptionId};
@@ -105,4 +106,55 @@ pub enum ServerFrame {
         /// Why.
         end: SubscriptionEnd,
     },
+}
+
+impl ServerFrame {
+    /// This frame as a client speaking `protocol` reads it, or `None` when
+    /// it needs no change: events newer than the connection are replaced by
+    /// their stand-ins (`SessionEvent::for_protocol`), in subscription
+    /// events and in `session.read` pages alike, and scopes newer than the
+    /// connection are left out of `device.list`.
+    #[must_use]
+    pub fn for_protocol(&self, protocol: ProtocolVersion) -> Option<Self> {
+        match self {
+            Self::Event {
+                subscription,
+                record,
+            } => record.for_protocol(protocol).map(|record| Self::Event {
+                subscription: *subscription,
+                record,
+            }),
+            Self::Response {
+                id,
+                outcome: Outcome::Ok(Reply::ReadEvents(page)),
+            } => page.for_protocol(protocol).map(|page| Self::Response {
+                id: *id,
+                outcome: Outcome::Ok(Reply::ReadEvents(page)),
+            }),
+            Self::Response {
+                id,
+                outcome: Outcome::Ok(Reply::ListDevices(devices)),
+            } => {
+                let newer = |scope: &Scope| scope.since() > protocol;
+                let changed = devices.iter().any(|device| device.scopes.iter().any(newer));
+                changed.then(|| Self::Response {
+                    id: *id,
+                    outcome: Outcome::Ok(Reply::ListDevices(
+                        devices
+                            .iter()
+                            .map(|device| {
+                                let mut device = device.clone();
+                                device.scopes.retain(|scope| !newer(scope));
+                                device
+                            })
+                            .collect(),
+                    )),
+                })
+            }
+            Self::Welcome(_)
+            | Self::Rejected { .. }
+            | Self::Response { .. }
+            | Self::SubscriptionEnded { .. } => None,
+        }
+    }
 }

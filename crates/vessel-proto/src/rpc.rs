@@ -22,8 +22,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::device::{DeviceInfo, Invitation, InviteDevice, ListDevices, RevokeDevice, Scope};
 use crate::error::WireError;
+use crate::fleet::{
+    BlobChunk, FleetMember, Generation, GetManifest, ListMembers, Manifest, ReadBlob,
+    ReportApplied, WatchFleet,
+};
 use crate::harness::Harness;
-use crate::node::NodeInfo;
+use crate::node::{NodeInfo, ProtocolVersion};
+use crate::profile::{ListProfiles, MoveProfile, ProfileInfo, ReloadProfiles};
 use crate::session::SessionInfo;
 
 mod frames;
@@ -77,13 +82,16 @@ impl std::error::Error for UnexpectedReply {}
 
 /// Declares every RPC method in one table.
 ///
-/// Each row: `Variant / handler_fn / "wire.name" [Scope]: Request => Response;`
+/// Each row: `Variant / handler_fn / "wire.name" [Scope, since]: Request => Response;`
 /// The scope column (protocol 4, ADR 0010) is what a paired device must hold
-/// to call the method; adding a method without one does not compile.
+/// to call the method; adding a method without one does not compile. `since`
+/// (protocol 5) is the first protocol version with the method: the client
+/// refuses to send it on an older connection and the node refuses to run it
+/// there, so neither side relies on the other ignoring what it cannot know.
 macro_rules! rpc_methods {
     ($(
         $(#[$doc:meta])*
-        $variant:ident / $handler:ident / $wire:literal [$scope:ident] : $request:ty => $response:ty;
+        $variant:ident / $handler:ident / $wire:literal [$scope:ident, $since:literal] : $request:ty => $response:ty;
     )*) => {
         /// Every RPC method.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -109,6 +117,14 @@ macro_rules! rpc_methods {
             pub const fn scope(self) -> Scope {
                 match self {
                     $( Self::$variant => Scope::$scope, )*
+                }
+            }
+
+            /// The first protocol version with this method.
+            #[must_use]
+            pub const fn since(self) -> ProtocolVersion {
+                match self {
+                    $( Self::$variant => ProtocolVersion::new($since), )*
                 }
             }
 
@@ -214,38 +230,96 @@ macro_rules! rpc_methods {
 
 rpc_methods! {
     /// Describe the node.
-    NodeInfo / node_info / "node.info" [Read]: GetNode => NodeInfo;
+    NodeInfo / node_info / "node.info" [Read, 2]: GetNode => NodeInfo;
     /// List installed harnesses.
-    ListHarnesses / list_harnesses / "harness.list" [Read]: ListHarnesses => Vec<Harness>;
+    ListHarnesses / list_harnesses / "harness.list" [Read, 2]: ListHarnesses => Vec<Harness>;
     /// List sessions.
-    ListSessions / list_sessions / "session.list" [Read]: ListSessions => Vec<SessionInfo>;
+    ListSessions / list_sessions / "session.list" [Read, 2]: ListSessions => Vec<SessionInfo>;
     /// Get one session.
-    GetSession / get_session / "session.get" [Read]: GetSession => SessionInfo;
+    GetSession / get_session / "session.get" [Read, 2]: GetSession => SessionInfo;
     /// Start a session.
-    CreateSession / create_session / "session.create" [Operate]: CreateSession => SessionInfo;
+    CreateSession / create_session / "session.create" [Operate, 2]: CreateSession => SessionInfo;
     /// Send input to a session.
-    SendInput / send_input / "session.send" [Operate]: SendInput => Ack;
+    SendInput / send_input / "session.send" [Operate, 2]: SendInput => Ack;
     /// Kill a session.
-    KillSession / kill_session / "session.kill" [Operate]: KillSession => Ack;
+    KillSession / kill_session / "session.kill" [Operate, 2]: KillSession => Ack;
     /// Read a page of a session's log.
-    ReadEvents / read_events / "session.read" [Read]: ReadEvents => EventPage;
+    ReadEvents / read_events / "session.read" [Read, 2]: ReadEvents => EventPage;
     /// Subscribe to a session's events.
-    Subscribe / subscribe / "session.subscribe" [Read]: Subscribe => Subscribed;
+    Subscribe / subscribe / "session.subscribe" [Read, 2]: Subscribe => Subscribed;
     /// End a subscription.
-    Unsubscribe / unsubscribe / "session.unsubscribe" [Read]: Unsubscribe => Ack;
+    Unsubscribe / unsubscribe / "session.unsubscribe" [Read, 2]: Unsubscribe => Ack;
     /// Stop the node (protocol 3).
-    StopNode / stop_node / "node.stop" [Admin]: StopNode => Ack;
+    StopNode / stop_node / "node.stop" [Admin, 3]: StopNode => Ack;
     /// Make a pairing invitation (protocol 4).
-    InviteDevice / invite_device / "device.invite" [Admin]: InviteDevice => Invitation;
+    InviteDevice / invite_device / "device.invite" [Admin, 4]: InviteDevice => Invitation;
     /// List paired devices (protocol 4).
-    ListDevices / list_devices / "device.list" [Admin]: ListDevices => Vec<DeviceInfo>;
+    ListDevices / list_devices / "device.list" [Admin, 4]: ListDevices => Vec<DeviceInfo>;
     /// Revoke a device and close its connections (protocol 4).
-    RevokeDevice / revoke_device / "device.revoke" [Admin]: RevokeDevice => Ack;
+    RevokeDevice / revoke_device / "device.revoke" [Admin, 4]: RevokeDevice => Ack;
+    /// List profiles (protocol 5).
+    ListProfiles / list_profiles / "profile.list" [Read, 5]: ListProfiles => Vec<ProfileInfo>;
+    /// Read `profiles.toml` again (protocol 5).
+    ReloadProfiles / reload_profiles / "profile.reload" [Admin, 5]: ReloadProfiles => Vec<ProfileInfo>;
+    /// Move a structured session to another profile (protocol 5).
+    MoveProfile / move_profile / "session.move_profile" [Operate, 5]: MoveProfile => SessionInfo;
+    /// The fleet's current bundle (protocol 5).
+    GetManifest / get_manifest / "fleet.manifest" [Sync, 5]: GetManifest => Manifest;
+    /// Part of a bundle blob (protocol 5).
+    ReadBlob / read_blob / "fleet.blob" [Sync, 5]: ReadBlob => BlobChunk;
+    /// Wait for a newer bundle generation (protocol 5).
+    WatchFleet / watch_fleet / "fleet.watch" [Sync, 5]: WatchFleet => Generation;
+    /// Report an applied generation (protocol 5).
+    ReportApplied / report_applied / "fleet.report" [Sync, 5]: ReportApplied => Ack;
+    /// List fleet members (protocol 5).
+    ListMembers / list_members / "fleet.members" [Admin, 5]: ListMembers => Vec<FleetMember>;
+}
+
+impl Call {
+    /// The protocol version this call needs: its method's, or a later one
+    /// when it uses a field added since. A node that predates a field would
+    /// ignore it silently (and, say, start a session with the wrong profile
+    /// or invite a device with more scopes than asked), so the client checks
+    /// this before sending. A request that gains a field adds a line here.
+    #[must_use]
+    pub fn since(&self) -> ProtocolVersion {
+        let method = self.method().since();
+        let fields = match self {
+            Self::CreateSession(request) => request.spec.profile.as_ref().map(|_| 5),
+            Self::InviteDevice(request) => request.scopes.as_ref().map(|_| 5),
+            Self::NodeInfo(_)
+            | Self::ListHarnesses(_)
+            | Self::ListSessions(_)
+            | Self::GetSession(_)
+            | Self::SendInput(_)
+            | Self::KillSession(_)
+            | Self::ReadEvents(_)
+            | Self::Subscribe(_)
+            | Self::Unsubscribe(_)
+            | Self::StopNode(_)
+            | Self::ListDevices(_)
+            | Self::RevokeDevice(_)
+            | Self::ListProfiles(_)
+            | Self::ReloadProfiles(_)
+            | Self::MoveProfile(_)
+            | Self::GetManifest(_)
+            | Self::ReadBlob(_)
+            | Self::WatchFleet(_)
+            | Self::ReportApplied(_)
+            | Self::ListMembers(_) => None,
+        };
+        fields.map_or(method, |since| method.max(ProtocolVersion::new(since)))
+    }
 }
 
 /// Result of a call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one Outcome per call, moved once to the writer and never stored in bulk; \
+              boxing the reply would add an allocation to every call to save a copy"
+)]
 pub enum Outcome {
     /// Success.
     Ok(Reply),

@@ -80,7 +80,11 @@ impl Store {
     /// # Errors
     /// The id is already stored, or the write failed.
     pub async fn create_session(&self, info: SessionInfo) -> Result<(), StoreError> {
-        self.write(|done| Write::Create { info, done }).await
+        self.write(|done| Write::Create {
+            info: Box::new(info),
+            done,
+        })
+        .await
     }
 
     /// Append records to a session's log; returns once they are committed.

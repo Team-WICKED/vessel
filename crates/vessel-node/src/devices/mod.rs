@@ -28,7 +28,7 @@ use vessel_store::{CredentialHash, Store};
 use crate::error::ServiceError;
 use connected::Connected;
 pub(crate) use connected::Registration;
-use invitations::{Full, Invitations};
+use invitations::{Full, Grant, Invitations};
 
 /// Longest an invitation may be valid (ADR 0010).
 pub(crate) const MAX_INVITATION_TTL: TimeDelta = TimeDelta::hours(24);
@@ -93,8 +93,12 @@ impl Devices {
             expires,
         };
         let link = PairingLink::encode(&offer).map_err(ServiceError::Link)?;
+        let grant = Grant {
+            label: request.label.as_deref().map(label),
+            scopes: scopes(request.scopes.as_deref())?,
+        };
         self.invitations()
-            .add(&invite, request.label.as_deref().map(label), expires, now)
+            .add(&invite, grant, expires, now)
             .map_err(|Full| ServiceError::TooManyInvitations)?;
         tracing::info!(%expires, "made a pairing invitation");
         Ok(Invitation { link, expires })
@@ -177,7 +181,7 @@ impl Devices {
             label: redeemed.label.unwrap_or_else(|| label(device_name)),
             created_at: now,
             last_seen: Some(now),
-            scopes: Scope::ALL.to_vec(),
+            scopes: redeemed.scopes,
             revoked_at: None,
         };
         let id = info.id;
@@ -247,6 +251,21 @@ const fn invisible(character: char) -> bool {
             | '\u{E0001}'
             | '\u{E0020}'..='\u{E007F}'
     )
+}
+
+/// The scopes an invitation grants: the ones asked for, sorted and without
+/// repeats, or `Scope::DEVICE_DEFAULT` (what every protocol 4 device got).
+fn scopes(asked: Option<&[Scope]>) -> Result<Vec<Scope>, ServiceError> {
+    let Some(asked) = asked else {
+        return Ok(Scope::DEVICE_DEFAULT.to_vec());
+    };
+    let mut scopes = asked.to_vec();
+    scopes.sort_unstable();
+    scopes.dedup();
+    if scopes.is_empty() {
+        return Err(ServiceError::NoScopes);
+    }
+    Ok(scopes)
 }
 
 #[cfg(test)]

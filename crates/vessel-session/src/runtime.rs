@@ -11,8 +11,8 @@ use tokio_util::task::TaskTracker;
 use tracing::Instrument as _;
 use vessel_agent::{AgentProcess, AgentSetup};
 use vessel_proto::{
-    EventRecord, EventSeq, HarnessSessionId, ModelId, SessionId, SessionInfo, SessionMode,
-    SessionSpec, SessionStatus, TerminalSize,
+    EventRecord, HarnessSessionId, ModelId, SessionId, SessionInfo, SessionMode, SessionSpec,
+    TerminalSize,
 };
 use vessel_pty::{PtyProcess, WindowSize};
 
@@ -215,15 +215,7 @@ impl SessionRuntime {
         input: Input,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
         let id = SessionId::random();
-        let (info, info_receiver) = watch::channel(SessionInfo {
-            id,
-            spec,
-            status: SessionStatus::Starting,
-            created_at: Utc::now(),
-            ended_at: None,
-            next_seq: EventSeq::ZERO,
-            harness_session: None,
-        });
+        let (info, info_receiver) = watch::channel(SessionInfo::new(id, spec, Utc::now()));
         let kill = self.shutdown.child_token();
         let shared = Arc::new(Shared {
             id,

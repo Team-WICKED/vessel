@@ -75,6 +75,37 @@ pub struct AgentAuth {
     pub secret: AgentSecret,
 }
 
+/// `profile.list` (protocol 5): the node's profiles, the implicit default
+/// of each harness included. Needs `Read`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ListProfiles {
+    /// Only this harness's profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<HarnessKind>,
+}
+
+/// `profile.reload` (protocol 5): read `profiles.toml` again. If it does
+/// not parse, the node keeps the profiles it had and the error says where.
+/// Answers with the profiles now in effect. Needs `Admin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReloadProfiles;
+
+/// `session.move_profile` (protocol 5, ADR 0011): restart a structured
+/// session's harness under another profile, resuming the same conversation.
+/// Refused mid-turn unless `force`, and refused when the target profile is
+/// not logged in. Answers with the session as it is now. Needs `Operate`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoveProfile {
+    /// Which session.
+    pub session: SessionId,
+    /// The profile to move to; `None` is the harness's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileName>,
+    /// Move even in the middle of a turn, cancelling it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -23,13 +23,43 @@ pub enum Scope {
     Read,
     /// Act on sessions: create, send input, kill.
     Operate,
-    /// Change the node: stop it, manage devices.
+    /// Change the node: stop it, manage devices, reload profiles.
     Admin,
+    /// Fetch the fleet's bundle and report on applying it (protocol 5, ADR
+    /// 0012): what a member node holds on its fleet's home. Independent of
+    /// the others: a member needs no access to the home's sessions.
+    Sync,
 }
 
 impl Scope {
-    /// Every scope, lowest first.
-    pub const ALL: [Self; 3] = [Self::Read, Self::Operate, Self::Admin];
+    /// Every scope.
+    pub const ALL: [Self; 4] = [Self::Read, Self::Operate, Self::Admin, Self::Sync];
+
+    /// What an invitation grants unless it names scopes: everything a person
+    /// at another machine needs, but not `Sync`, which only fleet members
+    /// use.
+    pub const DEVICE_DEFAULT: [Self; 3] = [Self::Read, Self::Operate, Self::Admin];
+
+    /// The scope's wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Operate => "operate",
+            Self::Admin => "admin",
+            Self::Sync => "sync",
+        }
+    }
+
+    /// The first protocol version that has this scope; a device holding a
+    /// newer scope is shown to older clients without it.
+    #[must_use]
+    pub const fn since(self) -> crate::node::ProtocolVersion {
+        match self {
+            Self::Read | Self::Operate | Self::Admin => crate::node::ProtocolVersion::new(4),
+            Self::Sync => crate::node::ProtocolVersion::new(5),
+        }
+    }
 }
 
 secret! {
@@ -132,6 +162,11 @@ pub struct InviteDevice {
     pub label: Option<String>,
     /// How long the invitation is valid, in seconds (the node caps it).
     pub ttl_secs: u32,
+    /// What the device may do (protocol 5); `None` is
+    /// [`Scope::DEVICE_DEFAULT`], what every protocol 4 device got. A fleet
+    /// member is invited with `[sync]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<Scope>>,
 }
 
 /// Reply to `device.invite`.

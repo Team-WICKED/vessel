@@ -4,6 +4,51 @@ The types are defined in `crates/vessel-proto`; this file is the changelog
 and a reader's summary. Bump `PROTOCOL_VERSION` on any breaking change and add
 an entry here. Additive, optional fields do not need a bump.
 
+## Version 5 (2026-11-06)
+
+Nodes speak 2..=5; version 5 only adds, and older connections keep working
+(below). Milestone 4 implements it (`docs/plans/backend-m4.md`); until its
+tracks land, nodes answer the new methods with `unsupported`, record every
+session as created by the owner, and never emit `profile_changed`.
+
+- Every method has a first version (`since`, the table in `vessel-proto`
+  `rpc.rs`): `node.stop` 3, `device.*` 4, the methods below 5, the rest 2.
+  A call also needs a later version when it uses a later field
+  (`Call::since`): `session.create` with `spec.profile`, `device.invite`
+  with `scopes`. The client refuses such a call on an older connection
+  without sending it (`CallError::NotInProtocol`, code `unsupported`), and
+  the node refuses it (`unsupported`, "needs protocol N"), so neither side
+  ever relies on the other ignoring a field it does not know.
+- Profiles (ADR 0011): `SessionSpec.profile` (absent is the harness's
+  default); `SessionInfo.profile` (the profile it runs with now) and
+  `SessionInfo.created_by` (`{"kind":"owner"}`, `{"kind":"device","id"}`,
+  `{"kind":"agent","node","session"}`; absent from older nodes, read as
+  owner). `profile.list { harness? }` (read) and `profile.reload` (admin)
+  return `ProfileInfo[]` (`name`, `label?`, `harness`, `sets`: variable
+  names only, never values). `session.move_profile { session, profile?,
+  force? }` (operate) returns the session. Event `profile_changed { from?,
+  to? }`.
+- Fleet (ADR 0012), scope `sync`: `fleet.manifest` returns the `Manifest`
+  (`generation`, `files`: bundle path to `{hash, size, executable?}`,
+  `mcp`: server name to transport, with `{"secret": "NAME"}` references,
+  never values); `fleet.blob { hash, offset }` returns `{data (base64),
+  total}`, at most 1 MiB per chunk; `fleet.watch { after }` is a long poll
+  that returns a generation (newer, or `after` when the node's wait limit
+  passes); `fleet.report { generation, conflicts? }` returns `ack`.
+  `fleet.members` (admin) returns `FleetMember[]`.
+- Scopes: `sync` is new. `device.invite` takes `scopes?`; without it a
+  device gets `read`, `operate` and `admin`, as in version 4.
+- Agents (ADR 0013): on the local socket, an agent's `vessel mcp` sends
+  `{"type":"agent","session","secret"}` as its first frame instead of the
+  token (a token is never a JSON object). Implemented with milestone 4
+  Track H.
+- Older connections: a node adapts what it sends to the negotiated
+  version, where it encodes frames. `profile_changed` reaches a version 2-4
+  client as `agent { harness_log { line: "vessel: profile changed from A
+  to B" } }` at the same `seq` (the log stays gap-free), in subscriptions
+  and in `session.read` pages alike, and `device.list` leaves out scopes
+  the client's version does not have.
+
 ## Version 4 (2026-11-06)
 
 Nodes speak 2..=4; version 4 only adds. Milestone 3 (relay, secure channel,

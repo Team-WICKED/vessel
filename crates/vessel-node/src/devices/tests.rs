@@ -70,6 +70,7 @@ fn invite(node: &Node, label: Option<&str>) -> PairingOffer {
         .invite(&InviteDevice {
             label: label.map(str::to_owned),
             ttl_secs: 600,
+            scopes: None,
         })
         .unwrap()
         .link
@@ -132,13 +133,15 @@ async fn an_invitation_is_a_link_to_this_node_with_its_routes() {
         .invite(&InviteDevice {
             label: None,
             ttl_secs: u32::MAX,
+            scopes: None,
         })
         .unwrap();
     assert!(capped.expires - Utc::now() <= MAX_INVITATION_TTL);
     assert!(matches!(
         node.secure.devices.invite(&InviteDevice {
             label: None,
-            ttl_secs: 0
+            ttl_secs: 0,
+            scopes: None,
         }),
         Err(ServiceError::InvalidTtl)
     ));
@@ -325,7 +328,7 @@ async fn pairing_creates_a_device_once_and_its_credential_authenticates_it() {
         devices[0].label, "work laptop",
         "the invitation's label wins"
     );
-    assert_eq!(devices[0].scopes, Scope::ALL.to_vec());
+    assert_eq!(devices[0].scopes, Scope::DEVICE_DEFAULT.to_vec());
 
     // The invitation is spent.
     let mut again = channel(&node);
@@ -423,14 +426,13 @@ async fn a_device_without_a_scope_is_forbidden_that_method() {
     let connection = authenticate(&node, viewer.id, &secret).await.unwrap();
     assert!(connection.call(ListSessions).await.is_ok());
     let create = CreateSession {
-        spec: SessionSpec {
-            harness: HarnessKind::ClaudeCode,
-            cwd: None,
-            mode: SessionMode::Terminal {
+        spec: SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Terminal {
                 args: Vec::new(),
                 size: TerminalSize::default(),
             },
-        },
+        ),
     };
     for refused in [
         connection.call(create).await.unwrap_err(),
@@ -489,7 +491,7 @@ async fn a_pairing_connection_is_registered_under_the_device_it_stores() {
         .pair(&registration, &offer.invite, "laptop")
         .await
         .unwrap();
-    assert_eq!(scopes, Scope::ALL.to_vec());
+    assert_eq!(scopes, Scope::DEVICE_DEFAULT.to_vec());
     let stored = devices.list().await.unwrap();
     assert_eq!(stored[0].id, registration.device());
     devices.revoke(registration.device()).await.unwrap();
@@ -551,5 +553,39 @@ async fn frames_are_small_until_the_device_is_admitted() {
         !matches!(answered, Err(CallError::Disconnected)),
         "an admitted device's large frame was refused: {answered:?}"
     );
+    node.stop().await.unwrap();
+}
+
+/// An invitation that names scopes grants exactly those (sorted, without
+/// repeats); one that names none is refused.
+#[tokio::test]
+async fn an_invitation_grants_the_scopes_it_names() {
+    let (_temp, node) = node().await;
+    let devices = &node.secure.devices;
+    let member = devices
+        .invite(&InviteDevice {
+            label: Some("member".to_owned()),
+            ttl_secs: 600,
+            scopes: Some(vec![Scope::Sync, Scope::Read, Scope::Sync]),
+        })
+        .unwrap()
+        .link
+        .decode()
+        .unwrap();
+    let closing = CancellationToken::new();
+    let registration = devices.connect(DeviceId::random(), &closing);
+    let (_secret, scopes) = devices
+        .pair(&registration, &member.invite, "member")
+        .await
+        .unwrap();
+    assert_eq!(scopes, [Scope::Read, Scope::Sync]);
+    assert!(matches!(
+        devices.invite(&InviteDevice {
+            label: None,
+            ttl_secs: 600,
+            scopes: Some(Vec::new()),
+        }),
+        Err(ServiceError::NoScopes)
+    ));
     node.stop().await.unwrap();
 }

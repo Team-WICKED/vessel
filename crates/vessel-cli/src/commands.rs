@@ -120,11 +120,8 @@ async fn run_session(target: &Target, run: Run) -> Result<(), CliError> {
         }
     };
     let (resolved, book) = nodes::resolve(target)?;
-    let spec = SessionSpec {
-        harness: run.harness,
-        cwd: run.cwd.map(|cwd| node_cwd(&resolved, cwd)).transpose()?,
-        mode,
-    };
+    let mut spec = SessionSpec::new(run.harness, mode);
+    spec.cwd = run.cwd.map(|cwd| node_cwd(&resolved, cwd)).transpose()?;
     let connected = connect_to(target, &resolved, &book).await?;
     let info = connected.client.create_session(spec).await?;
     if run.detach {
