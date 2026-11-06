@@ -15,6 +15,7 @@ path = "src/main.rs"
 vessel-harness.workspace = true
 vessel-proto.workspace = true
 vessel-rpc.workspace = true
+vessel-secure.workspace = true
 vessel-session.workspace = true
 vessel-store.workspace = true
 

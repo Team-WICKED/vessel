@@ -222,7 +222,12 @@ fn show(name: &NodeName, entry: &BookEntry, default: bool) -> String {
             }
         }
         NodeAddress::Secure(target) => {
-            let _infallible = writeln!(text, "key: {}", target.key);
+            let _infallible = writeln!(
+                text,
+                "key: {} (fingerprint {})",
+                target.key,
+                vessel_client::fingerprint(&target.key)
+            );
             for route in &target.direct {
                 let _infallible = writeln!(text, "direct: {route}");
             }

@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 vessel-proto.workspace = true
 vessel-rpc.workspace = true
+vessel-secure.workspace = true
 
 futures-util = { workspace = true, features = ["sink"] }
 serde.workspace = true

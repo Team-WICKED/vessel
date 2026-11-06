@@ -2,11 +2,12 @@
 
 use crate::support::{Fixture, within};
 
-/// A node with no devices lists none; revoking an unknown id says so; and a
-/// node without a public key yet (until `vessel-secure` derives it) refuses
-/// to make a pairing link with a reason rather than a broken link.
+/// A node with no devices lists none; revoking an unknown id says so;
+/// `node pair` prints a link for this node's key (alone on stdout when it
+/// is not a terminal, so it pipes cleanly) and the instructions on stderr;
+/// and `node status` shows the key's fingerprint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn devices_are_listed_and_pairing_needs_a_node_key() {
+async fn devices_are_listed_and_pairing_makes_a_link_for_this_node() {
     within(async {
         let fixture = Fixture::start().await;
         let listed = fixture.vessel(&["node", "devices"], &[]).await;
@@ -30,12 +31,22 @@ async fn devices_are_listed_and_pairing_needs_a_node_key() {
         let paired = fixture
             .vessel(&["node", "pair", "--label", "phone", "--ttl", "5m"], &[])
             .await;
-        assert!(!paired.ok);
+        assert!(paired.ok, "{}", paired.stderr);
+        let link: vessel_proto::PairingLink = paired.stdout.trim().parse().unwrap();
+        assert_eq!(paired.stdout.lines().count(), 1, "{}", paired.stdout);
+        let offer = link.decode().unwrap();
+        assert!(paired.stderr.contains("valid once"), "{}", paired.stderr);
+
+        let status = fixture.vessel(&["node", "status"], &[]).await;
+        assert!(status.ok, "{}", status.stderr);
         assert!(
-            paired.stderr.contains("cannot pair devices"),
+            status
+                .stdout
+                .contains(&vessel_client::fingerprint(&offer.key)),
             "{}",
-            paired.stderr
+            status.stdout
         );
+
         let bad_ttl = fixture.vessel(&["node", "pair", "--ttl", "2d"], &[]).await;
         assert!(!bad_ttl.ok);
         assert!(

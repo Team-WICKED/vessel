@@ -36,8 +36,8 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s. | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`), SQLite event log, retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing. | proto, rpc, harness, session, store |
-| `vessel-client` | Typed async client and gap-free session streams. | proto, rpc |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway (milestone 3). | proto, rpc, harness, session, store, secure |
+| `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections (milestone 3). | proto, rpc, secure |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node, remote |
@@ -183,9 +183,11 @@ they started.
     `DeviceCredential` files (`<config_dir>/vessel/credentials/<node
     id>.secret`, directory 0700, file 0600, replaced atomically); and
     `pairing::pair`/`authenticate`, the device preamble over any frame
-    transport, with typed refusals that say whether retrying can help. The
-    connector that dials routes and runs the handshake comes with
-    `vessel-secure`.
+    transport, with typed refusals that say whether retrying can help;
+    `secure::open`/`pair`, the handshake to the pinned key, the preamble
+    and `hello` over any `vessel-secure` carrier, with errors that say
+    whether retrying can help. The connector that dials routes comes with
+    `vessel-relay`.
   - `vessel-remote` (milestone 2, Track C): `ssh` (the system
     client with fixed options, `ControlMaster` sharing on Unix, commands
     built from fixed words and single-quoted values, the last 64 stderr
@@ -241,13 +243,15 @@ they started.
     in memory, by hash, at most a day, at most 64 waiting), `device.list`,
     `device.revoke` (closes the device's open connections: each device
     connection has its own RPC server whose shutdown token is registered
-    under the device). The device preamble (`devices::preamble`) and the
-    `SecureGateway` that serves a device after it run over any frame
-    transport; `/secure` and relay links reach them once `vessel-secure`
-    lands. `node.key` is created on start; until `vessel-secure` derives
-    its public half, `NodeInfo.public_key` is absent and `device.invite`
-    answers `unavailable`. `--relay`, `--relay-token-file` (checked at
-    start) and `--public` feed pairing links.
+    under the device). `SecureGateway::accept` answers the Noise handshake
+    with the node's key pair (`vessel-secure`, from `node.key`, which is
+    created on start), then runs the device preamble
+    (`devices::preamble`) and the protocol; a failed handshake goes back
+    to the caller, which closes with 4401. `NodeInfo.public_key` carries
+    the public key. `/secure` and relay data connections reach the gateway
+    once `vessel-relay` brings the websocket carrier. `--relay`,
+    `--relay-token-file` (checked at start) and `--public` feed pairing
+    links.
   - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
     `sessions`, `run`, `attach`, `send`, `log`, `kill`; sessions named by
     id prefix; terminal attach in raw mode with `Ctrl-]` to detach, also
@@ -288,9 +292,10 @@ they started.
     [--ttl 10m]` (the link alone on stdout, a QR code from `qrcode` 0.14
     when stdout is a terminal, instructions on stderr), `vessel node
     devices` and `vessel node devices revoke ID-PREFIX`, over any
-    connection with the `admin` scope; `nodes show` for a paired node.
-    `nodes add --pair` and connecting to paired nodes wait for
-    `SecureConnector`.
+    connection with the `admin` scope; `nodes show` for a paired node, and
+    `node status`, show the key's fingerprint. `nodes add --pair` and
+    connecting to paired nodes wait for `SecureConnector`, which dials the
+    routes with `vessel-relay`.
 - Milestone 3, Track S (in progress, `backend/m3-secure`):
   - `vessel-secure` (2026-11-06): `initiate`/`respond` run Noise
     `NK_25519_ChaChaPoly_SHA256` (prologue `vessel/secure/1`, 48-byte

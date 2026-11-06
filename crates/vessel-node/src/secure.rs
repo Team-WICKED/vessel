@@ -1,9 +1,9 @@
 //! Serving paired devices over a secure channel (ADR 0009, ADR 0010).
 //!
-//! A channel arrives here already through its Noise handshake: from
-//! `/secure` on the node's listener, or from a relay's data connection. The
-//! gateway runs the device preamble, then the protocol, with the device as
-//! the connection's principal.
+//! A carrier arrives here from `/secure` on the node's listener, or as a
+//! relay's data connection. The gateway answers the Noise handshake with
+//! the node's key ([`SecureGateway::accept`]), runs the device preamble,
+//! then the protocol, with the device as the connection's principal.
 //!
 //! [Decision Log]
 //! - Per-connection server: each device connection gets its own
@@ -12,8 +12,11 @@
 //!   of the node's closing token. Revoking the device cancels it, and the
 //!   RPC layer closes the connection in its usual order. The alternative,
 //!   one shared server, has no way to close one connection from outside.
-//! - The gateway is generic over the transport, so it is tested now over
-//!   in-memory pairs and takes `vessel-secure`'s channel unchanged later.
+//! - The gateway is generic over the carrier and the channel, so the same
+//!   code serves websockets, relays and the in-memory pairs of the tests.
+//! - A failed handshake is returned to the caller, which owns the carrier's
+//!   close: `/secure` and relay data connections close with
+//!   `NodeClose::HandshakeFailed` (4401), which clients treat as final.
 
 #![cfg_attr(
     not(test),
@@ -28,6 +31,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_rpc::{FrameTransport, Server, ServerConfig};
+use vessel_secure::{Carrier, NodeKeypair, SecureError};
 
 use crate::devices::Devices;
 use crate::devices::preamble::{self, Admitted, NotAdmitted};
@@ -38,6 +42,8 @@ use crate::service::Connection;
 /// What serving a device connection needs.
 #[derive(Debug, Clone)]
 pub(crate) struct SecureGateway {
+    /// The node's key pair, for the handshake.
+    pub(crate) keypair: Arc<NodeKeypair>,
     pub(crate) service: Arc<Guarded>,
     pub(crate) lifecycle: Lifecycle,
     pub(crate) devices: Arc<Devices>,
@@ -49,8 +55,20 @@ pub(crate) struct SecureGateway {
 }
 
 impl SecureGateway {
-    /// Serve one secure channel until it ends: the preamble, then the
-    /// protocol as the admitted device.
+    /// Answer the Noise handshake on `carrier`, then serve the channel
+    /// until it ends.
+    ///
+    /// # Errors
+    /// The handshake failed (another key or version, a timeout, or the
+    /// carrier); the caller closes the carrier accordingly.
+    pub(crate) async fn accept<C: Carrier>(&self, carrier: C) -> Result<(), SecureError> {
+        let channel = vessel_secure::respond(carrier, &self.keypair).await?;
+        self.serve(channel).await;
+        Ok(())
+    }
+
+    /// Serve one established secure channel until it ends: the preamble,
+    /// then the protocol as the admitted device.
     pub(crate) async fn serve<T: FrameTransport>(&self, mut channel: T) {
         let _tracked = self.connections.token();
         let admitted =
