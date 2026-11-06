@@ -28,7 +28,7 @@
 //!   is protocol knowledge, which is this crate's job; it is the only
 //!   method it singles out.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -49,11 +49,26 @@ use crate::error::ServeError;
 const FLUSH_FRAMES: usize = 32;
 /// Bytes written before a flush even while more are queued.
 const FLUSH_BYTES: usize = 64 * 1024;
+/// Subscriptions released before their announcement that are remembered
+/// for a reply that may still name them (see [`Subscriptions::released`]).
+const RELEASED: usize = 32;
 
 /// The open subscriptions of one connection. Owned by the writer.
 #[derive(Default)]
 struct Subscriptions {
     open: HashMap<SubscriptionId, Open>,
+    /// Subscriptions whose sink went away before the reply naming them was
+    /// written, with where each started. If that reply still comes, the
+    /// subscription is ended at once with `Lagged` from its start, the
+    /// first record the client did not get.
+    ///
+    /// Bounded and oldest first: an entry whose reply never comes (the call
+    /// failed or was cancelled after opening) would otherwise stay for the
+    /// connection's life. A reply for an evicted entry falls back to
+    /// resuming from zero, which is always valid, only slower; that takes
+    /// [`RELEASED`] such releases in between, each needing a call to fail
+    /// at exactly that point.
+    released: VecDeque<(SubscriptionId, EventSeq)>,
 }
 
 struct Open {
@@ -105,11 +120,10 @@ impl Subscriptions {
                     .map(|subscription| {
                         // Named but not open (its sink is already gone): end
                         // it right away so the client does not wait.
+                        let resume_from = self.take_released(subscription);
                         Frame::Server(ServerFrame::SubscriptionEnded {
                             subscription,
-                            end: SubscriptionEnd::Lagged {
-                                resume_from: EventSeq::ZERO,
-                            },
+                            end: SubscriptionEnd::Lagged { resume_from },
                         })
                     });
                 [response, orphan]
@@ -189,10 +203,27 @@ impl Subscriptions {
         true
     }
 
+    /// Where a subscription released before its announcement started;
+    /// zero if it is no longer remembered.
+    fn take_released(&mut self, subscription: SubscriptionId) -> EventSeq {
+        let Some(index) = self
+            .released
+            .iter()
+            .position(|(released, _)| *released == subscription)
+        else {
+            tracing::warn!(%subscription, "released subscription forgotten; resuming from zero");
+            return EventSeq::ZERO;
+        };
+        self.released
+            .remove(index)
+            .map_or(EventSeq::ZERO, |(_, from)| from)
+    }
+
     /// A sink went away. After a clean end there is nothing to do (its end
     /// is queued or written). Otherwise the subscription is removed; if the
     /// client already knows it, it gets `Lagged` from the first record it
-    /// did not receive.
+    /// did not receive, and if not, it is remembered in case the reply
+    /// naming it is still to come.
     fn depart(&mut self, subscription: SubscriptionId, cleanly: bool) -> Option<Frame> {
         if cleanly {
             return None;
@@ -200,6 +231,12 @@ impl Subscriptions {
         let open = self.open.remove(&subscription)?;
         open.cancel.cancel();
         if open.announce.is_some() {
+            if self.released.len() >= RELEASED
+                && let Some((forgotten, _)) = self.released.pop_front()
+            {
+                tracing::debug!(subscription = %forgotten, "forgetting a released subscription");
+            }
+            self.released.push_back((subscription, open.next));
             return None;
         }
         tracing::debug!(%subscription, "subscription released without an end");
@@ -354,19 +391,4 @@ async fn finish<K, E>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_burst_is_flushed_after_a_bounded_number_of_frames_or_bytes() {
-        let mut unflushed = Unflushed::default();
-        assert!(!unflushed.pending());
-        for _ in 1..FLUSH_FRAMES {
-            assert!(!unflushed.add(10));
-        }
-        assert!(unflushed.pending());
-        assert!(unflushed.add(10), "the frame limit calls for a flush");
-        unflushed.reset();
-        assert!(unflushed.add(FLUSH_BYTES), "so does the byte limit");
-    }
-}
+mod tests;

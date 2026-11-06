@@ -151,8 +151,10 @@ pub struct SubscriptionClosed;
 /// End it with [`end`](Self::end). Dropping it without ending is noticed
 /// by the writer, never lost: before the announcement the subscription is
 /// discarded silently (the right thing when the call that opened it
-/// failed); after it, the client gets `SubscriptionEnded{Lagged}` with the
-/// first record it did not receive, so it resumes instead of waiting.
+/// failed), unless the reply naming it is still written, in which case the
+/// client gets `SubscriptionEnded{Lagged}` from where it started; after the
+/// announcement, the client gets `Lagged` with the first record it did not
+/// receive, so it resumes instead of waiting.
 #[derive(Debug)]
 pub struct SubscriptionSink {
     id: SubscriptionId,
