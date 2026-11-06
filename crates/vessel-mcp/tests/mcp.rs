@@ -321,10 +321,11 @@ async fn an_agent_starts_a_session_reads_its_reply_and_stops_it() {
             .await;
         assert!(!failed);
 
-        // Another node is not reachable yet, and an unknown tool does not
-        // exist: both are errors of the call itself.
+        // Another node is not reachable yet, a wait needs to know where
+        // from, and an unknown tool does not exist: errors of the call.
         for (tool, arguments) in [
             ("list_sessions", json!({ "node": "elsewhere" })),
+            ("wait_turn", json!({ "session": session })),
             ("nope", json!({})),
         ] {
             let response = mcp

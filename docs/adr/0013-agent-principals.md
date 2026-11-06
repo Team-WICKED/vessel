@@ -211,7 +211,8 @@ creator chain) are Track X.
   `vessel-mcp`'s Decision Log). Tools: `list_nodes` (this node until Track
   X), `list_sessions`, `create_session` (with an optional first prompt,
   sent once the session is ready), `send_input` (returns `from`),
-  `answer_permission`, `read_events`, `wait_turn` (until the turn ends, a
+  `answer_permission`, `read_events`, `wait_turn` (from the record
+  `send_input` or `create_session` returned, until the turn ends, a
   permission is asked, the session ends, or a timeout; with the reply
   text), `kill_session`. The node's refusals come back as tool errors with
   the protocol's code; a wrong call is a JSON-RPC error.

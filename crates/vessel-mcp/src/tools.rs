@@ -221,7 +221,10 @@ impl VesselTools {
     /// reply text read meanwhile and where to go on from.
     async fn wait_turn(&self, args: &JsonObject) -> Result<Value, ToolError> {
         let session = session(args)?;
-        let from = EventSeq::new(number(args, "from")?.unwrap_or(0));
+        // Required: from the start, the first turn ever would answer.
+        let from = number(args, "from")?
+            .map(EventSeq::new)
+            .ok_or_else(|| ToolError::Arguments("`from` is required".to_owned()))?;
         let limit = number(args, "timeout_secs")?.map_or(WAIT_DEFAULT, |secs| {
             Duration::from_secs(secs.clamp(1, WAIT_MAX_SECS))
         });
@@ -459,15 +462,15 @@ fn tools() -> Vec<Tool> {
         ),
         tool(
             "wait_turn",
-            "Wait, from record `from`, until the session's turn ends, it asks for a \
-             permission, or it ends. Returns the outcome, the reply text, and `next` to go on \
-             from.",
+            "Wait, from record `from` (what `send_input` or `create_session` returned, or a \
+             previous `next`), until the session's turn ends, it asks for a permission, or it \
+             ends. Returns the outcome, the reply text, and `next` to go on from.",
             json!({
                 "session": session,
                 "from": { "type": "integer", "minimum": 0 },
                 "timeout_secs": { "type": "integer", "minimum": 1, "maximum": WAIT_MAX_SECS }
             }),
-            &["session"],
+            &["session", "from"],
         ),
         tool(
             "kill_session",
