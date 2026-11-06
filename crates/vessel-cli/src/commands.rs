@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use bytes::Bytes;
 use vessel_node::{Config, Node};
 use vessel_proto::{
-    ContentBlock, EventSeq, HarnessSessionId, ModelId, SessionInput, SessionMode, SessionSpec,
-    TerminalBytes, TerminalInput,
+    ContentBlock, EventSeq, HarnessKind, HarnessSessionId, ModelId, SessionInput, SessionMode,
+    SessionSpec, TerminalBytes, TerminalInput,
 };
 
 use vessel_client::book::Resolved;
@@ -60,22 +60,7 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             let text = render::harnesses(&client.harnesses().await?);
             Ok(io::out(text.as_bytes()).await?)
         }
-        Command::Profiles { harness, reload } => {
-            let client = connect(target).await?.client;
-            let profiles = if reload {
-                let reloaded = client.reload_profiles().await?;
-                match harness {
-                    Some(harness) => reloaded
-                        .into_iter()
-                        .filter(|profile| profile.harness == harness)
-                        .collect(),
-                    None => reloaded,
-                }
-            } else {
-                client.profiles(harness).await?
-            };
-            Ok(io::out(render::profiles(&profiles).as_bytes()).await?)
-        }
+        Command::Profiles { harness, reload } => Box::pin(profiles(target, harness, reload)).await,
         Command::Sessions => {
             let client = connect(target).await?.client;
             let text = render::sessions(&client.sessions().await?);
@@ -95,6 +80,28 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             Ok(client.kill(info.id).await?)
         }
     }
+}
+
+/// `vessel profiles`: list them, after a reload if asked.
+async fn profiles(
+    target: &Target,
+    harness: Option<HarnessKind>,
+    reload: bool,
+) -> Result<(), CliError> {
+    let client = connect(target).await?.client;
+    let profiles = if reload {
+        let reloaded = client.reload_profiles().await?;
+        match harness {
+            Some(harness) => reloaded
+                .into_iter()
+                .filter(|profile| profile.harness == harness)
+                .collect(),
+            None => reloaded,
+        }
+    } else {
+        client.profiles(harness).await?
+    };
+    Ok(io::out(render::profiles(&profiles).as_bytes()).await?)
 }
 
 async fn node_start(
