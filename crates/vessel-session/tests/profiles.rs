@@ -628,10 +628,13 @@ async fn a_terminal_session_reads_its_servers_from_a_file_removed_with_it() {
             assert_eq!(mode & 0o777, 0o600);
         }
 
+        assert!(!reader.handle().has_ended());
         reader.type_line("exit 0").await;
         reader
             .until_status(&SessionStatus::Exited { code: Some(0) })
             .await;
+        // Whoever saw the end finds it ended (before the actor finishes).
+        assert!(reader.handle().has_ended());
         // The actor ends after its last status; shutdown waits for it.
         fixture.runtime.shutdown().await;
         assert!(!path.exists(), "{} outlived its session", path.display());

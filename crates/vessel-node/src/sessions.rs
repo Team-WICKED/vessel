@@ -111,6 +111,7 @@ impl Sessions {
     ) -> Result<SessionInfo, ServiceError> {
         let Created { handle, durable } = self.runtime.create_with(spec, options).await?;
         let id = handle.id();
+        self.agents.started(id, handle.clone());
         // The agent's credential dies with the session (ADR 0013).
         let ending = handle.clone();
         let agents = Arc::clone(&self.agents);

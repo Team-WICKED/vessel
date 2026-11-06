@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use chrono::Utc;
@@ -490,6 +491,7 @@ impl SessionRuntime {
             input,
             kill: kill.clone(),
             control,
+            ended: AtomicBool::new(false),
         });
         (info, kill, shared)
     }

@@ -21,6 +21,10 @@
 //!   agents at most [`MAX_DEPTH`] levels deep (a user's session is level
 //!   0). Every live session has an entry, with a credential or without one
 //!   (a node without `vessel mcp`), so depth and counts hold either way.
+//!   A session frees its place as soon as its end is visible
+//!   (`SessionHandle::has_ended`, set before the final status is
+//!   published): CI once saw a client watch a session end, then be refused
+//!   a new one because `retire` (after the actor finishes) had not run yet.
 //! - The credential dies with its session: [`Agents::retire`] removes the
 //!   entry and closes the agent's open connections, as revoking a device
 //!   closes the device's (`devices::Connected`). Checking a credential and
@@ -40,6 +44,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{AgentAuth, AgentSecret, NodeId, Origin, OriginBy, Scope, SessionId};
+use vessel_session::SessionHandle;
 use vessel_store::CredentialHash;
 
 use crate::error::ServiceError;
@@ -76,6 +81,9 @@ struct Entry {
     parent: Option<(NodeId, SessionId)>,
     /// Open connections of the agent, closed when the session ends.
     connections: HashMap<u64, CancellationToken>,
+    /// The session, once it exists: an ended one frees its creator's place
+    /// at once, before `retire` (which waits for the actor to finish) runs.
+    session: Option<SessionHandle>,
 }
 
 impl Agents {
@@ -154,6 +162,7 @@ impl Agents {
                 depth,
                 parent,
                 connections: HashMap::new(),
+                session: None,
             },
         );
         if previous.is_some() {
@@ -166,6 +175,13 @@ impl Agents {
     /// `Origin` of a call its agent sends to another node.
     pub(crate) fn depth(&self, id: SessionId) -> Option<u8> {
         self.lock().get(&id).map(|entry| entry.depth)
+    }
+
+    /// The session `id` reserved a place for has started as `handle`.
+    pub(crate) fn started(&self, id: SessionId, handle: SessionHandle) {
+        if let Some(entry) = self.lock().get_mut(&id) {
+            entry.session = Some(handle);
+        }
     }
 
     /// Forget a session that did not start.
@@ -309,9 +325,12 @@ fn owns_fewer_than_the_limit(
     sessions: &HashMap<SessionId, Entry>,
     parent: (NodeId, SessionId),
 ) -> Result<(), ServiceError> {
+    // A session counts until it has ended: visibly ended is ended here too
+    // (`SessionHandle::has_ended`), even before `retire` removes it.
     let owned = sessions
         .values()
         .filter(|entry| entry.parent == Some(parent))
+        .filter(|entry| !entry.session.as_ref().is_some_and(SessionHandle::has_ended))
         .count();
     if owned >= MAX_OWNED {
         return Err(ServiceError::AgentLimit { limit: MAX_OWNED });

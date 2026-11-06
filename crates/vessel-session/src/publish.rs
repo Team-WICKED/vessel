@@ -2,6 +2,7 @@
 //! followers. Used only by the session actor.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use chrono::{DateTime, Utc};
 use tokio::sync::{mpsc, watch};
@@ -81,6 +82,12 @@ impl Publisher {
         let change = InfoChange::of(&event);
         // The one allocation of this record; the store, the ring and every
         // follower share it.
+        // Before the record is anywhere: whoever sees the end finds it.
+        if let SessionEvent::Status { status } = &event
+            && !status.is_live()
+        {
+            self.shared.ended.store(true, Ordering::Release);
+        }
         let record = Arc::new(EventRecord { seq, at, event });
         match slot {
             Slot::Durable(permit) => drop(permit.send(Arc::clone(&record))),
