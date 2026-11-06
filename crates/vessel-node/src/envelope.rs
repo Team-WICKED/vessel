@@ -44,7 +44,7 @@ use vessel_proto::{
 use crate::guard::Guarded;
 use crate::principal::Principal;
 use crate::service::{Connection, NodeService};
-use crate::waits::{WaitSlot, Waiter};
+use crate::waits::{Share, WaitSlot, Waiter};
 
 fn forbidden(message: &str) -> WireError {
     WireError::new(ErrorCode::Forbidden, message.to_owned())
@@ -84,8 +84,9 @@ impl NodeService {
             connection.principal().permit(call.method())?;
             return forwarded(run_here(guard, connection, *call).await);
         }
-        let waiter = Waiter::of(connection.principal(), self.links.node());
-        let _slot = self.passed_wait(connection, waiter, &mut call);
+        let here = self.links.node();
+        let shares = Waiter::of(connection.principal(), here).shares(here);
+        let _slot = self.passed_wait(connection, shares, &mut call);
         self.pass_on(connection.principal(), node, call).await
     }
 
@@ -148,7 +149,10 @@ impl NodeService {
             return forwarded(run_here(guard, &connection.acting_as(delegated), *call).await);
         }
         let mut call = call;
-        let _slot = self.passed_wait(connection, Waiter::origin(&origin), &mut call);
+        // The relaying device's share too: it names its origins itself.
+        let mut shares = Waiter::origin(&origin).shares(self.links.node());
+        shares.push(Share::Relay(*id));
+        let _slot = self.passed_wait(connection, shares, &mut call);
         self.links.call_member(node, Deliver { call, origin }).await
     }
 
@@ -181,11 +185,11 @@ impl NodeService {
     fn passed_wait(
         &self,
         connection: &Connection,
-        waiter: Waiter,
+        shares: Vec<Share>,
         call: &mut Call,
     ) -> Option<WaitSlot> {
         if let Call::ReadEvents(read) = call {
-            self.wait_slot(connection, waiter, &mut read.wait)
+            self.wait_slot(connection, shares, &mut read.wait)
         } else {
             None
         }
