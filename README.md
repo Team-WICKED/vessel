@@ -248,6 +248,16 @@ vessel node devices revoke 3fa9       # its open connections close
   node pings direct connections every 10 s, as a relay does, so a dropped
   network is noticed within 30 s and an attach resumes; behind a proxy, an
   idle timeout of 60 s is enough.
+- The direct route holds at most 64 connections that have not finished
+  their handshake and device preamble, 7 of them from one address (an
+  IPv4 address or an IPv6 `/64`; a `/56` 14, a `/48` 28), so one host
+  cannot keep devices out. Behind a reverse proxy every client would be
+  the proxy's one address: run the node as a relay is run behind one,
+  with `--client-address-header X-Real-IP --trusted-proxy 127.0.0.1`
+  ("Running a relay": the header in one form, believed only from the
+  proxies named, `400` otherwise; a request without it counts as the
+  proxy). The node refuses to start with the header and no trusted
+  proxy.
 - The device's credential is a file in `~/.config/vessel/credentials/`
   (0600); the book points to it and never holds the secret. Moving a
   device means pairing it again.
@@ -428,6 +438,8 @@ start a session on another machine and read its answer.
 | `VESSEL_CONFIG_DIR` | where the node book lives (`<dir>/vessel/nodes.toml`); tests point it at a temporary directory | the platform's config directory (`~/.config` on Linux) |
 | `VESSEL_SSH` | the `ssh` program to run (tests use `fake-ssh`) | `ssh` on `PATH` |
 | `VESSEL_GH` | the GitHub CLI used to download releases | `gh` on `PATH` |
+| `VESSEL_CLIENT_ADDRESS_HEADER` | `vesseld --client-address-header`, behind a reverse proxy (needs a trusted proxy) | unset: the peer's address |
+| `VESSEL_TRUSTED_PROXY` | `vesseld --trusted-proxy`, comma-separated | none |
 | `VESSEL_RELAY_BIND` | `vesseld relay --bind` | `127.0.0.1:7078` |
 | `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
 | `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` (needs a trusted proxy) | unset: the peer's address |

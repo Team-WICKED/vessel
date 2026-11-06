@@ -194,7 +194,10 @@ every method.)
     keeps 10 s for each); at most 40 channels wait at once through each
     relay link, apart from 64 direct ones, of which one address (an IPv4
     address or an IPv6 `/64`) holds 7, a `/56` 14 and a `/48` 28; past
-    those the carrier is dropped at once. A client must send its preamble
+    those the carrier is dropped at once. Behind a trusted reverse proxy
+    (`vesseld --trusted-proxy`) the address is the client's from the
+    proxy's header, in the one form a relay takes (one bare address, else
+    `400`; without it, the proxy's own). A client must send its preamble
     as soon as its handshake is done.
   - A node that does not know `full` or `ticket` reads the message as
     malformed and retries; a client that does not know `4503` sees a

@@ -464,3 +464,16 @@ its home's relays reach (up to 8), was cut off. And the direct route's
 - Cost: a node linked to many relays may hold up to 40 unadmitted
   channels through each, so its memory bound grows with the number of
   links (64 KiB frames at most until admitted).
+
+## Amendment (2026-11-06): a node behind a reverse proxy
+
+The review's round 11, the last, found that a node serving its direct
+route behind a reverse proxy, as the README suggested, counted every
+client as the proxy: one host holding 7 handshakes, renewed every 20 s,
+kept every device out. The node now reads a trusted proxy's header as a
+relay does: `vesseld --client-address-header` and `--trusted-proxy`
+(repeatable), the header taken only from those peers and only as one bare
+address (a list, a port, brackets or a repeated header are answered
+`400`), a request without it counted as the proxy, and no start with the
+header and no trusted proxy. The parsing is one implementation,
+`vessel_relay::address::ClientAddress`, used by both.
