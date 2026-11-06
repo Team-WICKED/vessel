@@ -331,7 +331,17 @@ impl Links {
 
     /// A grant to a home this node no longer follows is revoked and
     /// forgotten. Called by the fleet loop on every look.
-    pub(crate) async fn reconcile(&self, membership: Option<&Membership>) {
+    ///
+    /// [Decision Log]
+    /// - Revoking is the one thing here that cannot be undone, so it needs
+    ///   to know the membership is gone (or names another home), not merely
+    ///   to have failed to read it: a read error keeps the grant.
+    /// - The membership is read here, after the grant, not taken from the
+    ///   loop's earlier look: a grant is only ever written while a
+    ///   membership exists, so reading in this order cannot pair a new
+    ///   grant with a membership read from before the join (which revoked
+    ///   the grant a join had just made).
+    pub(crate) async fn reconcile(&self) {
         let granted = match self.granted().await {
             Ok(Some(granted)) => granted,
             Ok(None) => return,
@@ -340,8 +350,14 @@ impl Links {
                 return;
             }
         };
-        if membership.is_some_and(|membership| membership.home == granted.home) {
-            return;
+        let files = self.files.clone();
+        match blocking(move || super::member::membership(&files)).await {
+            Ok(Some(membership)) if membership.home == granted.home => return,
+            Ok(Some(_) | None) => {}
+            Err(error) => {
+                tracing::warn!(%error, "cannot read this node's fleet membership; its home's grant stays");
+                return;
+            }
         }
         if let Err(error) = self.devices.revoke(granted.device).await {
             tracing::warn!(%error, "cannot revoke the former home's device");

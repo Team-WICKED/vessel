@@ -281,9 +281,12 @@ async fn an_agent_starts_a_session_reads_its_reply_and_stops_it() {
             ]
         );
 
+        // Not in a fleet: a fleet of one, this node.
         let (failed, nodes) = mcp.call("list_nodes", json!({})).await;
         assert!(!failed);
-        assert_eq!(nodes[0]["id"], json!(fixture.node.info().id));
+        assert_eq!(nodes.as_array().unwrap().len(), 1, "{nodes}");
+        assert_eq!(nodes[0]["node"], json!(fixture.node.info().id));
+        assert_eq!(nodes[0]["reachable"], json!(true));
 
         // A conversation of its own: started, prompted, answered.
         let (failed, created) = mcp
@@ -327,8 +330,8 @@ async fn an_agent_starts_a_session_reads_its_reply_and_stops_it() {
             .await;
         assert!(!failed);
 
-        // Another node is not reachable yet, a wait needs to know where
-        // from, and an unknown tool does not exist: errors of the call.
+        // A node not in the fleet, a wait that does not say where from, and
+        // an unknown tool: errors of the call.
         for (tool, arguments) in [
             ("list_sessions", json!({ "node": "elsewhere" })),
             ("wait_turn", json!({ "session": session })),

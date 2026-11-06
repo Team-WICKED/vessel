@@ -207,6 +207,9 @@ vessel fleet members
   the scopes chosen at join when it connects, and a call to another node
   runs there with no more than that grant and the caller's own scopes
   (protocol 6, ADR 0013). `vessel fleet join --grant none` grants nothing.
+  An agent's `vessel` tools take `node` (a name from `list_nodes`) to
+  start and drive its own sessions on another member; a member's calls
+  reach the other members only if it was invited with `--relay`.
 
 - Edit the sources on the home; members follow within seconds (the home
   watches `<data_dir>/fleet.toml` and its sources).

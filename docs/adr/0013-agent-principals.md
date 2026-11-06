@@ -208,11 +208,16 @@ creator chain) are Track X.
 - **Moves.** A profile move restarts the agent and its `vessel mcp`: the
   move gets a second credential, and when it ends the one in use stays.
 - **`vessel mcp`.** On `rmcp` (plan decision 8; the check is recorded in
-  `vessel-mcp`'s Decision Log). Tools: `list_nodes` (this node until Track
-  X), `list_sessions`, `create_session` (with an optional first prompt,
+  `vessel-mcp`'s Decision Log). Tools: `list_nodes` (`fleet.nodes`: the
+  fleet as its home lists it, or this node alone), `list_sessions`,
+  `create_session` (with an optional first prompt,
   sent once the session is ready), `send_input` (returns `from`),
   `answer_permission`, `read_events`, `wait_turn` (from the record
   `send_input` or `create_session` returned, until the turn ends, a
   permission is asked, the session ends, or a timeout; with the reply
-  text), `kill_session`. The node's refusals come back as tool errors with
-  the protocol's code; a wrong call is a JSON-RPC error.
+  text), `kill_session`. Every tool but `list_nodes` takes `node` (an id
+  or a name from `list_nodes`); a call for another node goes in
+  `fleet.forward`, and that node applies its own grant, ownership and
+  limits. Waiting is a long poll of `session.read` with `wait`, on every
+  node alike. The node's refusals come back as tool errors with the
+  protocol's code; a wrong call is a JSON-RPC error.
