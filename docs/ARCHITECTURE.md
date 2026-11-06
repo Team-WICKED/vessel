@@ -462,7 +462,7 @@ they started.
     `secret.list` and `secret.delete` (admin) call the same functions;
     `secret.copy` reads the value here and sends it as `secret.set`
     through the envelope as the caller (`vessel fleet secret copy NAME
-    --to NODE`), so the target must have granted the home `admin`; the
+    --to NODE_ID`, a whole node id), so the target must have granted the home `admin`; the
     refusal says how (join again with `--grant`).
   - Transfers on one node (F4, 2026-11-06): `vessel-harness` knows which
     files (`SessionFiles::regular_files`, the files a profile move links,
