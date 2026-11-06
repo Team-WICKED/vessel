@@ -48,6 +48,7 @@
 //!   a DNS change) is refused instead of being sent the user's commands
 //!   ([`crate::Pinned`]).
 
+mod content;
 mod file;
 #[cfg(test)]
 mod tests;

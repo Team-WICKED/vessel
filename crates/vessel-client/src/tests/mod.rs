@@ -2,6 +2,8 @@
 //! logic, and over a loopback websocket for the connection and the token.
 
 mod calls;
+mod memory;
+mod pinned;
 mod resume;
 mod stream;
 mod websocket;
