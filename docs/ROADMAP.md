@@ -21,15 +21,24 @@ Plan: `docs/plans/backend-m1.md`.
 ## Phase 1: many nodes
 
 Milestone 2 (SSH transport, remote install and update, named nodes) is
-drafted in `docs/plans/backend-m2.md`, with proposed ADRs 0007 and 0008;
-the relay follows in milestone 3.
+implemented on `backend/m2` (plan `docs/plans/backend-m2.md`, ADRs 0007 and
+0008). Milestone 3, the relay, is drafted in `docs/plans/backend-m3.md`, with
+proposed ADRs 0009 and 0010.
 
-- [ ] SSH stdio transport (`vesseld attach`, Zed's proxy/daemon split).
-- [ ] Versioned side-by-side `vesseld` install and update on a remote.
-- [ ] Peer list and node identity exchange.
-- [ ] Relay: nodes reach each other without port-forwarding (evaluate
-      `tsnet` vs WireGuard vs a hosted rendezvous).
-- [ ] `vessel` CLI addresses any node by name: `vessel --node gpu-box run ...`.
+- [x] SSH stdio transport (`vesseld attach`, Zed's proxy/daemon split).
+- [x] Versioned side-by-side `vesseld` install and update on a remote.
+- [x] `vessel` CLI addresses any node by name: `vessel --node gpu-box run ...`
+      (the node book, ids pinned on first contact).
+- [ ] Relay (milestone 3): nodes and clients reach each other with no SSH and
+      no open port.
+  - A dumb relay built into `vesseld` (`vesseld relay`), end-to-end
+    encrypted with Noise NK, direct when the node is reachable.
+  - Decided 2026-11-06 instead of `tsnet` or WireGuard: no third-party
+    account, the overlay stays out of the trust base, one binary. See
+    VISION section 2 and ADR 0009.
+- [ ] Pairing and device principals (milestone 3): an expiring, single-use
+      pairing link creates a revocable credential per device (ADR 0010).
+- [ ] Peers: node-to-node routed calls (after milestone 3).
 
 ## Phase 2: fleet sync
 
