@@ -73,6 +73,16 @@ impl PreambleError {
             Self::Closed | Self::Timeout | Self::Protocol(_) | Self::Transport(_) => false,
         }
     }
+
+    /// Whether the node answered (with a refusal), as opposed to the
+    /// channel failing or the node not answering properly.
+    #[must_use]
+    pub const fn is_answer(&self) -> bool {
+        match self {
+            Self::Refused(_) => true,
+            Self::Closed | Self::Timeout | Self::Protocol(_) | Self::Transport(_) => false,
+        }
+    }
 }
 
 const fn refusal(reason: RefusalReason) -> &'static str {
