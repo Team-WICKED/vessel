@@ -115,9 +115,8 @@ impl Fixture {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let mut input = child.stdin.take().unwrap();
-        input.write_all(stdin).await.unwrap();
-        drop(input);
+        let input = child.stdin.take().unwrap();
+        feed(input, stdin).await;
         child.wait_with_output().await.unwrap().into()
     }
 
@@ -145,9 +144,8 @@ impl Fixture {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let mut input = child.stdin.take().unwrap();
-        input.write_all(stdin).await.unwrap();
-        drop(input);
+        let input = child.stdin.take().unwrap();
+        feed(input, stdin).await;
         child.wait_with_output().await.unwrap().into()
     }
 
@@ -351,4 +349,17 @@ fn book_command(data: &Path, dir: &Path, args: &[&str]) -> Command {
         .env_remove("VESSEL_NODE")
         .env_remove("VESSEL_SSH");
     command
+}
+
+/// Give a child everything it should read on standard input, then close
+/// it. A child that exits before reading it all (it failed first, or under
+/// load got there before the write) closes the pipe: that is not this
+/// write's failure, and the child's exit status and stderr, which the
+/// caller asserts on next, say what happened instead of `EPIPE`.
+async fn feed(mut input: tokio::process::ChildStdin, bytes: &[u8]) {
+    match input.write_all(bytes).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("writing the child's standard input: {error}"),
+    }
 }
