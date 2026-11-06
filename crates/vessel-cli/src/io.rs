@@ -1,7 +1,11 @@
 //! The CLI's terminal I/O.
 //!
 //! Output goes through tokio's stdout and stderr handles (one writer each,
-//! flushed per write), so printing never blocks a runtime thread.
+//! flushed per write), so printing never blocks a runtime thread. Because
+//! every write is flushed before the next one starts, writes to the two
+//! streams appear in the order they were made even when both go to one
+//! file (`2>&1`); commands rely on that to keep their output in record
+//! order (see `log`).
 //!
 //! Input is read on a dedicated thread feeding a small bounded channel.
 //! `tokio::io::stdin` is not used because a read blocked on an interactive
@@ -30,8 +34,13 @@ pub(crate) async fn out(bytes: &[u8]) -> std::io::Result<()> {
 
 /// Write `text` to stderr (status lines that are not the command's output).
 pub(crate) async fn note(text: &str) -> std::io::Result<()> {
+    note_bytes(text.as_bytes()).await
+}
+
+/// Write `bytes` to stderr.
+pub(crate) async fn note_bytes(bytes: &[u8]) -> std::io::Result<()> {
     let mut stderr = tokio::io::stderr();
-    stderr.write_all(text.as_bytes()).await?;
+    stderr.write_all(bytes).await?;
     stderr.flush().await
 }
 
