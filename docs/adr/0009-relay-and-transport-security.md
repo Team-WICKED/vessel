@@ -1,6 +1,6 @@
 # ADR 0009: A dumb relay, and one end-to-end secure channel
 
-Status: proposed, 2026-11-06 (milestone 3, `docs/plans/backend-m3.md`).
+Status: accepted 2026-11-06 with the coordinator decisions in `docs/plans/backend-m3.md`; drafted as proposed, 2026-11-06 (milestone 3, `docs/plans/backend-m3.md`).
 
 ## Context
 
