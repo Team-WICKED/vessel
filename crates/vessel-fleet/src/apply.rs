@@ -36,17 +36,32 @@ pub struct Applied {
     pub failures: Vec<(PathBuf, io::Error)>,
 }
 
-/// A file kept as it is because it was edited (or never Vessel's), with
-/// the bundle's version beside it.
+/// A place where this node's file and the bundle disagree, left as it is
+/// here for a person to settle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conflict {
     /// The bundle path.
     pub bundle: BundlePath,
-    /// The kept file.
+    /// The file (or where it was).
     pub path: PathBuf,
-    /// Where the bundle's version was written, if it could be (a file of
-    /// that name that Vessel did not write is left alone too).
+    /// What kind of disagreement.
+    pub kind: ConflictKind,
+    /// Where the bundle's version was written beside it, if it was (never
+    /// for a deleted file; not when a file of that name that Vessel did
+    /// not write is in the way).
     pub incoming: Option<PathBuf>,
+}
+
+/// How a node's file disagrees with the bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictKind {
+    /// Vessel wrote it, and it was changed here since.
+    Edited,
+    /// A file Vessel never wrote is where the bundle's file goes.
+    NotWritten,
+    /// Vessel wrote it, and it was deleted here: it stays deleted until
+    /// restored (`Managed::restore`).
+    Deleted,
 }
 
 impl Applied {
@@ -84,6 +99,7 @@ pub fn apply(
             Step::Write { path, .. }
             | Step::Adopt { path, .. }
             | Step::Keep { path, .. }
+            | Step::Deleted { path, .. }
             | Step::Remove { path, .. }
             | Step::Release { path, .. } => path.clone(),
         };
@@ -148,6 +164,15 @@ impl Applied {
                 root,
                 ..
             } => self.keep(bundle, root, path, file, blobs, managed, sources),
+            Step::Deleted { bundle, path } => {
+                self.conflicts.push(Conflict {
+                    bundle: bundle.clone(),
+                    path: path.clone(),
+                    kind: ConflictKind::Deleted,
+                    incoming: None,
+                });
+                Ok(())
+            }
             Step::Remove {
                 path,
                 hash,
@@ -215,9 +240,15 @@ impl Applied {
             }
             Found::File { .. } | Found::Source | Found::Symlink(_) | Found::Blocked => None,
         };
+        let kind = if managed.file(path).is_some() {
+            ConflictKind::Edited
+        } else {
+            ConflictKind::NotWritten
+        };
         self.conflicts.push(Conflict {
             bundle: bundle.clone(),
             path: path.to_path_buf(),
+            kind,
             incoming,
         });
         Ok(())

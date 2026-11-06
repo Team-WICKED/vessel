@@ -6,9 +6,12 @@
 //!   leave alone entirely, before anything is written; `vessel fleet
 //!   status` can show a plan without applying it.
 //! - Rules, for each bundle file at its place in each target:
-//!   - nothing there: write it (a deleted file comes back: the home is
-//!     where the fleet's files are changed, and its `skip` globs are where
-//!     one is left out);
+//!   - nothing there and nothing recorded: write it;
+//!   - nothing there, but Vessel wrote it before: deleted locally, which
+//!     is a local edit like any other (often a deliberate opt-out). It
+//!     stays deleted and is a conflict of its own kind; the record is
+//!     kept, so status still shows it, and nothing is written beside it.
+//!     `Managed::restore` settles it: the next apply writes it again;
 //!   - the incoming content already there: nothing to write; it is
 //!     recorded as Vessel's (adopted), so later updates reach it;
 //!   - Vessel's content (the recorded hash): replace it;
@@ -22,6 +25,8 @@
 //!   unchanged, and forgotten (left as it is) if it was edited.
 //! - Targets are told apart by their canonical root, so two profiles
 //!   sharing a home are written once.
+//! - Bundle paths a target has no place for (another harness's files, top
+//!   levels reserved for later versions) are ignored, not reported.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -67,6 +72,14 @@ pub enum Step {
         path: PathBuf,
         /// Its content's hash.
         hash: BlobHash,
+    },
+    /// A file Vessel wrote that was deleted here: it stays deleted, its
+    /// record is kept, and it is a conflict until restored.
+    Deleted {
+        /// Its bundle path.
+        bundle: BundlePath,
+        /// Where it was.
+        path: PathBuf,
     },
     /// A local edit, or a file Vessel did not write: kept; the incoming
     /// version goes beside it, and it is a conflict.
@@ -184,7 +197,7 @@ impl Plan {
         self.steps
             .iter()
             .filter_map(|step| match step {
-                Step::Keep { bundle, .. } => Some(bundle),
+                Step::Keep { bundle, .. } | Step::Deleted { bundle, .. } => Some(bundle),
                 Step::Write { .. }
                 | Step::Adopt { .. }
                 | Step::Remove { .. }
@@ -211,6 +224,10 @@ impl Plan {
             Found::Source => self.skips.push(skip(SkipReason::Source)),
             Found::Symlink(link) => self.skips.push(skip(SkipReason::Symlink(link))),
             Found::Blocked => self.skips.push(skip(SkipReason::Blocked)),
+            Found::Missing if managed.file(path).is_some() => self.steps.push(Step::Deleted {
+                bundle: bundle.clone(),
+                path: path.to_path_buf(),
+            }),
             Found::Missing => self.steps.push(Step::Write {
                 bundle: bundle.clone(),
                 path: path.to_path_buf(),
@@ -263,6 +280,7 @@ impl Plan {
             .filter_map(|step| match step {
                 Step::Keep { path, .. } => Some(incoming_path(path)),
                 Step::Write { .. }
+                | Step::Deleted { .. }
                 | Step::Adopt { .. }
                 | Step::Remove { .. }
                 | Step::Release { .. } => None,
