@@ -1,0 +1,132 @@
+//! Fleet sync on this node (ADR 0012, plan F2): the home role (publishing
+//! the bundle made from `fleet.toml`, serving `fleet.*`), the member role
+//! (pulling it from the home, applying it into every profile's home,
+//! reporting), and the files both keep.
+//!
+//! ```text
+//!  fleet.toml ──stamp──▶ bundle ──▶ manifest.json + blobs/ ──▶ Home ◀── fleet.manifest/blob/watch
+//!                                        │                     ▲          fleet.report/members
+//!                                        ▼ apply here          │ (secure channel, sync scope)
+//!  member.json + member.credential ──▶ member::run ── pull ────┘
+//!                                        │ fetch blobs, apply, report
+//!                                        ▼
+//!                  managed.json, state.json  ◀── vessel fleet status / restore
+//! ```
+//!
+//! [Decision Log]
+//! - Purpose: one person's instructions and skills, edited on one node,
+//!   reach every profile of every node without losing local edits (the
+//!   materialiser's rules are `vessel-fleet`'s).
+//! - State in files under `<data_dir>/fleet/` (`files`), not in the event
+//!   log: it is small, and the CLI must read and write some of it with the
+//!   node stopped or running (`vessel fleet join`, `status`, `restore`).
+//! - One loop (`supervisor`) looks at the files every few seconds
+//!   (`FleetConfig::poll`) and acts on what changed: `fleet.toml` makes the
+//!   node the home; `member.json` makes it a member (the loop starts or
+//!   stops the pull loop); `fleet/apply` asks for an apply. Polling a few
+//!   small files costs little and needs no protocol between the CLI and
+//!   the node beyond the files themselves (protocol 5 has no call for it).
+//! - A node is the home or a member, never both: `init` refuses a member,
+//!   `join` refuses a home, and if both files appear anyway the home wins
+//!   and the member loop stops.
+//! - Targets come from the node's profiles (`local`); tests replace them
+//!   with fixed homes (`FleetTargets::Only`) so nothing is ever written
+//!   into the real harness homes of the machine they run on.
+//! - Alternatives: the home pushing bundles to members (members behind NAT
+//!   are reachable only through relays they dial; pull fits ADR 0012's
+//!   topology); a subscription frame for `fleet.watch` (a long poll needs
+//!   no new frame type).
+
+mod config;
+mod files;
+mod home;
+mod local;
+mod member;
+mod state;
+mod supervisor;
+#[cfg(test)]
+mod tests;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use vessel_proto::HarnessKind;
+
+pub use config::{FleetInit, InitError, SourcesError, init};
+pub use files::{FileError, FleetFiles};
+pub(crate) use home::Home;
+pub use local::{RestoreError, restore};
+pub use member::{JoinError, Joined, join, leave};
+pub use state::{ConflictEntry, ConflictWhy, FailureEntry, FleetState, FleetStatus, Role, status};
+/// A `skip` pattern of `fleet.toml` (`vessel fleet init --skip`).
+pub use vessel_fleet::SkipGlob;
+
+use crate::profiles::NodeProfiles;
+
+/// Where the node writes bundles.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum FleetTargets {
+    /// Each profile's home (every harness's default profile included),
+    /// where it exists.
+    #[default]
+    Profiles,
+    /// These harness homes only (tests; never the profiles').
+    Only(Vec<(HarnessKind, PathBuf)>),
+}
+
+/// How the node takes part in a fleet.
+#[derive(Debug, Clone)]
+pub struct FleetConfig {
+    /// Where bundles are written.
+    pub targets: FleetTargets,
+    /// How often the node looks at `fleet.toml`, its sources, its
+    /// membership and requests to apply: 5 s.
+    pub poll: Duration,
+    /// How often a member pulls even without news: 10 minutes.
+    pub pull_every: Duration,
+    /// How long the home holds a `fleet.watch`: 50 s, under the 60 s idle
+    /// limits proxies commonly have.
+    pub watch_limit: Duration,
+}
+
+impl Default for FleetConfig {
+    fn default() -> Self {
+        Self {
+            targets: FleetTargets::Profiles,
+            poll: Duration::from_secs(5),
+            pull_every: Duration::from_secs(10 * 60),
+            watch_limit: Duration::from_secs(50),
+        }
+    }
+}
+
+/// Start the fleet loop of the node keeping its state in `files`; the
+/// home's side, for the service. Blocks briefly (reads `members.json` and
+/// `state.json`).
+pub(crate) fn start(
+    files: FleetFiles,
+    config: &FleetConfig,
+    profiles: &Arc<NodeProfiles>,
+    tasks: &TaskTracker,
+    stop: &CancellationToken,
+) -> Arc<Home> {
+    let home = Arc::new(Home::new(files.clone(), config.watch_limit, stop.clone()));
+    let state = Arc::new(state::StateFile::open(&files));
+    let local = Arc::new(local::Local::new(
+        files,
+        local::TargetSource::new(&config.targets, profiles),
+        state,
+    ));
+    drop(tasks.spawn(supervisor::run(
+        local,
+        Arc::clone(&home),
+        config.clone(),
+        profiles.user_home().map(ToOwned::to_owned),
+        tasks.clone(),
+        stop.clone(),
+    )));
+    home
+}

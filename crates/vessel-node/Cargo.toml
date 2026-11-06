@@ -12,6 +12,11 @@ name = "vesseld"
 path = "src/main.rs"
 
 [dependencies]
+# A member's calls to its fleet's home (`fleet.*` over the secure channel,
+# pairing with a `sync` invitation): the same client every device uses.
+vessel-client.workspace = true
+# Bundling on the home, materialising on members (ADR 0012).
+vessel-fleet.workspace = true
 vessel-harness.workspace = true
 vessel-proto.workspace = true
 vessel-relay.workspace = true
@@ -36,18 +41,22 @@ hostname.workspace = true
 # roots (`vessel_relay::TlsConfig::with_roots`); already built for
 # vessel-relay.
 rustls.workspace = true
+# The fleet's own files (`fleet/*.json`).
+serde.workspace = true
 serde_json.workspace = true
 # Invitations are kept by the hash of their secret (ADR 0010).
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
+# `fleet.toml`: typed reading, and `vessel fleet init` writing it with
+# correct quoting; already in the workspace (the node book).
+toml_edit.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-vessel-client.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }
 # The misbehaving relay (feature `relay`) for the secure e2e tests.
 vessel-testkit = { workspace = true, features = ["relay"] }
