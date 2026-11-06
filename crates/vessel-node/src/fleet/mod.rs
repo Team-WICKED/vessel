@@ -68,7 +68,7 @@ pub(crate) use chunks::{fetch, serve};
 pub use config::{FleetInit, InitError, SourcesError, init};
 pub use files::{FileError, FleetFiles};
 pub(crate) use home::Home;
-pub(crate) use links::Links;
+pub(crate) use links::{HomeRelays, Links};
 pub use local::{RestoreError, restore};
 pub(crate) use mcp::FleetMcp;
 pub use member::{DEFAULT_GRANT, JoinError, Joined, join, leave};

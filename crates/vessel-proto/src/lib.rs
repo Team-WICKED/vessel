@@ -73,7 +73,7 @@ pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use relay::{
     ConnId, EmptyToken, HandshakeMessage, NodeClose, NodeToRelay, RegistrationRefusal, RelayClose,
-    RelayToNode, RelayToken,
+    RelayTicket, RelayToNode, RelayToken, TicketMac,
 };
 pub use rpc::{
     Ack, Call, ClientFrame, ClientInfo, CreateSession, EventPage, GetNode, GetSession, Handler,

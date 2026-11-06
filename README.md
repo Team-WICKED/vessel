@@ -303,9 +303,10 @@ relay (`vesseld --relay URL --relay-token-file FILE`, see "A node behind
 NAT") and every member is reachable without flags. A home with no relay
 has none to share: its members still sync, but the home cannot run calls
 on them until one of the two gets a route (`vessel init --join` and
-`vessel fleet status` say so). Each member then holds the relay's
-registration token in memory; registering still needs the member's own
-key, so it cannot take another node's place there.
+`vessel fleet status` say so). The relay's token stays with the home: a
+member gets a ticket that registers its own key only, for a day, renewed
+while it reaches its home, and it dials only `wss://` relays on public
+addresses, or relays on the host it reaches its home by.
 
 ### Agent tools
 

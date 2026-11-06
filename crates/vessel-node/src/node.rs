@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_harness::HarnessEnv;
-use vessel_proto::{Callback, NodeId, NodeInfo, RelayToken, RouteUrl};
+use vessel_proto::{NodeId, NodeInfo, RelayToken, RouteUrl};
 use vessel_relay::{LinkState, TlsConfig};
 use vessel_rpc::Server;
 use vessel_secure::NodeKeypair;
@@ -153,7 +153,7 @@ impl Node {
                 }),
             )
         });
-        relays.serve(secure.clone(), connections.clone(), stop.clone());
+        relays.serve(secure.clone(), connections.clone());
         let gateway = LocalGateway {
             rpc,
             token,
@@ -340,22 +340,16 @@ fn core(
             direct: config.public.clone(),
         },
     ));
-    let relays = Arc::new(Relays::new(Arc::clone(keypair), Arc::clone(&devices)));
-    // What a home tells its members with no route of their own: its relays
-    // and their token (`fleet.callback`).
-    let callback = match relaying {
-        Some((token, tls)) => {
-            let _states = relays.link_with(&config.relays, &token, &tls);
-            Callback {
-                relays: config.relays.clone(),
-                token: Some(token),
-            }
+    let relays = Arc::new(Relays::new(Arc::clone(keypair), stop.clone()));
+    // A home mints its members' tickets from its relays' token
+    // (`fleet.callback`).
+    let home_relays = relaying.map(|(token, tls)| {
+        relays.link_configured(&config.relays, &token, &tls);
+        fleet::HomeRelays {
+            relays: config.relays.clone(),
+            token,
         }
-        None => Callback {
-            relays: Vec::new(),
-            token: None,
-        },
-    };
+    });
     // Fleet sync's tasks are session-adjacent work: shutdown waits for an
     // apply in progress before the data directory is released.
     let links = Arc::new(fleet::Links::new(
@@ -364,7 +358,7 @@ fn core(
         FleetFiles::new(&config.data_dir),
         Arc::clone(&devices),
         Arc::clone(&relays),
-        callback,
+        home_relays,
     ));
     let fleet = fleet::start(
         FleetFiles::new(&config.data_dir),

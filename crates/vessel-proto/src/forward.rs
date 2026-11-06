@@ -32,7 +32,7 @@ use crate::id::{DeviceId, NodeId, SessionId};
 use crate::key::NodePublicKey;
 use crate::node::ProtocolVersion;
 use crate::pairing::{PairingLink, RouteUrl};
-use crate::relay::RelayToken;
+use crate::relay::RelayTicket;
 use crate::rpc::{Call, Method, Reply};
 
 /// Who a forwarded call speaks for, as the node it started on vouches.
@@ -127,14 +127,20 @@ pub struct GrantHome {
     pub link: PairingLink,
 }
 
-/// `fleet.callback` (protocol 6): how a member makes itself reachable to
-/// its home, for a member with no route of its own (no `--relay`, no
-/// `--public`): the relays the home registers with and their registration
-/// token. The member registers there too and names them in its grant's
-/// link, so the home calls it back through them. Needs `sync`; never
-/// forwarded.
+/// `fleet.callback` (protocol 6): what a member with no route of its own
+/// needs for its home to call it back: the relays the home registers with,
+/// and a ticket that registers this member's own node key there for a while
+/// (never the relays' token). The home answers only a member device, for
+/// the node and key its record binds that device to, or, before its first
+/// grant, for a claim its record would take. Asked again before the ticket
+/// expires. Needs `sync`; never forwarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GetCallback;
+pub struct GetCallback {
+    /// The member's node.
+    pub node: NodeId,
+    /// Its key, which the ticket names.
+    pub key: NodePublicKey,
+}
 
 /// What `fleet.callback` answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,10 +149,9 @@ pub struct Callback {
     /// when the home has no relay (it is reached directly), and then a
     /// member needs a route of its own to be called back.
     pub relays: Vec<RouteUrl>,
-    /// Their registration token, with `relays`. A secret: the member keeps
-    /// it in memory only, and nothing prints it.
+    /// A ticket for the member's key, with `relays`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<RelayToken>,
+    pub ticket: Option<RelayTicket>,
 }
 
 /// `fleet.forget` (protocol 6): on the home, forget member node `node`'s

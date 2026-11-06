@@ -4,16 +4,19 @@
 //!
 //! - Planted: a `profiles.toml` environment value; two `secrets.toml`
 //!   values behind the fleet's MCP servers (a stdio server's environment
-//!   and an HTTP server's header, by secret reference); and credentials
-//!   Vessel makes itself, read from where they belong: a member's device
-//!   credential on its home, the home's on the member, and a session
-//!   agent's credential.
+//!   and an HTTP server's header, by secret reference); the relay's
+//!   registration token, in a file outside every node's data directory;
+//!   and credentials Vessel makes itself, read from where they belong: a
+//!   member's device credential on its home, the home's on the member, and
+//!   a session agent's credential.
 //! - Driven: `profile.list` and `profile.reload` (also on a file that does
 //!   not parse); terminal and structured sessions of Claude Code and Codex
 //!   profiles; a fleet bundle applied by a member; `secret.copy` to it and
 //!   its refusals; a session transfer from it and one between profiles;
 //!   `vessel mcp` with an agent's credential, and refused without the right
-//!   session.
+//!   session; a member started without `--relay` that its home calls back
+//!   through the home's relay with a ticket for its own key (`fleet.callback`,
+//!   the review's round 6), which never sees the relay's token.
 //! - Captured: the nodes' tracing at debug level; every CLI command's
 //!   output, with debug logging on; the fakes' arguments; the sessions'
 //!   logs; and every file of both data directories (the event store, the
@@ -211,6 +214,11 @@ fn assert_owner_only(_path: &Path) {}
 
 struct Relay {
     url: RouteUrl,
+    /// The registration token, a canary, and the file holding it for the
+    /// nodes started with `--relay`: outside every node's data directory.
+    token: String,
+    token_file: PathBuf,
+    _token_dir: tempfile::TempDir,
     shutdown: CancellationToken,
     serving: tokio::task::JoinHandle<io::Result<()>>,
 }
@@ -220,14 +228,21 @@ async fn relay() -> Relay {
     let url = format!("ws://{}", listener.local_addr().unwrap())
         .parse()
         .unwrap();
+    let token = canary("RELAY");
+    let token_dir = tempfile::tempdir().unwrap();
+    let token_file = token_dir.path().join("relay-token");
+    std::fs::write(&token_file, format!("{token}\n")).unwrap();
     let shutdown = CancellationToken::new();
     let serving = tokio::spawn(vessel_relay::serve(
         listener,
-        RelayConfig::new(RelayToken::new("canary-relay").unwrap()),
+        RelayConfig::new(RelayToken::new(&token).unwrap()),
         shutdown.clone(),
     ));
     Relay {
         url,
+        token,
+        token_file,
+        _token_dir: token_dir,
         shutdown,
         serving,
     }
@@ -242,19 +257,26 @@ fn fakes(bin: &Path) {
     }
 }
 
-/// A node named `name` linked to `relay` with the fakes in `bin`, fleet files written
-/// into `<data>/fleet-claude`, `vessel mcp` as its agents' tools, and
-/// `prepare` run on its data directory first.
-async fn node(name: &str, relay: &RouteUrl, bin: &Path, prepare: impl FnOnce(&Path)) -> Fixture {
+/// A node named `name`, linked to `relay` with its token if one is given
+/// (none: a node started plainly, which a home calls back through the
+/// home's relay), with the fakes in `bin`, fleet files written into
+/// `<data>/fleet-claude`, `vessel mcp` as its agents' tools, and `prepare`
+/// run on its data directory first.
+async fn node(
+    name: &str,
+    relay: Option<&Relay>,
+    bin: &Path,
+    prepare: impl FnOnce(&Path),
+) -> Fixture {
     let fixture = Fixture::start_with(|config, data| {
         prepare(data);
         // Named: a home refuses a member named as itself or another member,
         // and both would otherwise take this machine's hostname.
         config.name = Some(name.to_owned());
-        let token = data.join("relay-token");
-        std::fs::write(&token, "canary-relay\n").unwrap();
-        config.relays = vec![relay.clone()];
-        config.relay_token_file = Some(token);
+        if let Some(relay) = relay {
+            config.relays = vec![relay.url.clone()];
+            config.relay_token_file = Some(relay.token_file.clone());
+        }
         let applied = data.join("fleet-claude");
         std::fs::create_dir_all(&applied).unwrap();
         config.fleet = FleetConfig {
@@ -465,6 +487,36 @@ async fn run(
     Session {
         id: ran.stdout.trim().parse().unwrap(),
         terminal,
+    }
+}
+
+/// The relays `fixture`'s node is linked to.
+fn linked(fixture: &Fixture) -> Vec<RouteUrl> {
+    fixture
+        .node()
+        .relay_links()
+        .into_iter()
+        .map(|(relay, _state)| relay)
+        .collect()
+}
+
+/// Every file of the nodes' data directories, but the few a value belongs
+/// in: the home's `secrets.toml`, `profiles.toml`, the MCP files of its
+/// terminal sessions and its credential on a member (`grant_file`); each
+/// member's copied secret and its credential on the home.
+fn scan(captured: &mut Captured, home: &Fixture, grant_file: &Path, members: &[&Fixture]) {
+    let intended = |data: &Path, credential: PathBuf| {
+        vec![
+            data.join("secrets.toml"),
+            data.join("profiles.toml"),
+            data.join("mcp"),
+            credential,
+        ]
+    };
+    captured.tree(home.data(), &intended(home.data(), grant_file.to_owned()));
+    for member in members {
+        let credential = member.data().join("fleet/member.credential");
+        captured.tree(member.data(), &intended(member.data(), credential));
     }
 }
 
@@ -921,7 +973,7 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         let bin = tempfile::tempdir().unwrap();
         fakes(bin.path());
         let relay = relay().await;
-        let home = node("canary-home", &relay.url, bin.path(), |data| {
+        let home = node("canary-home", Some(&relay), bin.path(), |data| {
             std::fs::write(
                 DataDir::new(data).profiles_path(),
                 profiles_toml(data, &planted.profile),
@@ -929,14 +981,23 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
             .unwrap();
         })
         .await;
-        let member = node("canary-member", &relay.url, bin.path(), |_data| {}).await;
-        let plain = node("canary-plain", &relay.url, bin.path(), |_data| {}).await;
+        let member = node("canary-member", Some(&relay), bin.path(), |_data| {}).await;
+        let plain = node("canary-plain", Some(&relay), bin.path(), |_data| {}).await;
+        // Started without `--relay`: its home calls it back through the
+        // home's relay, with a ticket for its own key.
+        let routeless = node("canary-routeless", None, bin.path(), |_data| {}).await;
         let client = owner(&home).await;
         let mut captured = Captured::default();
 
         make_home(&home, &planted, &mut captured).await;
         join(&home, &member, "read,operate,admin", &client, &mut captured).await;
         join(&home, &plain, "read,operate", &client, &mut captured).await;
+        join(&home, &routeless, "read,operate", &client, &mut captured).await;
+        assert_eq!(
+            linked(&routeless),
+            std::slice::from_ref(&relay.url),
+            "the routeless member is linked to the home's relay"
+        );
         copy_secrets(&home, [&member, &plain], &planted, &mut captured).await;
         profiles(&home, &planted, &mut captured).await;
         let reports = tempfile::tempdir().unwrap();
@@ -978,22 +1039,12 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
 
         // Everything captured so far, and every file but the few a value
         // belongs in.
-        // (The home's `secrets.toml`, `profiles.toml`, the MCP files of
-        // its terminal sessions and its credential on the member; the
-        // member's copied secret and its credential on the home.)
-        let intended = |data: &Path, credential: PathBuf| {
-            vec![
-                data.join("secrets.toml"),
-                data.join("profiles.toml"),
-                data.join("mcp"),
-                credential,
-            ]
-        };
-        captured.tree(home.data(), &intended(home.data(), grant_file.clone()));
-        let member_credential = member.data().join("fleet/member.credential");
-        captured.tree(member.data(), &intended(member.data(), member_credential));
-        let plain_credential = plain.data().join("fleet/member.credential");
-        captured.tree(plain.data(), &intended(plain.data(), plain_credential));
+        scan(
+            &mut captured,
+            &home,
+            &grant_file,
+            &[&member, &plain, &routeless],
+        );
         captured.text("the nodes' tracing", &String::from_utf8_lossy(&traced()));
         let mut canaries = vec![
             ("profile", planted.profile.as_str()),
@@ -1001,6 +1052,10 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
             ("WEB_TOKEN", planted.web.as_str()),
             ("member credential", device.as_str()),
             ("home credential", grant.as_str()),
+            ("relay token", relay.token.as_str()),
+            // A relay ticket is held in memory only, never written or
+            // logged: its one field nothing else has.
+            ("relay ticket", "\"expires_at\""),
         ];
         canaries.extend(
             agents
@@ -1016,6 +1071,7 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         home.stop().await;
         member.stop().await;
         plain.stop().await;
+        routeless.stop().await;
         relay.shutdown.cancel();
         relay.serving.await.unwrap().unwrap();
     })

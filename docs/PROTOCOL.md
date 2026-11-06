@@ -63,14 +63,22 @@ every method.)
   details. `conflict` also while the same device has a grant in
   progress; `invalid_request` to a link with no route or more than 8; and
   `unavailable`, without details, when it cannot pair (within 30 s).
-  `fleet.callback` (sync; from a member device only, never forwarded)
-  returns `Callback { relays, token? }`: the relays the home registers
-  with and their registration token (none when the home has no relay). A
-  member whose node has no route of its own asks it on each connection
-  until it has one, registers with those relays and names them in its
-  grant's link; with none, it sends no grant and records why in its fleet
-  state. `fleet.peers` (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
-  `protocol`, `reachable`), the home included.
+  `fleet.callback { node, key }` (sync; from a member device only, never
+  forwarded) returns `Callback { relays, ticket? }`: the relays the home
+  registers with and a registration ticket for `key` (`RelayTicket { key,
+  expires_at, mac }`, never the relays' token; none when the home has no
+  relay). A device the home's record binds to `node` and `key`, holding a
+  current grant, gets a ticket for a day; one that has not granted yet,
+  for a claim the record would take, gets one for ten minutes, and for one
+  key only; others get `forbidden`. A member whose node has no route of its
+  own asks on each connection, and again halfway to the ticket's expiry
+  while connected, registers with those of the relays it dials (at most 8;
+  `wss://` to a public host, or any on a host it reaches its home by) and
+  names them, and only them, in its grant's link; another home's callback,
+  or leaving, unlinks them. With none, it sends no grant and records why
+  in its fleet state. `fleet.peers` (sync) and `fleet.nodes` (read)
+  return `FleetNode[]` (`node`, `name`, `protocol`, `reachable`), the
+  home included.
 - Transfers (F4): `session.export { session, force? }` (operate,
   ownership-checked for agents) and `memory.export { profile?, project? }`
   (admin) snapshot files into a transfer and return `TransferManifest {
@@ -254,7 +262,15 @@ pairing) implements it; until then nodes answer `device.*` with
 - Relay control connection (`vessel_proto::relay`): node sends `register
   {routing_id, key, token}`, relay sends `prove {message}`, node answers
   `proof {message}`, relay sends `registered` or `rejected {reason}`, then
-  `incoming {conn}` per waiting client. Routing ids and connection ids are
+  `incoming {conn}` per waiting client. Since protocol 6, `register` may
+  carry `ticket {key, expires_at, mac}` instead of `token` (exactly one of
+  the two, else `rejected {token}`): HMAC-SHA256 under the relay's token
+  over `"vessel relay ticket v1\0"`, the key's 32 bytes and `expires_at`
+  (seconds since the Unix epoch, 8 bytes big-endian). The relay takes it
+  only for the key that then proves possession, unexpired, and expiring at
+  most 48 h ahead (`rejected {ticket}` otherwise), and closes a
+  registration made with it when it expires; the node registers again with
+  a newer one. Routing ids and connection ids are
   32 lowercase hex characters. Relay close codes: `4404` no such node,
   `4408` not accepted in time, `4413` too large, `4429` rate limited.
 - Node close code on a secure-channel websocket: `4401` the handshake failed

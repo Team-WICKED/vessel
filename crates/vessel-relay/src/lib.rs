@@ -48,6 +48,7 @@ mod dial;
 mod link;
 mod server;
 mod socket;
+mod ticket;
 mod tls;
 mod token;
 
@@ -60,6 +61,7 @@ pub use carrier::{
 pub use dial::{DialError, connect, connect_with, dial, dial_with};
 pub use link::{LinkState, NodeLink};
 pub use server::{Limits, RelayConfig, serve};
+pub use ticket::{MAX_TICKET_LIFETIME, TicketError, check_ticket, issue_ticket, unix_now};
 pub use tls::{TlsConfig, TlsError};
 pub use token::{TokenFileError, read_token_file};
 

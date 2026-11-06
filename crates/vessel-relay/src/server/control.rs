@@ -1,5 +1,7 @@
-//! A node's control connection: registration (token, then possession
-//! proof), then `Incoming` for every waiting client, pings both ways.
+//! A node's control connection: registration (token or ticket, then
+//! possession proof), then `Incoming` for every waiting client, pings both
+//! ways. A registration made with a ticket ends when the ticket expires;
+//! the node registers again with a newer one (`crate::ticket`).
 //!
 //! A node is registered only once it proved its key, and only then does it
 //! replace an earlier registration for the same routing id: a stranger
@@ -21,9 +23,11 @@ use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     ConnId, HandshakeMessage, NodePublicKey, NodeToRelay, RegistrationRefusal, RelayClose,
-    RelayToNode, RelayToken, RoutingId,
+    RelayTicket, RelayToNode, RelayToken, RoutingId,
 };
 use vessel_secure::proof_challenge;
+
+use crate::ticket::{check_ticket, unix_now};
 
 use super::{Registration, Relay, close_with, too_large};
 
@@ -45,8 +49,8 @@ pub(super) async fn upgrade(
                 registered = register(&relay, &mut socket) => registered,
                 () = relay.shutdown.cancelled() => None,
             };
-            if let Some(node) = registered {
-                serve(&relay, socket, node).await;
+            if let Some((node, until)) = registered {
+                serve(&relay, socket, node, until).await;
             }
         })
 }
@@ -114,21 +118,44 @@ fn token_matches(expected: &RelayToken, given: &RelayToken) -> bool {
     )
 }
 
-/// Run the registration; the node's routing id once it proved its key.
-async fn register(relay: &Relay, socket: &mut WebSocket) -> Option<RoutingId> {
-    let (routing_id, key) = match read(relay, socket).await {
+/// Whether a registration may go on to the proof: with the relay's token
+/// (no end), or a ticket for `key` (until it expires, in seconds since the
+/// Unix epoch); one of the two, never both.
+fn admitted(
+    relay: &Relay,
+    key: &NodePublicKey,
+    token: Option<&RelayToken>,
+    ticket: Option<&RelayTicket>,
+) -> Result<Option<u64>, RegistrationRefusal> {
+    match (token, ticket) {
+        (Some(token), None) if token_matches(&relay.token, token) => Ok(None),
+        (None, Some(ticket)) => check_ticket(&relay.token, ticket, key, unix_now())
+            .map(|()| Some(ticket.expires_at))
+            .map_err(|error| {
+                tracing::info!(%error, "registration with a ticket refused");
+                RegistrationRefusal::Ticket
+            }),
+        (Some(_), None | Some(_)) | (None, None) => Err(RegistrationRefusal::Token),
+    }
+}
+
+/// Run the registration; the node's routing id once it proved its key,
+/// and when a ticket it registered with expires.
+async fn register(relay: &Relay, socket: &mut WebSocket) -> Option<(RoutingId, Option<u64>)> {
+    let (routing_id, key, until) = match read(relay, socket).await {
         Read::Message(NodeToRelay::Register {
             routing_id,
             key,
             token,
-        }) => {
-            if !token_matches(&relay.token, &token) {
-                tracing::info!(%routing_id, "registration with a wrong token refused");
-                refuse(socket, Read::Malformed, RegistrationRefusal::Token).await;
+            ticket,
+        }) => match admitted(relay, &key, token.as_ref(), ticket.as_ref()) {
+            Ok(until) => (routing_id, key, until),
+            Err(reason) => {
+                tracing::info!(%routing_id, ?reason, "registration refused");
+                refuse(socket, Read::Malformed, reason).await;
                 return None;
             }
-            (routing_id, key)
-        }
+        },
         other @ (Read::Message(NodeToRelay::Proof { .. })
         | Read::Malformed
         | Read::TooLarge
@@ -142,7 +169,7 @@ async fn register(relay: &Relay, socket: &mut WebSocket) -> Option<RoutingId> {
         refuse(socket, Read::Malformed, RegistrationRefusal::Proof).await;
         return None;
     }
-    Some(routing_id)
+    Some((routing_id, until))
 }
 
 /// Whether the node holds `key` (and `routing_id` is the key's). `None`
@@ -179,8 +206,9 @@ async fn proves(
     Some(challenge.verify(&answer))
 }
 
-/// Serve a registered node until it goes, is replaced, or the relay stops.
-async fn serve(relay: &Relay, mut socket: WebSocket, node: RoutingId) {
+/// Serve a registered node until it goes, is replaced, its ticket expires
+/// (`until`, seconds since the Unix epoch), or the relay stops.
+async fn serve(relay: &Relay, mut socket: WebSocket, node: RoutingId, until: Option<u64>) {
     let generation = relay.next_generation();
     // As many announcements as clients may wait; at least one.
     let (incoming, mut announce) = mpsc::channel::<ConnId>(relay.limits.waiting_per_node.max(1));
@@ -196,7 +224,10 @@ async fn serve(relay: &Relay, mut socket: WebSocket, node: RoutingId) {
     );
     tracing::info!(%node, "node registered");
     if send(&mut socket, &RelayToNode::Registered).await {
-        announce_until_gone(relay, &mut socket, &mut announce, &replaced).await;
+        tokio::select! {
+            () = announce_until_gone(relay, &mut socket, &mut announce, &replaced) => {}
+            () = expiry(until) => tracing::info!(%node, "the node's ticket expired"),
+        }
     }
     relay.unregister(&node, generation);
     let _closed = socket.send(Message::Close(None)).await;
@@ -256,6 +287,18 @@ async fn announce_until_gone(
             }
             () = relay.shutdown.cancelled() => return,
         }
+    }
+}
+
+/// Resolves when a ticket that expires at `until` (seconds since the Unix
+/// epoch) has; never for a registration made with the token.
+async fn expiry(until: Option<u64>) {
+    match until {
+        Some(until) => {
+            let left = until.saturating_sub(unix_now());
+            sleep(std::time::Duration::from_secs(left)).await;
+        }
+        None => std::future::pending().await,
     }
 }
 

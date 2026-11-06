@@ -293,7 +293,13 @@ pub(crate) async fn run<C: Connector>(
         links.connected_home(client.clone());
         let granted = links.grant(&client, &membership, &stop).await;
         note_grant(&local, granted.err().map(|error| error.message)).await;
-        session(&client, &local, pacing, &mut applied, &stop).await;
+        // A member called back through its home's relays asks for a newer
+        // ticket while connected (`fleet.callback`); the connection's end
+        // stops that.
+        tokio::select! {
+            () = session(&client, &local, pacing, &mut applied, &stop) => {}
+            () = links.keep_callback(&client, &membership) => {}
+        }
         links.lost_home();
     }
 }

@@ -21,12 +21,15 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{SinkExt as _, StreamExt as _};
+use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 use vessel_proto::{
     HandshakeMessage, NodeClose, NodeToRelay, RegistrationRefusal, RelayClose, RelayToNode,
     RelayToken, RoutingId,
 };
-use vessel_relay::{Limits, LinkState, NodeLink, dial, node_close, relay_close};
+use vessel_relay::{
+    Limits, LinkState, NodeLink, dial, issue_ticket, node_close, relay_close, unix_now,
+};
 use vessel_secure::{NodeKeypair, SecureError, initiate, routing_id};
 
 use crate::support::{
@@ -97,6 +100,98 @@ async fn a_wrong_token_is_refused() {
         .await;
 }
 
+/// Review round 6: a member registers with its home's relay with a
+/// ticket for its own key, never the token. The ticket registers that key
+/// and no other, and is no token: with both, or neither, it is refused.
+#[tokio::test]
+async fn a_ticket_registers_its_own_key_and_no_other() {
+    let relay = Relay::start().await;
+    let keypair = Arc::new(NodeKeypair::generate().unwrap());
+    let ticket = issue_ticket(&token(), keypair.public(), unix_now() + 600);
+    let (_tickets, issued) = watch::channel(ticket.clone());
+    let mut node = EchoNode::with_tickets(&relay.url, Arc::clone(&keypair), issued.clone());
+    node.wait_for(LinkState::Registered).await;
+    let mut channel = channel(&relay.url, &node).await;
+    within(channel.send("ticketed".to_owned())).await.unwrap();
+    assert_eq!(within(channel.next()).await.unwrap().unwrap(), "ticketed");
+
+    // The same ticket for another key, one its holder proves: refused.
+    let mut other = EchoNode::with_tickets(
+        &relay.url,
+        Arc::new(NodeKeypair::generate().unwrap()),
+        issued,
+    );
+    other
+        .wait_for(LinkState::Refused(RegistrationRefusal::Ticket))
+        .await;
+
+    // A ticket from another token (a rotated one, or a forged one).
+    let forged = issue_ticket(
+        &RelayToken::new("not-the-token").unwrap(),
+        keypair.public(),
+        unix_now() + 600,
+    );
+    let (_forged, forged) = watch::channel(forged);
+    let mut minted_elsewhere = EchoNode::with_tickets(&relay.url, Arc::clone(&keypair), forged);
+    minted_elsewhere
+        .wait_for(LinkState::Refused(RegistrationRefusal::Ticket))
+        .await;
+
+    // Both, or neither: refused before any proof.
+    let control = format!("{}{}", relay.url, vessel_relay::NODE_PATH);
+    for (token, ticket) in [(Some(token()), Some(ticket)), (None, None)] {
+        let mut raw = raw(&control).await;
+        let key = *keypair.public();
+        send_json(
+            &mut raw,
+            &NodeToRelay::Register {
+                routing_id: routing_id(&key),
+                key,
+                token,
+                ticket,
+            },
+        )
+        .await;
+        assert_eq!(
+            receive_json(&mut raw).await,
+            RelayToNode::Rejected {
+                reason: RegistrationRefusal::Token
+            }
+        );
+    }
+}
+
+/// A registration made with a ticket ends when the ticket expires; a newer
+/// ticket handed to the link registers it again at once, and one that is
+/// not renewed is dropped and then refused.
+#[tokio::test]
+async fn a_ticket_registration_ends_when_it_expires_unless_renewed() {
+    let relay = Relay::start().await;
+    let keypair = Arc::new(NodeKeypair::generate().unwrap());
+    let soon = |seconds| issue_ticket(&token(), keypair.public(), unix_now() + seconds);
+    let (renew, tickets) = watch::channel(soon(2));
+    let mut node = EchoNode::with_tickets(&relay.url, Arc::clone(&keypair), tickets);
+    node.wait_for(LinkState::Registered).await;
+    // Renewed before it expires: registered again with the newer ticket,
+    // and still reachable after the first one's time.
+    let _previous = renew.send_replace(soon(600));
+    node.wait_for(LinkState::Connecting).await;
+    node.wait_for(LinkState::Registered).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(*node.state.borrow(), LinkState::Registered);
+    let mut channel = channel(&relay.url, &node).await;
+    within(channel.send("renewed".to_owned())).await.unwrap();
+    assert_eq!(within(channel.next()).await.unwrap().unwrap(), "renewed");
+
+    // Not renewed: the relay drops it, and the expired ticket is refused.
+    let lapsing = Arc::new(NodeKeypair::generate().unwrap());
+    let (_kept, tickets) = watch::channel(issue_ticket(&token(), lapsing.public(), unix_now() + 2));
+    let mut node = EchoNode::with_tickets(&relay.url, lapsing, tickets);
+    node.wait_for(LinkState::Registered).await;
+    node.wait_for(LinkState::Refused(RegistrationRefusal::Ticket))
+        .await;
+}
+
 #[tokio::test]
 async fn an_impostor_cannot_register_someone_elses_key() {
     let relay = Relay::start().await;
@@ -112,7 +207,8 @@ async fn an_impostor_cannot_register_someone_elses_key() {
         &NodeToRelay::Register {
             routing_id: routing_id(&key),
             key,
-            token: token(),
+            token: Some(token()),
+            ticket: None,
         },
     )
     .await;
@@ -136,7 +232,8 @@ async fn an_impostor_cannot_register_someone_elses_key() {
         &NodeToRelay::Register {
             routing_id: routing_id(&key),
             key: *own.public(),
-            token: token(),
+            token: Some(token()),
+            ticket: None,
         },
     )
     .await;
