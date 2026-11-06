@@ -286,7 +286,8 @@ member vesseld                         home vesseld
 
 - The operator's four Claude logins work as four profiles on one node, and
   a structured session moves between them keeping its conversation (manual
-  smoke by the coordinator on ingwdev1, with test agents).
+  smoke by the coordinator on the operator's development machine, with
+  test agents).
 - A fresh machine runs `vessel init --service --join`, and within minutes
   has the fleet's instructions, skills and MCP servers in each of its
   profiles; a local edit on it is kept and listed as a conflict.
@@ -360,22 +361,20 @@ contract change; tracks start after it.
 - **Instructions and skills, one source**: `~/.codex/AGENTS.md` is the
   source and `~/.claude/CLAUDE.md` links to it; skills live in
   `~/.codex/skills/<dir>` and every Claude login has a link per skill,
-  named by `SKILL.md`'s `name` (`노드추가시쓸것` is linked as
-  `node-add-uploader`). `agent-config-sync` keeps it true: a systemd path
+  named by `SKILL.md`'s `name` (a directory with a Korean name is linked
+  under its English `name`). `agent-config-sync` keeps it true: a systemd path
   unit plus a 10-minute timer, an idempotent script under one lock; a skill
   made on a Claude side moves into the source; a same-name conflict keeps
   the source and logs to `CONFLICTS.log`. Not synced: memory,
   `settings.json`, subagents, Paseo-managed copies, claude.ai account
-  skills (`teamwicked-infra/agent-config-sync/README.md`; `~/.claude/CLAUDE.md`
-  section 8).
+  skills (the script's README and the global instructions).
 - **Accounts**: four Claude Code logins (`~/.claude`, `~/.claude-alt`,
   `~/.claude-alalt`, `~/.claude-alalalt`), each a Paseo provider with
   `extends: "claude"` and `CLAUDE_CONFIG_DIR` in its `env`. The account-swap
   plugin hard-links one session's transcript files (never `memory/`) into
   the target login, points the agent's `CLAUDE_CONFIG_DIR` at it through a
   per-agent symlink, and restarts only the Claude process, measured at about
-  3.4 s for any conversation length
-  (`teamwicked-infra/paseo-claude-account-swap/README.md`).
+  3.4 s for any conversation length (the plugin's README).
 - **Harness files**: Claude Code's `.claude.json` holds user-scope MCP
   servers next to the OAuth account and caches; Codex's `config.toml` holds
   `[mcp_servers.*]` next to model settings, some with `env` tables. Neither
