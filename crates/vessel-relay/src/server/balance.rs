@@ -11,7 +11,11 @@
 //!   is half of the pool or more: registering places, client places, and
 //!   sockets not authenticated yet; and when the unauthenticated share is
 //!   half of `max_connections` or more, so the share kept for sockets
-//!   that authenticated is always the larger. The refusal names both
+//!   that authenticated is always the larger. Since the review's round 9,
+//!   also one `/48`'s share of one node's clients still being admitted
+//!   against the node's budget for relayed channels
+//!   (`RELAYED_UNADMITTED`, a constant both sides take from this crate,
+//!   not a flag). The refusal names both
 //!   flags, the largest value of the first that would pass and the
 //!   smallest pool that would.
 //! - Alternatives: clamping the per-address limits to fit (a relay quietly
@@ -36,8 +40,7 @@ struct Rule {
     scale: u32,
     /// Who holds it, for the refusal.
     holder: Holder,
-    /// The flag of the pool, without `--`.
-    pool: &'static str,
+    pool: Pool,
     total: usize,
 }
 
@@ -93,15 +96,34 @@ impl fmt::Display for Holder {
     }
 }
 
+/// What a rule keeps a holder under half of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pool {
+    /// A limit, by its flag (without `--`).
+    Flag(&'static str),
+    /// A node's budget for relayed channels waiting to be admitted
+    /// (`RELAYED_UNADMITTED`): fixed, the node's.
+    NodeRelayed,
+}
+
+impl fmt::Display for Pool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Flag(flag) => write!(f, "--{flag}"),
+            Self::NodeRelayed => f.write_str("the relayed channels a node admits at once,"),
+        }
+    }
+}
+
 /// The rules, in the order they are checked.
-fn rules(limits: &Limits) -> [Rule; 4] {
+fn rules(limits: &Limits) -> [Rule; 5] {
     [
         Rule {
             share: "max-registering-per-address",
             value: limits.max_registering_per_address,
             scale: WIDEST,
             holder: Holder::One48,
-            pool: "max-registering",
+            pool: Pool::Flag("max-registering"),
             total: limits.max_registering,
         },
         Rule {
@@ -109,7 +131,7 @@ fn rules(limits: &Limits) -> [Rule; 4] {
             value: limits.max_clients_per_address,
             scale: WIDEST,
             holder: Holder::One48,
-            pool: "max-clients",
+            pool: Pool::Flag("max-clients"),
             total: limits.max_clients,
         },
         Rule {
@@ -117,7 +139,7 @@ fn rules(limits: &Limits) -> [Rule; 4] {
             value: limits.max_connections_per_address,
             scale: WIDEST,
             holder: Holder::One48,
-            pool: "max-unauthenticated",
+            pool: Pool::Flag("max-unauthenticated"),
             total: limits.max_unauthenticated,
         },
         Rule {
@@ -125,8 +147,16 @@ fn rules(limits: &Limits) -> [Rule; 4] {
             value: limits.max_unauthenticated,
             scale: 1,
             holder: Holder::Unauthenticated,
-            pool: "max-connections",
+            pool: Pool::Flag("max-connections"),
             total: limits.max_connections,
+        },
+        Rule {
+            share: "max-node-clients-per-address",
+            value: limits.max_node_clients_per_address,
+            scale: WIDEST,
+            holder: Holder::One48,
+            pool: Pool::NodeRelayed,
+            total: crate::RELAYED_UNADMITTED,
         },
     ]
 }
@@ -147,7 +177,7 @@ pub struct Unbalanced {
     value: usize,
     holder: Holder,
     held: usize,
-    pool: &'static str,
+    pool: Pool,
     total: usize,
     /// The largest `share` that would pass with this pool (0: none does).
     largest: usize,
@@ -159,7 +189,7 @@ impl fmt::Display for Unbalanced {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "--{} {} lets {} hold {}, half or more of --{} {}: ",
+            "--{} {} lets {} hold {}, half or more of {} {}: ",
             self.share, self.value, self.holder, self.held, self.pool, self.total
         )?;
         if self.largest == 0 {
@@ -167,7 +197,10 @@ impl fmt::Display for Unbalanced {
         } else {
             write!(f, "--{} {} at most passes", self.share, self.largest)?;
         }
-        write!(f, ", or --{} {} at least", self.pool, self.least)
+        match self.pool {
+            Pool::Flag(flag) => write!(f, ", or --{flag} {} at least", self.least),
+            Pool::NodeRelayed => Ok(()),
+        }
     }
 }
 
@@ -243,6 +276,22 @@ mod tests {
                 && refusal.contains("half or more of --max-unauthenticated 200")
                 && refusal.contains("--max-connections-per-address 24 at most"),
             "{refusal}"
+        );
+    }
+
+    #[test]
+    fn one_48_holds_less_than_half_of_a_nodes_relayed_admissions() {
+        let mut limits = Limits {
+            max_node_clients_per_address: 4,
+            ..Limits::default()
+        };
+        assert_eq!(check(&limits), Ok(()));
+        limits.max_node_clients_per_address = 5;
+        assert_eq!(
+            check(&limits).unwrap_err().to_string(),
+            "--max-node-clients-per-address 5 lets one IPv6 /48 (4 times the per-address \
+             limit) hold 20, half or more of the relayed channels a node admits at once, 40: \
+             --max-node-clients-per-address 4 at most passes"
         );
     }
 

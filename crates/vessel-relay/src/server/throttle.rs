@@ -94,6 +94,10 @@ pub(crate) enum Refusal {
     Unauthenticated,
     /// A new connection past its address's rate (`Limits::connect_burst`).
     AcceptRate,
+    /// A client past `Limits::max_node_clients_per_address`.
+    NodeAddressClients,
+    /// A trusted proxy's client address header that is not one address.
+    AddressHeader,
 }
 
 /// How often each kind of refusal is logged at most.
