@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -23,7 +24,7 @@ use crate::guard::Guarded;
 use crate::identity;
 use crate::ipc::{self, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
-use crate::secure::SecureGateway;
+use crate::secure::{MAX_UNADMITTED, SecureGateway};
 use crate::server::{self, Gateway};
 use crate::service::NodeService;
 use crate::sessions::Sessions;
@@ -117,6 +118,7 @@ impl Node {
             config: config.rpc.clone(),
             closing: closing.clone(),
             connections: connections.clone(),
+            unadmitted: Arc::new(Semaphore::new(MAX_UNADMITTED)),
         };
         let teardown = Teardown {
             runtime,

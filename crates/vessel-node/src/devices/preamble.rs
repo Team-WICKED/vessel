@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio_util::sync::CancellationToken;
-use vessel_proto::{Preamble, PreambleReply, RefusalReason};
+use vessel_proto::{DeviceId, Preamble, PreambleReply, RefusalReason};
 use vessel_rpc::FrameTransport;
 
 use super::{Devices, Registration};
@@ -83,13 +83,16 @@ pub(crate) async fn admit<T: FrameTransport>(
         Preamble::PairRequest {
             invite,
             device_name,
-        } => devices
-            .pair(&invite, &device_name)
-            .await
-            .map(|(device, secret, scopes)| {
+        } => {
+            // The new id is registered before the device is stored, as
+            // above: a revocation that finds the device finds this too.
+            let registration = devices.connect(DeviceId::random(), closing);
+            let paired = devices.pair(&registration, &invite, &device_name).await;
+            paired.map(|(secret, scopes)| {
+                let device = registration.device();
                 let admitted = Admitted {
                     principal: Principal::Device { id: device, scopes },
-                    registration: devices.connect(device, closing),
+                    registration,
                 };
                 let reply = PreambleReply::Paired {
                     device,
@@ -97,7 +100,8 @@ pub(crate) async fn admit<T: FrameTransport>(
                     node: Box::new(lifecycle.info()),
                 };
                 (reply, admitted)
-            }),
+            })
+        }
     };
     match outcome {
         Ok((reply, admitted)) => {
