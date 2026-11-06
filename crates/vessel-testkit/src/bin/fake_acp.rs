@@ -20,6 +20,9 @@
 //!   - `flood`: message chunks `flood`, ten a millisecond (faster than a
 //!     slow client reads) until `session/cancel`, then `cancelled`; it
 //!     gives up with `end_turn` after a minute;
+//!   - `exit`, `garbage`: a message chunk and a permission request, then,
+//!     with both still open, the connection fails: `exit` exits with code
+//!     9, `garbage` writes a line that is not UTF-8 and stays up;
 //!   - anything else: a thought chunk, a message chunk
 //!     `echo: <text> (model <model>)`, tool call `call-1` (pending, with raw
 //!     input), a plan, an update to `in_progress`, then a permission request
@@ -245,20 +248,8 @@ async fn run_turn(
             turn.cancelled().await;
             return Ok(StopReason::Cancelled);
         }
-        "flood" => {
-            for _ in 0..60_000_u32 {
-                if turn.is_cancelled() {
-                    return Ok(StopReason::Cancelled);
-                }
-                for _ in 0..10 {
-                    say(SessionUpdate::AgentMessageChunk(ContentChunk::new(text(
-                        "flood",
-                    ))))?;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-            return Ok(StopReason::EndTurn);
-        }
+        "exit" | "garbage" => return failing_turn(cx, session, prompt == "exit", turn).await,
+        "flood" => return flood(cx, session, turn).await,
         _ => {}
     }
     say(SessionUpdate::AgentThoughtChunk(ContentChunk::new(text(
@@ -316,6 +307,75 @@ async fn run_turn(
     } else {
         Ok(StopReason::EndTurn)
     }
+}
+
+/// `flood`: ten message chunks a millisecond until cancelled; gives up
+/// with `end_turn` after a minute.
+async fn flood(
+    cx: &agent_client_protocol::v1::ConnectionTo<agent_client_protocol::Client>,
+    session: &SessionId,
+    turn: &CancellationToken,
+) -> Result<StopReason, Error> {
+    for _ in 0..60_000_u32 {
+        if turn.is_cancelled() {
+            return Ok(StopReason::Cancelled);
+        }
+        for _ in 0..10 {
+            cx.send_notification(SessionNotification::new(
+                session.clone(),
+                SessionUpdate::AgentMessageChunk(ContentChunk::new(text("flood"))),
+            ))?;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    Ok(StopReason::EndTurn)
+}
+
+/// `exit` and `garbage`: a message chunk and a permission request, then the
+/// connection fails with both open.
+async fn failing_turn(
+    cx: &agent_client_protocol::v1::ConnectionTo<agent_client_protocol::Client>,
+    session: &SessionId,
+    exit: bool,
+    turn: &CancellationToken,
+) -> Result<StopReason, Error> {
+    cx.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::AgentMessageChunk(ContentChunk::new(text("about to fail"))),
+    ))?;
+    // Sent, never awaited: the request is still open when the connection
+    // fails.
+    drop(cx.send_request(RequestPermissionRequest::new(
+        session.clone(),
+        ToolCallUpdate::new("call-9", ToolCallUpdateFields::new()),
+        vec![PermissionOption::new(
+            "allow-once",
+            "Allow",
+            PermissionOptionKind::AllowOnce,
+        )],
+    )));
+    // Time for both to reach the client before the failure.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    fail_connection(exit);
+    turn.cancelled().await;
+    Ok(StopReason::Cancelled)
+}
+
+/// Break the connection under a turn: exit at once, or write a line that is
+/// not UTF-8 (which ends the client's reading with an error).
+#[expect(
+    clippy::exit,
+    reason = "the scenario is an agent that dies in the middle of a turn"
+)]
+fn fail_connection(exit: bool) {
+    if exit {
+        std::process::exit(9);
+    }
+    let mut stdout = io::stdout().lock();
+    let written = stdout
+        .write_all(b"\xff\xfe not utf-8\n")
+        .and_then(|()| stdout.flush());
+    drop(written);
 }
 
 fn text(text: &str) -> ContentBlock {

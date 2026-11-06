@@ -29,6 +29,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol::v1::schema as acp;
 use agent_client_protocol::v1::{ConnectionTo, Responder};
@@ -49,6 +50,10 @@ use crate::permissions::Permissions;
 
 /// Bound of the inbound queue between the SDK's handlers and the loop.
 const INBOUND: usize = 64;
+
+/// After the connection closed with a turn open, how long to wait for each
+/// further item while the turn's outcome is still on its way.
+const AFTER_CLOSE: Duration = Duration::from_secs(2);
 
 /// Something that arrived from the agent, in arrival order.
 enum Inbound {
@@ -72,7 +77,9 @@ pub(crate) async fn run(
 ) {
     let (inbound, inbound_receiver) = mpsc::channel(INBOUND);
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
-    let driver = Driver {
+    // Outside the connection's closure, so it can still be settled when the
+    // connection fails rather than closes (see the end of this function).
+    let mut driver = Driver {
         inbound: inbound.clone(),
         inbound_receiver,
         commands,
@@ -103,11 +110,22 @@ pub(crate) async fn run(
             },
             agent_client_protocol::on_receive_request!(),
         )
-        .connect_with(transport, async move |cx| driver.run(cx, setup).await)
+        .connect_with(transport, async |cx| driver.run(cx, setup).await)
         .await;
-    let disconnect = ended.unwrap_or_else(|error| Disconnect::Protocol {
-        message: describe(&error),
-    });
+    let disconnect = match ended {
+        Ok(disconnect) => disconnect,
+        Err(error) => {
+            // The transport failed (for example the agent wrote bytes that
+            // are not UTF-8): the loop was dropped without seeing a close,
+            // so the turn and the permission requests it left open are
+            // settled here, as on a close.
+            driver.abandon_turn().await;
+            Disconnect::Protocol {
+                message: describe(&error),
+            }
+        }
+    };
+    drop(driver);
     if outputs
         .send(AgentOutput::Disconnected(disconnect))
         .await
@@ -136,7 +154,7 @@ struct Driver {
 
 impl Driver {
     async fn run(
-        mut self,
+        &mut self,
         cx: ConnectionTo<Agent>,
         setup: AgentSetup,
     ) -> Result<Disconnect, Error> {
@@ -178,12 +196,7 @@ impl Driver {
                     }
                 }
                 () = cx.incoming_closed() => {
-                    while let Ok(item) = self.inbound_receiver.try_recv() {
-                        if self.handle(item).await.is_some() {
-                            break;
-                        }
-                    }
-                    self.abandon_turn().await;
+                    self.settle_after_close().await;
                     return Ok(Disconnect::Closed);
                 }
             }
@@ -324,6 +337,36 @@ impl Driver {
         // turn with the `cancelled` stop reason.
         self.withdraw_permissions().await;
         Ok(())
+    }
+
+    /// The connection closed: handle what is still queued, then settle
+    /// what is still open.
+    ///
+    /// The SDK fails the requests still waiting before it reports the
+    /// close, but a prompt's outcome reaches `inbound` through the prompt's
+    /// own task, which may not have run yet. Sweeping only what is queued
+    /// would then record a failure for a turn whose outcome (possibly
+    /// "ended normally", if the agent answered and then exited) is on its
+    /// way. So while a turn is open the loop keeps taking items, each
+    /// within [`AFTER_CLOSE`], until the outcome arrives.
+    async fn settle_after_close(&mut self) {
+        while self.turn {
+            let Ok(Some(item)) =
+                tokio::time::timeout(AFTER_CLOSE, self.inbound_receiver.recv()).await
+            else {
+                tracing::debug!("no turn outcome after the connection closed");
+                break;
+            };
+            if self.handle(item).await.is_some() {
+                break;
+            }
+        }
+        while let Ok(item) = self.inbound_receiver.try_recv() {
+            if self.handle(item).await.is_some() {
+                break;
+            }
+        }
+        self.abandon_turn().await;
     }
 
     /// The connection ended: settle what is still open.
