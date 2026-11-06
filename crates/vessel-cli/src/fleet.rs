@@ -22,7 +22,7 @@ use vessel_proto::{FleetMember, Scope};
 use crate::args::{FleetCommand, Target};
 use crate::connect::{connect, data_dir};
 use crate::error::CliError;
-use crate::{devices, io, pair};
+use crate::{devices, io, pair, secret};
 
 /// `vessel fleet <command>`.
 pub(crate) async fn command(target: &Target, command: FleetCommand) -> Result<(), CliError> {
@@ -63,6 +63,7 @@ pub(crate) async fn command(target: &Target, command: FleetCommand) -> Result<()
             io::out(render_members(&members).as_bytes()).await?;
             Ok(())
         }
+        FleetCommand::Secret { command } => Box::pin(secret::command(files, command)).await,
         FleetCommand::Restore { path } => {
             let path = absolute(&path)?;
             let shown = path.display().to_string();
@@ -203,6 +204,20 @@ fn render_status(status: &FleetStatus) -> String {
     for problem in &state.problems {
         let _infallible = writeln!(text, "left out   {problem}");
     }
+    if !status.mcp_servers.is_empty() {
+        let names: Vec<String> = status.mcp_servers.iter().map(ToString::to_string).collect();
+        let _infallible = writeln!(text, "mcp        {}", names.join(", "));
+    }
+    for name in &status.missing_secrets {
+        let _infallible = writeln!(
+            text,
+            "missing    secret {name}: sessions here start without the servers needing it \
+             (vessel fleet secret set {name})"
+        );
+    }
+    if let Some(problem) = &status.secrets_problem {
+        let _infallible = writeln!(text, "secrets    {problem}");
+    }
     if let Some(error) = &state.error {
         let _infallible = writeln!(text, "error      {error}");
     }
@@ -259,6 +274,9 @@ mod tests {
                 }],
                 ..FleetState::default()
             },
+            mcp_servers: vec!["docs".parse().unwrap()],
+            missing_secrets: vec!["DOCS_TOKEN".parse().unwrap()],
+            secrets_problem: None,
         };
         let text = render_status(&status);
         assert!(text.contains("role       member of "), "{text}");
@@ -269,6 +287,11 @@ mod tests {
         );
         assert!(
             text.contains("(vessel fleet restore /home/u/.codex/skills/review/SKILL.md)"),
+            "{text}"
+        );
+        assert!(text.contains("mcp        docs"), "{text}");
+        assert!(
+            text.contains("(vessel fleet secret set DOCS_TOKEN)"),
             "{text}"
         );
     }
