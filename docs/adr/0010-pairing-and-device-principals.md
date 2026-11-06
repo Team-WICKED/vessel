@@ -79,7 +79,7 @@ What Paseo does (read 2026-11-06, ideas only; file references in the plan's
   ```json
   { "v": 1, "node": "<NodeId>", "key": "<base64url node public key>",
     "relay": ["wss://relay.example/vessel"], "direct": ["ws://203.0.113.5:7077"],
-    "invite": "<base64url 32 random bytes>", "expires": "2026-11-06T12:30:00Z" }
+    "invite": "<base64url 16 random bytes>", "expires": "2026-11-06T12:30:00Z" }
   ```
 
   - As with Paseo, the payload sits in the fragment, so pasting the link into
