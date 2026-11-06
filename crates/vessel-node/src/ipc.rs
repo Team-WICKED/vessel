@@ -107,9 +107,28 @@ pub(crate) async fn connect(endpoint: &Endpoint) -> io::Result<LocalClient> {
 }
 
 /// Connect to a node's local endpoint.
+///
+/// Between a client taking the waiting pipe instance and the node creating
+/// the next one, every instance is busy and Windows answers
+/// `ERROR_PIPE_BUSY`. That is retried for about a second, as the Win32 and
+/// tokio documentation advise; any other error (no pipe at all: no node)
+/// is returned at once.
 #[cfg(windows)]
 pub(crate) async fn connect(endpoint: &Endpoint) -> io::Result<LocalClient> {
-    tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint.path())
+    use tokio::net::windows::named_pipe::ClientOptions;
+    /// `winerror.h`; not worth a `windows-sys` dependency for one number.
+    const ERROR_PIPE_BUSY: i32 = 231;
+    const ATTEMPTS: u32 = 50;
+    const PAUSE: Duration = Duration::from_millis(20);
+    for _ in 0..ATTEMPTS {
+        match ClientOptions::new().open(endpoint.path()) {
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                tokio::time::sleep(PAUSE).await;
+            }
+            opened => return opened,
+        }
+    }
+    ClientOptions::new().open(endpoint.path())
 }
 
 /// A connected local stream.
