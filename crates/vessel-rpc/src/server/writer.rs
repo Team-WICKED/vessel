@@ -283,10 +283,16 @@ impl Unflushed {
 ///
 /// Every wait on the sink also watches `closing`: a client that stops
 /// reading must not keep its connection (and a node shutdown) waiting.
+/// A frame is handed to the sink only once the sink has room, so a close
+/// that interrupts that wait keeps the frame (it is already off the queue)
+/// and writes it first. After `closing`, it writes until the reader has
+/// `settled` (answers to calls that were still running), then what is
+/// queued, all within `close_timeout`.
 pub(super) async fn write<K, E>(
     mut sink: K,
     mut queue: mpsc::Receiver<Outgoing>,
     closing: CancellationToken,
+    settled: CancellationToken,
     close_timeout: Duration,
 ) -> Result<(), ServeError<E>>
 where
@@ -296,6 +302,8 @@ where
     let mut subscriptions = Subscriptions::default();
     let mut departures = FuturesUnordered::new();
     let mut unflushed = Unflushed::default();
+    // Frames taken off the queue but not yet written when closing began.
+    let mut carried = Vec::new();
     'serve: loop {
         // Departures come after the queue: records a sink queued before it
         // went away are written first, so a released subscription's resume
@@ -313,15 +321,24 @@ where
                 [subscriptions.depart(subscription, cleanly), None]
             }
         };
-        for frame in frames.into_iter().flatten() {
+        let mut frames = frames.into_iter().flatten();
+        while let Some(frame) = frames.next() {
+            // Not `feed` raced against `closing`: the losing `feed` would
+            // drop the frame it owns, and an answer would go missing.
+            let ready = tokio::select! {
+                biased;
+                () = closing.cancelled() => None,
+                ready = std::future::poll_fn(|cx| sink.poll_ready_unpin(cx)) => Some(ready),
+            };
+            let Some(ready) = ready else {
+                carried.push(frame);
+                carried.extend(frames);
+                break 'serve;
+            };
+            ready.map_err(ServeError::Transport)?;
             let text = frame.encode().map_err(ServeError::Encode)?;
             let burst = unflushed.add(text.len());
-            let written = tokio::select! {
-                biased;
-                () = closing.cancelled() => break 'serve,
-                written = sink.feed(text) => written,
-            };
-            written.map_err(ServeError::Transport)?;
+            sink.start_send_unpin(text).map_err(ServeError::Transport)?;
             if burst {
                 flush(&mut sink, &closing, &mut unflushed).await?;
             }
@@ -332,7 +349,14 @@ where
     }
     let finished = tokio::time::timeout(
         close_timeout,
-        finish(&mut sink, &mut queue, &mut subscriptions, &mut departures),
+        finish(
+            &mut sink,
+            carried,
+            &mut queue,
+            &mut subscriptions,
+            &mut departures,
+            &settled,
+        ),
     );
     if finished.await.is_err() {
         tracing::debug!("client did not take the last frames in time");
@@ -359,35 +383,85 @@ where
     flushed.map_err(ServeError::Transport)
 }
 
-/// Write what was already queued when the connection started closing (for
-/// example answers to calls that finished just before a shutdown), then
-/// close the sink. Best effort: the client may already be gone.
+/// Write what the closing connection still owes the client, then close the
+/// sink. Best effort: the client may already be gone.
+///
+/// First the frames `carried` over from the interrupted write, then
+/// everything queued until the reader has settled, which covers the
+/// answers to calls that were still running when the connection began
+/// closing (`node.stop{now}` among them). Then only what is queued at that
+/// point: forwarders keep producing until they notice the close, and the
+/// close must not wait for them.
 async fn finish<K, E>(
     sink: &mut K,
+    carried: Vec<Frame>,
     queue: &mut mpsc::Receiver<Outgoing>,
     subscriptions: &mut Subscriptions,
     departures: &mut FuturesUnordered<Departure>,
+    settled: &CancellationToken,
 ) where
     K: Sink<String, Error = E> + Unpin,
 {
-    // Only what is queued now: forwarders keep producing until they notice
-    // the close, and the close must not wait for them.
+    for frame in carried {
+        if !feed_closing(sink, frame).await {
+            return;
+        }
+    }
+    loop {
+        let item = tokio::select! {
+            biased;
+            () = settled.cancelled() => break,
+            item = queue.recv() => item,
+        };
+        // `None`: every sender is gone, the reader's included.
+        let Some(item) = item else { break };
+        if !write_closing(sink, item, subscriptions, departures).await {
+            return;
+        }
+    }
     let queued = queue.len();
     for _ in 0..queued {
         let Ok(item) = queue.try_recv() else { break };
-        for frame in subscriptions.apply(item, departures).into_iter().flatten() {
-            let Ok(text) = frame.encode() else {
-                return;
-            };
-            if sink.feed(text).await.is_err() {
-                tracing::trace!("client gone while closing");
-                return;
-            }
+        if !write_closing(sink, item, subscriptions, departures).await {
+            return;
         }
     }
     if sink.close().await.is_err() {
         tracing::trace!("client gone while closing");
     }
+}
+
+/// Write one queued item while closing; `false` once the client is gone.
+async fn write_closing<K, E>(
+    sink: &mut K,
+    item: Outgoing,
+    subscriptions: &mut Subscriptions,
+    departures: &mut FuturesUnordered<Departure>,
+) -> bool
+where
+    K: Sink<String, Error = E> + Unpin,
+{
+    for frame in subscriptions.apply(item, departures).into_iter().flatten() {
+        if !feed_closing(sink, frame).await {
+            return false;
+        }
+    }
+    true
+}
+
+/// Write one frame while closing; `false` once the client is gone.
+async fn feed_closing<K, E>(sink: &mut K, frame: Frame) -> bool
+where
+    K: Sink<String, Error = E> + Unpin,
+{
+    let Ok(text) = frame.encode() else {
+        return false;
+    };
+    if sink.feed(text).await.is_err() {
+        tracing::trace!("client gone while closing");
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

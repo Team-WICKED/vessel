@@ -167,8 +167,9 @@ impl Handler for NodeService {
     }
 
     /// `node.stop` (protocol 3, ADR 0008): stop now, or drain and stop once
-    /// idle. Answered before the node stops; the shutdown order flushes the
-    /// answer before connections close.
+    /// idle. The `Ack` reaches the client even though `now` starts the
+    /// shutdown inside this call: a closing connection still answers the
+    /// calls already running (`vessel-rpc`, `server::calls`).
     async fn stop_node(&self, _: &Connection, request: StopNode) -> Result<Ack, WireError> {
         self.lifecycle.stop(request.when);
         Ok(Ack)

@@ -13,11 +13,31 @@
 //! program that does not read its input). Memory stays bounded: a refused
 //! request costs one queued answer, and the reader waits when the outbound
 //! queue is full.
+//!
+//! [Decision Log] Answering calls that are running when a shutdown starts.
+//! - Problem: `node.stop{now}` starts the node's shutdown from inside its
+//!   own call, so the connection began closing before the call's `Ack` was
+//!   queued, and the client got `Disconnected` (whose meaning is "outcome
+//!   unknown") for a stop that did happen. Any other call finishing at the
+//!   same moment had the same race.
+//! - Alternatives: delay the stop inside the node's handler (a guess at
+//!   when the answer is out, still racy on a multi-threaded runtime); have
+//!   clients read `Disconnected` after `node.stop` as success (pushes the
+//!   ambiguity onto every client, and a dropped link looks the same).
+//! - Choice: when the connection closes from the server side, the reader
+//!   stops reading, waits up to the close timeout for the calls already
+//!   running, and queues their answers. The writer keeps writing until the
+//!   reader has settled, then closes.
+//! - Cost: a shutdown can take up to the close timeout longer when a call
+//!   is stuck (for example `session.send` to a program that does not read);
+//!   calls still running after it are aborted, as before. A client that
+//!   left gets nothing drained: no one would read it.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::{Stream, StreamExt as _};
 use serde::Deserialize;
@@ -125,22 +145,33 @@ where
 /// Read client frames until the client leaves, the transport fails, the
 /// client breaks the protocol, or `closing` is cancelled. Cancels `closing`
 /// on the way out so the writer and every subscription stop too.
+///
+/// When `closing` is cancelled, the calls still running get up to `grace`
+/// to finish and have their answers queued (see the module's Decision
+/// Log). `settled` is cancelled once this reader will queue nothing more,
+/// however it ends.
 pub(super) async fn read<S, E, H>(
     mut stream: S,
     mut calls: Calls<H>,
     queue: mpsc::Sender<Outgoing>,
     closing: CancellationToken,
+    settled: CancellationToken,
+    grace: Duration,
 ) -> Result<(), ServeError<E>>
 where
     S: Stream<Item = Result<String, E>> + Unpin,
     H: Handler + Send + 'static,
     H::Context: Send + 'static,
 {
+    let _settled_on_exit = settled.drop_guard();
     let _close_on_exit = closing.clone().drop_guard();
     loop {
         tokio::select! {
             biased;
-            () = closing.cancelled() => return Ok(()),
+            () = closing.cancelled() => {
+                answer_running(&mut calls, &queue, grace).await;
+                return Ok(());
+            }
             Some((id, outcome)) = calls.next_finished() => {
                 if queue.send(Outgoing::Response { id, outcome }).await.is_err() {
                     // The writer is gone, so the connection is over.
@@ -185,6 +216,37 @@ where
                 }
             }
         }
+    }
+}
+
+/// Queue the answers of the calls still running as the connection closes,
+/// waiting at most `grace` for them. Calls still running after that are
+/// aborted when `calls` is dropped.
+async fn answer_running<H>(calls: &mut Calls<H>, queue: &mpsc::Sender<Outgoing>, grace: Duration)
+where
+    H: Handler + Send + 'static,
+    H::Context: Send + 'static,
+{
+    // The writer is gone (the transport failed): nobody to answer.
+    if queue.is_closed() {
+        return;
+    }
+    let answered = async {
+        while let Some((id, outcome)) = calls.next_finished().await {
+            if queue
+                .send(Outgoing::Response { id, outcome })
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    };
+    if tokio::time::timeout(grace, answered).await.is_err() {
+        tracing::debug!(
+            running = calls.running.len(),
+            "calls still running when the connection closed were aborted"
+        );
     }
 }
 
