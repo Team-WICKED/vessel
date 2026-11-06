@@ -98,6 +98,27 @@ impl BlobStore {
         writer.commit(None)
     }
 
+    /// Copy what `reader` holds into the store, if it is at most `limit`
+    /// bytes: its hash and size, or `None` (nothing stored, at most one
+    /// byte over the limit read) when there is more. For a file that may
+    /// still be growing as it is read (a transfer's snapshot).
+    ///
+    /// # Errors
+    /// Reading fails, or the store cannot be written.
+    pub fn insert_limited(
+        &self,
+        reader: impl io::Read,
+        limit: u64,
+    ) -> io::Result<Option<(BlobHash, u64)>> {
+        let mut writer = self.writer_unchecked()?;
+        let _copied = io::copy(&mut reader.take(limit.saturating_add(1)), &mut writer)?;
+        if writer.size() > limit {
+            // Dropping the writer removes what it wrote.
+            return Ok(None);
+        }
+        writer.commit(None).map(Some)
+    }
+
     /// Put `bytes` in the store; their hash.
     ///
     /// # Errors
