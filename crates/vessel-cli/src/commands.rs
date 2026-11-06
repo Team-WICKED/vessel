@@ -1,16 +1,14 @@
 //! One function per command. Each connects, does its calls, and prints;
 //! formatting lives in `render` and `view`.
 
-use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use vessel_client::NodeClient;
 use vessel_node::{Config, Node};
 use vessel_proto::{
-    ContentBlock, EventSeq, HarnessSessionId, ModelId, SessionEvent, SessionInput, SessionMode,
-    SessionSpec, TerminalBytes, TerminalInput,
+    ContentBlock, EventSeq, HarnessSessionId, ModelId, SessionInput, SessionMode, SessionSpec,
+    TerminalBytes, TerminalInput,
 };
 
 use crate::args::{Cli, Command, NodeCommand, Run, Target};
@@ -20,10 +18,6 @@ use crate::error::CliError;
 use crate::io;
 use crate::render;
 use crate::selector::SessionSelector;
-use crate::view::Conversation;
-
-/// Records asked for per page by `vessel log`.
-const LOG_PAGE: u32 = 500;
 
 pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
     let target = &cli.target;
@@ -158,47 +152,11 @@ async fn send_text(
     Ok(client.send(info.id, input).await?)
 }
 
-/// Print a session's log: terminal output as raw bytes, structured events as
-/// text, status changes on stderr.
+/// Print a session's log (see `log` for the order of stdout and stderr).
 async fn log(target: &Target, session: &SessionSelector, from: EventSeq) -> Result<(), CliError> {
     let client = connect(target).await?;
     let info = session.resolve(&client).await?;
-    print_log(&client, info.id, from).await
-}
-
-async fn print_log(
-    client: &NodeClient,
-    session: vessel_proto::SessionId,
-    from: EventSeq,
-) -> Result<(), CliError> {
-    let mut conversation = Conversation::default();
-    let mut next = from;
-    loop {
-        let page = client.read(session, next, LOG_PAGE).await?;
-        let mut out = Vec::new();
-        let mut notes = String::new();
-        if let Some(first) = page.records.first()
-            && first.seq > next
-        {
-            // Writing to a `String` cannot fail.
-            let _infallible = writeln!(notes, "[vessel] records {next}..{} were pruned", first.seq);
-        }
-        for record in &page.records {
-            match &record.event {
-                SessionEvent::Terminal(output) => out.extend_from_slice(output.data.bytes()),
-                SessionEvent::Status { .. } => notes.push_str(&conversation.show(record)),
-                SessionEvent::Agent { .. } => {
-                    out.extend_from_slice(conversation.show(record).as_bytes());
-                }
-            }
-        }
-        io::out(&out).await?;
-        io::note(&notes).await?;
-        next = page.next;
-        if page.at_end {
-            return Ok(());
-        }
-    }
+    crate::log::print(&client, info.id, from).await
 }
 
 #[cfg(test)]

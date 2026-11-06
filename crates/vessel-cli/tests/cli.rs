@@ -113,6 +113,24 @@ mod support {
             child.wait_with_output().await.unwrap().into()
         }
 
+        /// Run `vessel <args>` with stdout and stderr going to one file, as
+        /// `2>&1` does; returns what was written, in the order written.
+        pub(super) async fn vessel_merged(&self, args: &[&str]) -> String {
+            let node = self.node.address().to_string();
+            let merged = self.data.path().join("merged-output");
+            let file = std::fs::File::create(&merged).unwrap();
+            let status = command(&node, self.data.path(), self.data.path(), args)
+                .stdin(Stdio::null())
+                .stdout(file.try_clone().unwrap())
+                .stderr(file)
+                .status()
+                .await
+                .unwrap();
+            assert!(status.success());
+            std::fs::read_to_string(&merged).unwrap()
+        }
+
+        /// `vessel run claude --detach`; returns the new session's id.
         pub(super) async fn run_detached(&self) -> String {
             let cwd = self.cwd();
             let run = self
@@ -293,6 +311,18 @@ async fn a_piped_prompt_shows_the_whole_reply_then_detaches() {
 
         let log = fixture.vessel(&["log", &id], b"").await;
         assert!(log.stdout.contains("echo: plain"), "{}", log.stdout);
+        // Merged as `2>&1` does, status lines (stderr) and the conversation
+        // (stdout) come out in record order.
+        let merged = fixture.vessel_merged(&["log", &id]).await;
+        let at = |needle: &str| {
+            merged
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle:?} missing from {merged}"))
+        };
+        assert!(at("[session starting]") < at("[ready"), "{merged}");
+        assert!(at("[ready") < at("[session running]"), "{merged}");
+        assert!(at("[session running]") < at("> plain"), "{merged}");
+        assert!(at("> plain") < at("echo: plain"), "{merged}");
         let sessions = fixture.vessel(&["sessions"], b"").await;
         assert!(
             sessions.stdout.contains(" structured "),

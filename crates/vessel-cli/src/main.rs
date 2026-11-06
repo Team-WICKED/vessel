@@ -12,6 +12,7 @@ mod commands;
 mod connect;
 mod error;
 mod io;
+mod log;
 mod render;
 mod selector;
 mod view;
