@@ -1,6 +1,7 @@
 # ADR 0007: Reaching a remote node over SSH stdio
 
-Status: accepted, 2026-11-06, with the coordinator decisions in `docs/plans/backend-m2.md`. Drafted (milestone 2, `docs/plans/backend-m2.md`)
+Status: accepted, 2026-11-06, with the coordinator decisions in
+`docs/plans/backend-m2.md`; built in milestone 2.
 
 ## Context
 

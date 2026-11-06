@@ -1,6 +1,7 @@
 # ADR 0002: One typed RPC connection instead of REST routes
 
-Status: accepted, 2026-11-05
+Status: accepted, 2026-11-05. Protocol versions 3 to 6 extend the RPC table
+and keep its rules (`docs/PROTOCOL.md`).
 
 ## Context
 

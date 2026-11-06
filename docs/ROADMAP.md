@@ -2,7 +2,15 @@
 
 Rough order. Each phase ends with something usable on its own.
 
-## Phase 0: one node, one machine (milestone 1, implemented 2026-11-05)
+## Where it stands (2026-11-06)
+
+Milestones 1 to 4 are built, each on its own branch on top of the one
+before (`backend/m1` to `backend/m4`); `backend/m4` holds all four and is
+green on Linux, macOS and Windows. None is on `main` yet (milestone 1 is
+draft PR #1). Each milestone's plan in `docs/plans/` records what was
+built, what was checked by hand, and what it left open.
+
+## Phase 0: one node, one machine (milestone 1, done)
 
 Plan: `docs/plans/backend-m1.md`.
 
@@ -18,46 +26,72 @@ Plan: `docs/plans/backend-m1.md`.
       process tree (job objects); Windows PTY sessions terminate the direct
       child and rely on the pseudo console closing for the rest.
 
-## Phase 1: many nodes
+## Phase 1: many nodes (milestones 2 and 3, done)
 
-Milestone 2 (SSH transport, remote install and update, named nodes) is
-implemented on `backend/m2` (plan `docs/plans/backend-m2.md`, ADRs 0007 and
-0008). Milestone 3, the relay and pairing (`docs/plans/backend-m3.md`, ADRs
-0009 and 0010), is built on `backend/m3` and awaits its manual smoke test.
+Plans: `docs/plans/backend-m2.md` (ADRs 0007 and 0008) and
+`docs/plans/backend-m3.md` (ADRs 0009 and 0010).
 
 - [x] SSH stdio transport (`vesseld attach`, Zed's proxy/daemon split).
 - [x] Versioned side-by-side `vesseld` install and update on a remote.
 - [x] `vessel` CLI addresses any node by name: `vessel --node gpu-box run ...`
       (the node book, ids pinned on first contact).
-- [ ] Relay (milestone 3): nodes and clients reach each other with no SSH and
-      no open port.
-  - A dumb relay built into `vesseld` (`vesseld relay`), end-to-end
-    encrypted with Noise NK, direct when the node is reachable.
-  - Decided 2026-11-06 instead of `tsnet` or WireGuard: no third-party
-    account, the overlay stays out of the trust base, one binary. See
-    VISION section 2 and ADR 0009.
-- [ ] Pairing and device principals (milestone 3): an expiring, single-use
-      pairing link creates a revocable credential per device (ADR 0010).
-- [ ] Peers: node-to-node routed calls (after milestone 3).
+- [x] Relay: nodes and clients reach each other with no SSH and no open
+      port. A dumb relay built into `vesseld` (`vesseld relay`),
+      end-to-end encrypted with Noise NK, direct when the node is
+      reachable. Chosen on 2026-11-06 over `tsnet` or WireGuard: no
+      third-party account, the overlay stays out of the trust base, one
+      binary (VISION section 2, ADR 0009).
+- [x] Pairing and device principals: an expiring, single-use pairing link
+      creates a revocable credential per device (ADR 0010).
+- [x] Node-to-node calls: built in milestone 4 as calls through the fleet's
+      home (protocol 6, below), not as a mesh.
+- [ ] By hand, still to do: a relay over `wss://` behind an HTTPS proxy on
+      a public host (the first real TLS test; milestone 3's plan, "Smoke on
+      one machine").
 
-## Phase 2: fleet sync
+## Phase 2: the fleet (milestone 4, built; closing)
 
-Milestone 4 is drafted in `docs/plans/backend-m4.md` (2026-11-06), with
-proposed ADRs 0011 (harness profiles), 0012 (fleet sync and `vessel init`)
-and 0013 (agent principals and cross-node sessions).
+Plan: `docs/plans/backend-m4.md` (ADRs 0011, 0012 and 0013; protocols 5
+and 6).
 
-- [ ] Harness profiles (one harness, several accounts or configs), and
-      moving a structured session to another profile without losing the
-      conversation.
-- [ ] Sync skills, MCP server configs, memory, and conversation history:
-      one fleet home that members pull from; MCP servers handed to
-      harnesses at launch; secrets referenced by name and kept per node;
-      memory and history moved on request.
-- [ ] First-run setup: `vessel init` on a fresh machine pulls the fleet's
-      config and installs harnesses.
-- [ ] Agent-to-agent visibility: a session on one node can list and spawn
-      sessions on another, as an agent principal with its own credential,
-      scopes that only shrink, and ownership of what it started.
+- [x] Harness profiles: one harness, several accounts or configurations
+      (`profiles.toml`), chosen per session, and a structured session moved
+      to another profile without losing its conversation (ADR 0011).
+- [x] Fleet sync: one home node shares instructions and skills, and every
+      member follows them into every profile, keeping local edits; MCP
+      servers handed to harnesses at launch; secrets set per node, or
+      copied to a node that granted it (ADR 0012).
+- [x] Conversations and memory copied or moved on request, between
+      profiles and between nodes (`vessel session copy|move`, `vessel fleet
+      memory copy`).
+- [x] First-run setup: `vessel init` sets a machine up (node, harnesses,
+      profiles, logins, `--service`) and joins a fleet with `--join`.
+- [x] Agent tools: every session's agent gets the `vessel` MCP server with
+      a credential of its own, starts and drives sessions of its own on
+      any node of the fleet, with scopes that only shrink and limits on
+      count and depth (ADR 0013, protocol 6).
+- [x] No secret value in a bundle, a log, `profile.list` or a command line
+      (a test plants values and searches everything a fleet run wrote).
+- [ ] Closing: the two manual smokes of the plan's done criteria (four
+      profiles on one node with a structured session moved between them; a
+      fresh machine running `vessel init --join`), run by the coordinator
+      with the scripts in `docs/smoke/`.
+
+## Next
+
+Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
+4 left these follow-ups, none scheduled:
+
+- Agent limits per fleet: today they are per node, so an agent may own 8
+  live sessions on each node it reaches (ADR 0013, "Known limits").
+- A relay grant with capped scopes (a read-only relay), which needs a
+  field on invitations and devices, so a protocol change (ADR 0013).
+- Agent grants per profile (`[profiles.X.agent]`, ADR 0013).
+- `vessel init --service` on Windows (systemd and launchd only today).
+- The first tagged release, and signing: the release workflow exists but
+  has never run.
+- A clean websocket close when `vessel` exits (the node logs "ended
+  abnormally" today; harmless).
 
 ## Phase 3: model routing
 

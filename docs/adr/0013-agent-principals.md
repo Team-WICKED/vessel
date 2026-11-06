@@ -1,6 +1,8 @@
 # ADR 0013: Agent principals and cross-node sessions
 
-Status: accepted 2026-11-06 with the coordinator decisions in `docs/plans/backend-m4.md`; drafted as proposed, 2026-11-06 (milestone 4, `docs/plans/backend-m4.md`).
+Status: accepted, 2026-11-06, with the coordinator decisions in
+`docs/plans/backend-m4.md`; built in milestone 4, on one node by Track H
+and across nodes by protocol 6 ("As built" below).
 
 ## Context
 
@@ -169,8 +171,10 @@ own.
 
 ## As built (Track H, H4, 2026-11-06)
 
-The decision stands, on one node; cross-node calls (`fleet.forward`, the
-creator chain) are Track X.
+The decision stands. Track H built it on one node; Track X carried it
+across nodes with protocol 6 (`fleet.forward` through the home, the
+intersection rule, ownership and the limits applied to the origin's agent
+on the target; `docs/plans/backend-m4.md`, "Protocol 6").
 
 - **Credential.** Minted by `session.create` before the session starts:
   the session runtime takes its id from the node (`LaunchOptions::id`), so

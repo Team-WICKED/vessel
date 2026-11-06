@@ -1,6 +1,8 @@
 # ADR 0005: Every connection presents the node token
 
-Status: accepted, 2026-11-05
+Status: accepted, 2026-11-05; amended 2026-11-05 (no TLS for token
+connections, below). Extended by ADR 0010 (paired devices) and ADR 0013
+(agents); `wss://` exists only for relays and paired nodes (ADR 0009).
 
 ## Context
 

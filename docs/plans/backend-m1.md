@@ -1,8 +1,8 @@
 # Backend milestone 1: one node, done properly
 
-Status: implemented on `backend/m1` (2026-11-05), draft PR #1; review fixes in progress. Owner: coordinator (the agent that
-wrote this plan). Two implementation tracks run in parallel in separate git
-worktrees.
+Status: built on `backend/m1` (2026-11-05), draft PR #1; milestones 2 to 4
+build on it. Owner: coordinator (the agent that wrote this plan). Two
+implementation tracks run in parallel in separate git worktrees.
 
 Read first: `AGENTS.md` (rules), `docs/ORIGIN.ko.md` (intent),
 `docs/LESSONS.md` (what we take from Zed and Paseo), ADRs 0001-0005.

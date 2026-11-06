@@ -1,6 +1,7 @@
 # ADR 0004: Durable per-session event log in SQLite
 
-Status: accepted, 2026-11-05
+Status: accepted, 2026-11-05; amended 2026-11-06 (a live session's records
+pruned from the store are read from its ring).
 
 ## Context
 

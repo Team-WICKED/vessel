@@ -1,6 +1,9 @@
 # ADR 0010: Pairing links and device principals
 
-Status: accepted 2026-11-06 with the coordinator decisions in `docs/plans/backend-m3.md`; drafted as proposed, 2026-11-06 (milestone 3, `docs/plans/backend-m3.md`).
+Status: accepted, 2026-11-06, with the coordinator decisions in
+`docs/plans/backend-m3.md`; built in milestone 3; amended 2026-11-06 after
+Track R's review (a link only from stdin, a credential bound to its node's
+id and key).
 
 ## Context
 

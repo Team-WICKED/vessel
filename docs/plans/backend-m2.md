@@ -1,7 +1,8 @@
 # Backend milestone 2: any node, over SSH
 
-Status: proposed (draft 2026-11-06). Starts once milestone 1 is green on all
-three CI platforms. Owner: coordinator. Two implementation tracks, as in M1.
+Status: built on `backend/m2` (2026-11-06; "State" below). Drafted the same
+day, to start once milestone 1 was green on all three CI platforms. Owner:
+coordinator. Two implementation tracks, as in M1.
 
 Read first: `AGENTS.md`, `docs/ORIGIN.ko.md` (item 1: Zed's lightness and
 fast server-side updates; item 2: remote use that is "very convenient"),

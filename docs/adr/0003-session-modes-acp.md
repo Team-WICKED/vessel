@@ -1,6 +1,7 @@
 # ADR 0003: Two session modes; structured mode speaks ACP
 
-Status: accepted, 2026-11-05
+Status: accepted, 2026-11-05; amended 2026-11-06 (backpressure through the
+ACP SDK, after Track S's review).
 
 ## Context
 

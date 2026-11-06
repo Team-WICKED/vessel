@@ -1,6 +1,7 @@
 # ADR 0001: Crate boundaries and dependency direction
 
-Status: accepted, 2026-11-05
+Status: accepted, 2026-11-05. The edges each later milestone added are
+recorded in the decision below (milestones 2 to 4, 2026-11-06).
 
 ## Context
 
