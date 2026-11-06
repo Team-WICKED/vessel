@@ -78,6 +78,15 @@ Option 2, run through the system `ssh` client:
   - The node holds an exclusive lock on `vesseld.lock` (std
     `File::try_lock`) for its lifetime. Two racing `attach` processes
     therefore produce one node, and the loser connects to the winner.
+    (Implementation note, 2026-11-06: the proxies also take turns on a
+    start lock, so the second one waits and then finds the first one's
+    node instead of starting a node that would lose the lock.)
+  - On Unix the node is started through the user's login shell (`sh -l`,
+    or `$SHELL -l` when that is a POSIX shell): a non-interactive SSH
+    command gets a minimal `PATH`, without the directories a profile adds
+    for harness installs (`~/.local/bin`, Homebrew). It starts with `--bind
+    none`, since it needs no TCP port, and on a machine shared by several
+    users a fixed port would collide.
   - Liveness is decided by the lock and by the socket answering, never by a
     pid.
   - The node does not exit when idle: sessions run whether or not anyone is

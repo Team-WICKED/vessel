@@ -64,16 +64,20 @@ async fn node_start(
     name: Option<String>,
 ) -> Result<(), CliError> {
     let mut config = Config::new(data_dir(target)?);
-    config.bind = bind;
+    config.bind = Some(bind);
     config.name = name;
     let node = Node::start(config).await?;
+    let address = node.address().unwrap_or(bind);
     let started = format!(
-        "[vessel] node {} listening on {}; Ctrl-C stops it\n",
+        "[vessel] node {} listening on {address}; Ctrl-C stops it\n",
         node.info().name,
-        node.address()
     );
     io::note(&started).await?;
-    vessel_node::signal().await;
+    // A client's `node.stop` (protocol 3) stops it too.
+    tokio::select! {
+        () = vessel_node::signal() => {}
+        () = node.stop_requested() => {}
+    }
     io::note("[vessel] stopping\n").await?;
     Ok(node.stop().await?)
 }

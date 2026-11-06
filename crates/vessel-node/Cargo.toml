@@ -19,18 +19,19 @@ vessel-session.workspace = true
 vessel-store.workspace = true
 
 axum.workspace = true
+bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
 hostname.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-bytes.workspace = true
 tempfile.workspace = true
 vessel-client.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }

@@ -6,6 +6,11 @@
 //! `support::within` only turns a hang into a failure.
 
 #[cfg(test)]
+mod local;
+#[cfg(test)]
+#[cfg(unix)]
+mod remote;
+#[cfg(test)]
 mod structured;
 #[cfg(test)]
 mod support;

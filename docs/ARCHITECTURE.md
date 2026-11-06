@@ -39,7 +39,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing. | proto, rpc, harness, session, store |
 | `vessel-client` | Typed async client and gap-free session streams. | proto, rpc |
 | `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node |
-| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) for tests. | - |
+| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests. | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
 that ADR and this table. Test-only edges: `vessel-node`'s end-to-end tests
@@ -124,7 +124,9 @@ depend on the node, so there is no cycle).
     `SessionRuntime::remove`, which it may only do once the session ended
     (`SessionHandle::ended`); the node is to call it once the store has the
     whole log.
-  - `vessel-testkit`: `fake-tui`, `fake-acp`, the `Fake::path` locator
+  - `vessel-testkit`: `fake-tui`, `fake-acp`, `fake-ssh` (the OpenSSH
+    command line, running the "remote" command locally under a fake home,
+    with an injectable connection drop; milestone 2), the `Fake::path` locator
     (a nested `cargo build` once per test process; the first one of a run
     recompiles about 30 crates under this package's own feature set), and
     `within`, the test safety net whose clock starts after that build.
@@ -133,12 +135,19 @@ depend on the node, so there is no cycle).
     bound (calls beyond it are refused `Unavailable`; the connection keeps
     being read so `Cancel` gets through), per-connection outbound queue
     with bounded flush batching, subscription ordering, release and lag on
-    both ends (ADR 0006), in-memory transport for tests.
+    both ends (ADR 0006), in-memory transport for tests, and `Framed`
+    (length-delimited frames over any byte stream: SSH stdio and the
+    node's local socket, PROTOCOL.md version 3). The `Welcome`'s
+    `NodeInfo` is read from a watch, so a draining node says so.
   - `vessel-store`: owner-only data directory (Unix: 0700, an existing
     one tightened or refused if another user's; `node.id`, `token` and
     the event log with its `-wal`/`-shm` files 0600), SQLite event
     log with a batching writer thread, paged reads, restart recovery to
-    `Interrupted`, retention, `user_version` migrations.
+    `Interrupted`, retention, `user_version` migrations. Milestone 2:
+    `NodeLock` (one node per data directory, an OS lock that cannot go
+    stale, with the holder's pid, binary and version in `vesseld.owner`),
+    the `StartLock` racing proxies share, and the `bin/`, `logs/` and
+    socket paths.
   - `vessel-client`: websocket connection with the bearer token, one typed
     method per call, gap-free `SessionStream` (`follow`). `wss://` is
     refused: no TLS stack in milestone 1 (ADR 0005 amendment).
@@ -153,6 +162,15 @@ depend on the node, so there is no cycle).
     which subscribers still receive the final `Interrupted` status. Both
     modes run end to end (`tests/e2e`: `fake-tui` as `claude`, `fake-acp`
     as its ACP adapter), including restart, `Interrupted` and resume.
+    Milestone 2, node side (ADR 0007, 0008): a local socket (Unix socket
+    0600, or a named pipe on Windows) whose first frame must be the token;
+    `--bind none` (no TCP listener); `vesseld attach`, the byte-pumping
+    proxy SSH runs, which starts the node in the background through a login
+    shell when none answers (start lock, readiness line, `ProxyExit` codes);
+    `vesseld version` and `vesseld cleanup`; `node.stop` (`now`, or drain:
+    refuse new sessions and stop once none is live); the node lock. Tested
+    in process (`tests/e2e/local.rs`) and with real processes through
+    `fake-ssh` (`tests/e2e/remote.rs`, Unix).
   - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
     `sessions`, `run`, `attach`, `send`, `log`, `kill`; sessions named by
     id prefix; terminal attach in raw mode with `Ctrl-]` to detach, also
