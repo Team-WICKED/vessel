@@ -1,41 +1,129 @@
-//! [`launch`]: turn a session spec into the command that runs it.
+//! [`launch`]: turn a session spec, a profile and MCP servers into the
+//! command that runs the session.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use vessel_proc::CommandSpec;
-use vessel_proto::{SessionMode, SessionSpec};
+use vessel_proto::{McpServerName, ResolvedMcpServers, SessionMode, SessionSpec};
 
 use crate::error::HarnessError;
 use crate::harnesses::{Structured, descriptor};
 use crate::lookup::Lookup;
+use crate::mcp::{McpError, McpFile, TerminalMcp};
+use crate::profile::Profile;
 
-/// The command that runs `spec`.
+/// What [`launch`] decided: the command, and what it needs around it.
+/// `Debug` shows no value: `CommandSpec` and `McpFile` hide them.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Launch {
+    /// The command. Its environment may hold secrets (the profile's values,
+    /// MCP values for Codex); its arguments never hold an MCP value.
+    pub command: CommandSpec,
+    /// A terminal session's MCP configuration file, which the command
+    /// names: write it ([`McpFile::write`]) right before starting the
+    /// command and keep the guard until the session ends.
+    pub mcp_file: Option<McpFile>,
+    /// MCP servers this terminal session will not have, because its harness
+    /// has no launch-time form for them. Structured sessions get every
+    /// server over ACP, so this is empty for them.
+    pub unattached: Vec<McpServerName>,
+}
+
+/// The command that runs `spec` under `profile`, with `mcp` servers.
 ///
-/// Terminal mode runs the harness binary with the spec's arguments. Structured
-/// mode runs whatever speaks ACP for that harness: the binary itself with its
-/// ACP arguments, or a separate adapter (which needs only the adapter to be
-/// installed). The working directory defaults to the node user's home
-/// directory, is made absolute, and must exist: running an agent in a
-/// different directory than asked is worse than refusing.
+/// `profile` must be the one the spec names (`spec.profile`, or the
+/// harness's default profile when it names none): the caller resolves the
+/// name, this checks the result.
+///
+/// Terminal mode runs the harness binary with, in order: the MCP servers'
+/// launch-time arguments, the profile's arguments, then the spec's.
+/// Structured mode runs whatever speaks ACP for that harness: the binary
+/// itself with its ACP arguments, or a separate adapter (which needs only
+/// the adapter to be installed); its MCP servers go over ACP instead, so
+/// `mcp` is not used, and neither are the profile's arguments. In both
+/// modes the profile's variables are set and its `unset` ones removed.
+///
+/// The working directory defaults to the node user's home directory, is
+/// made absolute, and must exist: running an agent in a different directory
+/// than asked is worse than refusing.
 ///
 /// Does filesystem lookups; call it from a blocking context.
 ///
 /// # Errors
+/// [`HarnessError::ProfileMismatch`] for another harness's profile,
+/// [`HarnessError::ProfileNotRequested`] for another profile than the
+/// spec's;
 /// [`HarnessError::NotInstalled`] or [`HarnessError::StructuredUnavailable`]
-/// when the program is missing, [`HarnessError::RelativeDirectory`] for a
-/// relative working directory, [`HarnessError::NoSuchDirectory`] for a bad
-/// working directory.
-pub fn launch(lookup: &Lookup, spec: &SessionSpec) -> Result<CommandSpec, HarnessError> {
+/// when the program is missing; [`HarnessError::RelativeDirectory`] or
+/// [`HarnessError::NoSuchDirectory`] for a bad working directory;
+/// [`HarnessError::Mcp`] when the servers cannot be given to this harness
+/// (two values for one variable).
+pub fn launch(
+    lookup: &Lookup,
+    spec: &SessionSpec,
+    profile: &Profile,
+    mcp: &ResolvedMcpServers,
+) -> Result<Launch, HarnessError> {
+    launch_in(lookup, spec, profile, mcp, &std::env::temp_dir())
+}
+
+/// [`launch`], with a terminal session's MCP configuration file in
+/// `mcp_dir` rather than the system's temporary directory. The node passes
+/// an owner-only directory of its own (ADR 0012); the file is owner-only
+/// and created exclusively either way.
+///
+/// # Errors
+/// As [`launch`].
+pub fn launch_in(
+    lookup: &Lookup,
+    spec: &SessionSpec,
+    profile: &Profile,
+    mcp: &ResolvedMcpServers,
+    mcp_dir: &Path,
+) -> Result<Launch, HarnessError> {
     let harness = spec.harness;
+    if profile.harness() != harness {
+        return Err(HarnessError::ProfileMismatch {
+            profile: profile.name().clone(),
+            profile_harness: profile.harness(),
+            harness,
+        });
+    }
+    let requested = match &spec.profile {
+        Some(name) => name == profile.name(),
+        None => profile.is_default(),
+    };
+    if !requested {
+        return Err(HarnessError::ProfileNotRequested {
+            requested: spec.profile.clone(),
+            given: profile.name().clone(),
+        });
+    }
     let descriptor = descriptor(harness);
     let installed = |binary: &'static str| {
         lookup
             .find(binary)
             .ok_or(HarnessError::NotInstalled { harness, binary })
     };
+    let mut mcp_file = None;
+    let mut unattached = Vec::new();
     let command = match &spec.mode {
         SessionMode::Terminal { args, .. } => {
-            CommandSpec::new(installed(descriptor.binary)?).args(args)
+            let mut command = CommandSpec::new(installed(descriptor.binary)?);
+            match descriptor.terminal_mcp {
+                Some(_) if mcp.is_empty() => {}
+                Some(render) => {
+                    let rendered = render(mcp)?;
+                    check_environment(&rendered, profile, descriptor.home.variable)?;
+                    let (with_servers, file) = attach(command, rendered, mcp_dir)?;
+                    command = with_servers;
+                    mcp_file = file;
+                }
+                None => unattached.extend(mcp.keys().cloned()),
+            }
+            command.args(profile.args()).args(args)
         }
         SessionMode::Structured { .. } => match &descriptor.structured {
             Structured::Native { args } => {
@@ -53,10 +141,69 @@ pub fn launch(lookup: &Lookup, spec: &SessionSpec) -> Result<CommandSpec, Harnes
             }
         },
     };
-    Ok(match working_dir(spec)? {
+    let command = with_profile(command, profile);
+    let command = match working_dir(spec)? {
         Some(cwd) => command.cwd(cwd),
         None => command,
+    };
+    Ok(Launch {
+        command,
+        mcp_file,
+        unattached,
     })
+}
+
+/// `command` with `profile`'s environment changes: removals first, then
+/// the variables it sets (a profile never does both to one variable).
+pub(crate) fn with_profile(command: CommandSpec, profile: &Profile) -> CommandSpec {
+    let command = profile
+        .unset()
+        .fold(command, |command, name| command.env_remove(name.as_str()));
+    profile.env().fold(command, |command, (name, value)| {
+        command.env(name.as_str(), value)
+    })
+}
+
+/// An MCP variable must not change what the profile decides, nor move the
+/// harness's home: in Codex's environment it applies to Codex itself too.
+fn check_environment(
+    rendered: &TerminalMcp,
+    profile: &Profile,
+    home_variable: Option<&str>,
+) -> Result<(), McpError> {
+    for (name, value) in &rendered.env {
+        let same = |other: &str| other.eq_ignore_ascii_case(name.as_str());
+        let set_differently = profile
+            .env()
+            .any(|(key, set)| same(key.as_str()) && set != value.expose());
+        let removed = profile.unset().any(|key| same(key.as_str()));
+        if set_differently || removed || home_variable.is_some_and(same) {
+            return Err(McpError::SharedVariable { name: name.clone() });
+        }
+    }
+    Ok(())
+}
+
+/// The rendered form on the command: its arguments, its variables, and the
+/// file's path as one argument.
+fn attach(
+    command: CommandSpec,
+    rendered: TerminalMcp,
+    dir: &Path,
+) -> Result<(CommandSpec, Option<McpFile>), HarnessError> {
+    let mut command = command.args(rendered.args);
+    for (name, value) in rendered.env {
+        command = command.env(name.as_str(), value.expose());
+    }
+    let Some(form) = rendered.file else {
+        return Ok((command, None));
+    };
+    let mut argument = OsString::from(form.flag);
+    let file = McpFile::new(form, dir).map_err(|error| HarnessError::McpFile {
+        reason: error.to_string(),
+    })?;
+    argument.push(file.path());
+    Ok((command.arg(argument), Some(file)))
 }
 
 /// Why structured mode is unavailable when an adapter is missing.

@@ -74,6 +74,6 @@ pub use config::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, RuntimeConfig}
 pub use error::{InputKind, ModeKind, RemoveError, SessionError};
 pub use handle::SessionHandle;
 pub use ring::{Follow, FollowError};
-pub use runtime::{Created, SessionRuntime};
+pub use runtime::{Created, LaunchOptions, SessionRuntime};
 /// Suggested [`RuntimeConfig::agent_handshake_timeout`].
 pub use vessel_agent::DEFAULT_HANDSHAKE_TIMEOUT;
