@@ -195,6 +195,14 @@ impl Agents {
             .map(|entry| entry.depth)
     }
 
+    /// Whether `id`'s agent may still act: its session has an entry and
+    /// its end is not visible yet. Checked on every operate call an agent
+    /// makes (`NodeService::check_owner`), since `retire` closes an open
+    /// connection only after the actor finishes.
+    pub(crate) fn is_live(&self, id: SessionId) -> bool {
+        self.lock().get(&id).is_some_and(|entry| !entry.has_ended())
+    }
+
     /// The session `id` reserved a place for has started as `handle`.
     pub(crate) fn started(&self, id: SessionId, handle: SessionHandle) {
         if let Some(entry) = self.lock().get_mut(&id) {
