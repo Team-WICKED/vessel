@@ -36,6 +36,11 @@ session as created by the owner, and never emit `profile_changed`.
   that returns a generation (newer, or `after` when the node's wait limit
   passes); `fleet.report { generation, conflicts? }` returns `ack`.
   `fleet.members` (admin) returns `FleetMember[]`.
+- Bundle paths: `instructions.md` is the home's instructions file, which
+  each member writes under its harness's own name (`CLAUDE.md`,
+  `AGENTS.md`, `GEMINI.md`); `skills/<name>/...` is a skill, `<name>` being
+  the `name` in its `SKILL.md` (not its directory name). Other top-level
+  paths are reserved; a member ignores what it does not know.
 - Scopes: `sync` is new. `device.invite` takes `scopes?`; without it a
   device gets `read`, `operate` and `admin`, as in version 4.
 - Agents (ADR 0013): on the local socket, an agent's `vessel mcp` sends
