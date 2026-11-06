@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `backend/**` lets track branches get Windows and macOS results without
+    # a pull request; agents cannot run those platforms locally.
+    branches: [main, "backend/**"]
   pull_request:
 
 env:
