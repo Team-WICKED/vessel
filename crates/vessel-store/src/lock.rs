@@ -14,6 +14,13 @@
 //!   so the lock can never be stale. Who holds it is written to a separate
 //!   file, `vesseld.owner`, because Windows forbids reading a locked range;
 //!   that record is trusted only while the lock is held.
+//! - Release: always an explicit unlock, not just closing the file. A
+//!   `flock` belongs to the open file description, and a child process that
+//!   another thread is starting shares it from `fork` until `exec` closes
+//!   it. Closing only our descriptor in that moment left the lock held, so
+//!   a node restarted at once (in the same process, or right after the old
+//!   process exits) found its directory locked. Unlocking releases it for
+//!   every copy.
 
 use std::fs::{File, TryLockError};
 use std::io;
@@ -43,8 +50,8 @@ pub struct NodeOwner {
 /// process ends).
 #[derive(Debug)]
 pub struct NodeLock {
-    /// Kept open: closing it releases the lock.
-    _file: File,
+    /// Kept open while held; unlocked on drop (see the module docs).
+    file: File,
 }
 
 impl NodeLock {
@@ -70,7 +77,7 @@ impl NodeLock {
         let owner_path = dir.owner_path();
         let record = serde_json::to_vec(owner).map_err(StoreError::Encode)?;
         files::replace(&owner_path, &record).map_err(StoreError::io(&owner_path))?;
-        Ok(Self { _file: file })
+        Ok(Self { file })
     }
 
     /// Who holds the lock right now; `None` when no node does (any owner
@@ -86,8 +93,11 @@ impl NodeLock {
             Err(source) => return Err(StoreError::Io { path, source }),
         };
         match file.try_lock() {
-            // Nobody holds it; dropping `file` releases it again at once.
-            Ok(()) => Ok(None),
+            // Nobody holds it; give it back at once.
+            Ok(()) => {
+                release(&file);
+                Ok(None)
+            }
             Err(TryLockError::WouldBlock) => Ok(read_owner(dir)),
             Err(TryLockError::Error(source)) => Err(StoreError::Io { path, source }),
         }
@@ -99,8 +109,8 @@ impl NodeLock {
 /// node the first one started.
 #[derive(Debug)]
 pub struct StartLock {
-    /// Kept open: closing it releases the lock.
-    _file: File,
+    /// Kept open while held; unlocked on drop (see the module docs).
+    file: File,
 }
 
 impl StartLock {
@@ -112,7 +122,27 @@ impl StartLock {
         let path = dir.start_lock_path();
         let file = files::open_private(&path).map_err(StoreError::io(&path))?;
         file.lock().map_err(StoreError::io(&path))?;
-        Ok(Self { _file: file })
+        Ok(Self { file })
+    }
+}
+
+impl Drop for NodeLock {
+    fn drop(&mut self) {
+        release(&self.file);
+    }
+}
+
+impl Drop for StartLock {
+    fn drop(&mut self) {
+        release(&self.file);
+    }
+}
+
+/// Unlock `file` for every descriptor that shares it (see the module docs).
+/// If that fails, closing the file still releases it, only later.
+fn release(file: &File) {
+    if let Err(error) = file.unlock() {
+        tracing::debug!(%error, "cannot unlock; closing the file releases the lock");
     }
 }
 
@@ -129,4 +159,33 @@ fn read_owner(dir: &DataDir) -> Option<NodeOwner> {
             |error| tracing::warn!(path = %path.display(), %error, "unreadable node owner record"),
         )
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owner() -> NodeOwner {
+        NodeOwner {
+            pid: std::process::id(),
+            executable: PathBuf::from("vesseld"),
+            version: "0.0.0".to_owned(),
+            started_at: Utc::now(),
+        }
+    }
+
+    /// A second descriptor of the lock file (what a child process has from
+    /// `fork` until `exec`) does not keep a dropped lock held.
+    #[test]
+    fn a_dropped_lock_is_free_even_while_a_copy_of_its_file_is_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = DataDir::new(temp.path());
+        dir.prepare().unwrap();
+        let lock = NodeLock::acquire(&dir, &owner()).unwrap();
+        let copy = lock.file.try_clone().unwrap();
+        drop(lock);
+        assert_eq!(NodeLock::holder(&dir).unwrap(), None);
+        drop(NodeLock::acquire(&dir, &owner()).unwrap());
+        drop(copy);
+    }
 }
