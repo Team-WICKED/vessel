@@ -805,6 +805,11 @@ reproduced problems, fixed in this order:
     second); `vessel-relay`'s `a_ticket_registers_its_own_key_and_no_other`,
     `a_ticket_registration_ends_when_it_expires_unless_renewed` and the
     `ticket` unit tests; the dialing policy's unit tests.
+  - **Relay caps** (Track S, merged from 0ddda6e; ADR 0009's first
+    amendment) bound what one relay holds whoever registers: a node
+    registered with a ticket takes a place among `--max-nodes` like any
+    other and frees it when its ticket expires (`vessel-relay`'s
+    `caps::a_ticket_registration_holds_a_place_until_its_ticket_expires`).
   - Accepted: a member with no route depends on its home's relay and on
     reaching its home at least once a day; a device's first ticket
     registers one key of its choosing for ten minutes.

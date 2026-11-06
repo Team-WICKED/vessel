@@ -77,7 +77,7 @@ pub trait Dialer: Send + Sync {
 pub enum PeerClose {
     /// The node's (`4401`: the secure handshake failed).
     Node(NodeClose),
-    /// The relay's (`4404`, `4408`, `4413`, `4429`).
+    /// The relay's (`4404`, `4408`, `4413`, `4429`, `4503`).
     Relay(RelayClose),
 }
 

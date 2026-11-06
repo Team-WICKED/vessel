@@ -1,7 +1,8 @@
 # ADR 0009: A dumb relay, and one end-to-end secure channel
 
 Status: accepted, 2026-11-06, with the coordinator decisions in
-`docs/plans/backend-m3.md`; built in milestone 3.
+`docs/plans/backend-m3.md`; built in milestone 3; amended 2026-11-06
+(resource limits, below).
 
 ## Context
 
@@ -265,18 +266,43 @@ Option 1, `snow`, behind our own crate `vessel-secure`.
 - Metadata (who talks to which routing id, when, how much) is visible to
   the relay operator. That is accepted: the operator is the owner.
 
-## Amendment: registration tickets (protocol 6, 2026-11-06)
+## Amendment (2026-11-06): resource limits
+
+The security review's round 6 registered 25 unrelated keys with one token:
+past new connections per address (30 at once, then one a second), nothing
+capped what a relay holds. A relay now counts, against configurable
+limits (`vessel_relay::Limits`, `vesseld relay --max-*`):
+
+- registered nodes (128; a node registering again under its key takes
+  its own place back), refused with `rejected {reason: "full"}`;
+- control connections still registering (64) and relayed client
+  connections, per node (128) and in all (384), refused with close code
+  `4503`; both refusals are transient;
+- bytes a second through each direction of a relayed connection (16 MiB
+  after a one-second burst), by waiting before forwarding, so TCP pushes
+  back on the sender and nothing is buffered;
+- silence: a relayed connection silent past 30 s in either direction, its
+  pings unanswered, ends (this was already so).
+
+The defaults keep `max_nodes + 2 × max_clients` sockets under the common
+open-file limit of 1024. Refusals are logged at info, at most one line per
+kind every 10 s with the count in between, and never with a token or a
+ticket. Who may register at all is the next amendment.
+
+## Amendment (2026-11-06): registration tickets (protocol 6)
 
 A fleet member with no route of its own registers with its home's relay,
 so the home can call it back (`fleet.callback`, milestone 4). Handing it
 the registration token let any device that asked register any key, for
-good (the review of milestone 4, round 6), so a member gets a ticket
-instead: one node key and an expiry, with HMAC-SHA256 over both keyed by
-the relay's token (`vessel_relay::issue_ticket`, `check_ticket`). The
-relay accepts the token or a ticket, a ticket only for the key the node
-then proves it holds, unexpired and at most 48 h ahead, and closes a
-registration made with one when it expires. The relay keeps no new state
-or configuration; rotating its token voids every ticket. Whoever holds the
-token mints tickets: the operator, and a fleet's home that registers with
-the relay, which gives them only to its members' devices for their own
-keys (`docs/plans/backend-m4.md`, review round 6).
+good (the same review, round 6), so a member gets a ticket instead: one
+node key and an expiry, with HMAC-SHA256 over both keyed by the relay's
+token (`vessel_relay::issue_ticket`, `check_ticket`). The relay accepts the
+token or a ticket, a ticket only for the key the node then proves it
+holds, unexpired and at most 48 h ahead (`rejected {reason: "ticket"}`
+otherwise), and closes a registration made with one when it expires. A
+node registered with a ticket holds a place among the registered nodes
+like any other, and gives it back when its ticket expires. The relay keeps
+no new state or configuration; rotating its token voids every ticket.
+Whoever holds the token mints tickets: the operator, and a fleet's home
+that registers with the relay, which gives them only to its members'
+devices for their own keys (`docs/plans/backend-m4.md`, review round 6).
