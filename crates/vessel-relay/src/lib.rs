@@ -46,6 +46,7 @@ mod backoff;
 mod carrier;
 mod dial;
 mod link;
+mod reach;
 mod server;
 mod socket;
 mod ticket;
@@ -60,6 +61,7 @@ pub use carrier::{
 };
 pub use dial::{DialError, connect, connect_with, dial, dial_with};
 pub use link::{LinkState, NodeLink};
+pub use reach::{Reach, is_public, numeric_host};
 pub use server::{Limits, RelayConfig, serve};
 pub use ticket::{MAX_TICKET_LIFETIME, TicketError, check_ticket, issue_ticket, unix_now};
 pub use tls::{TlsConfig, TlsError};

@@ -36,6 +36,7 @@ pub(crate) fn fleet_config(harness: HarnessKind, home: PathBuf) -> FleetConfig {
         poll: Duration::from_millis(50),
         pull_every: Duration::from_secs(3600),
         watch_limit: Duration::from_secs(5),
+        ..FleetConfig::default()
     }
 }
 

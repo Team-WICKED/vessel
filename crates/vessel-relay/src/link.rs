@@ -44,6 +44,7 @@ use vessel_secure::{NodeKeypair, answer_proof, routing_id};
 use crate::backoff::Backoff;
 use crate::carrier::Keepalive;
 use crate::carrier::WsCarrier;
+use crate::reach::Reach;
 use crate::socket::{self, Socket};
 use crate::tls::TlsConfig;
 use crate::{ACCEPT_PATH, NODE_PATH, endpoint};
@@ -71,6 +72,8 @@ pub struct NodeLink {
     keypair: Arc<NodeKeypair>,
     credential: Credential,
     tls: TlsConfig,
+    /// Which addresses of the relay's host it connects to.
+    reach: Reach,
     state: watch::Sender<LinkState>,
 }
 
@@ -171,8 +174,18 @@ impl NodeLink {
             keypair,
             credential,
             tls,
+            reach: Reach::Any,
             state,
         }
+    }
+
+    /// Connect only to the addresses `reach` allows, for the control
+    /// connection and every client's data connection ([`Reach::Public`]
+    /// for a relay the node's owner did not choose).
+    #[must_use]
+    pub const fn reaching(mut self, reach: Reach) -> Self {
+        self.reach = reach;
+        self
     }
 
     /// Follow the link's state.
@@ -239,14 +252,15 @@ impl NodeLink {
             tickets.mark_unchanged();
         }
         let url = endpoint(&self.relay, NODE_PATH);
-        let mut socket = match timeout(STEP, socket::open(&url, &self.tls)).await {
-            Ok(Ok(socket)) => socket,
-            Ok(Err(error)) => {
-                tracing::debug!(relay = %self.relay, %error, "could not reach the relay");
-                return Ended::Failed;
-            }
-            Err(_elapsed) => return Ended::Failed,
-        };
+        let mut socket =
+            match timeout(STEP, socket::open_reaching(&url, &self.tls, self.reach)).await {
+                Ok(Ok(socket)) => socket,
+                Ok(Err(error)) => {
+                    tracing::debug!(relay = %self.relay, %error, "could not reach the relay");
+                    return Ended::Failed;
+                }
+                Err(_elapsed) => return Ended::Failed,
+            };
         match self.register(&mut socket).await {
             Ok(()) => {}
             Err(Some(reason)) => return Ended::Refused(reason),
@@ -327,9 +341,9 @@ impl NodeLink {
         F: Fn(WsCarrier) + Send + Sync + 'static,
     {
         let url = endpoint(&self.relay, &format!("{ACCEPT_PATH}?conn={conn}"));
-        let tls = self.tls.clone();
+        let (tls, reach) = (self.tls.clone(), self.reach);
         drop(tokio::spawn(async move {
-            match timeout(STEP, socket::open(&url, &tls)).await {
+            match timeout(STEP, socket::open_reaching(&url, &tls, reach)).await {
                 Ok(Ok(socket)) => accept(WsCarrier::new(socket, Some(Keepalive::DEFAULT.silence))),
                 Ok(Err(error)) => tracing::debug!(%error, "could not accept a relayed client"),
                 Err(_elapsed) => tracing::debug!("accepting a relayed client timed out"),

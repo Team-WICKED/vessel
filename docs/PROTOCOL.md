@@ -68,14 +68,18 @@ every method.)
   registers with and a registration ticket for `key` (`RelayTicket { key,
   expires_at, mac }`, never the relays' token; none when the home has no
   relay). A device the home's record binds to `node` and `key`, holding a
-  current grant, gets a ticket for a day; one that has not granted yet,
-  for a claim the record would take, gets one for ten minutes, and for one
-  key only; others get `forbidden`. A member whose node has no route of its
-  own asks on each connection, and again halfway to the ticket's expiry
-  while connected, registers with those of the relays it dials (at most 8;
-  `wss://` to a public host, or any on a host it reaches its home by) and
-  names them, and only them, in its grant's link; another home's callback,
-  or leaving, unlinks them. With none, it sends no grant and records why
+  current grant, gets a ticket for a day. One that has not granted yet gets
+  one for ten minutes, only within an hour of its pairing (never reaching
+  past that), only for a claim the record would take, and for one node and
+  key, which the home records and its grant must then claim (`conflict`
+  otherwise); others get `forbidden`. A member whose node has no route of
+  its own asks on each connection, and again halfway to the ticket's
+  expiry while connected, registers with those of the relays it dials (at
+  most 8: any on a host it reaches its home by; otherwise `wss://`, not
+  `localhost` nor a non-canonical numeric host, and only at public
+  addresses its host resolves to when dialed) and names them, and only
+  them, in its grant's link; another home's callback, or leaving, unlinks
+  them. With none, it sends no grant and records why
   in its fleet state. `fleet.peers` (sync) and `fleet.nodes` (read)
   return `FleetNode[]` (`node`, `name`, `protocol`, `reachable`), the
   home included.

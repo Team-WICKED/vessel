@@ -72,6 +72,7 @@ fn fast(targets: Vec<(HarnessKind, PathBuf)>) -> FleetConfig {
         poll: Duration::from_millis(40),
         pull_every: Duration::from_secs(3600),
         watch_limit: Duration::from_secs(2),
+        ..FleetConfig::default()
     }
 }
 

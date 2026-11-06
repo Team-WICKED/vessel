@@ -348,6 +348,7 @@ fn core(
         fleet::HomeRelays {
             relays: config.relays.clone(),
             token,
+            first_window: config.fleet.first_ticket_window,
         }
     });
     // Fleet sync's tasks are session-adjacent work: shutdown waits for an

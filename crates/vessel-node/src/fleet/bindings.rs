@@ -49,6 +49,12 @@
 //!   then has none, so a revoked member's name was not reserved. Reading
 //!   fills every node without a name from the grants the home keeps,
 //!   revoked devices' included, and the home saves that once at start.
+//! - First relay tickets (round 7): a device that has not granted yet may
+//!   get a short relay ticket for a member with no route of its own
+//!   (`fleet.callback`), for the node and key it names. Its choice is kept
+//!   here (`first`), not in memory, so a home's restart does not let it
+//!   name another key, and its grant must claim that same node and key; the
+//!   entry goes once the device is bound.
 //! - What it leaves open: a node's very first grant still claims an id
 //!   nobody has bound (trust on first grant), until ids come from keys.
 
@@ -73,6 +79,20 @@ pub(crate) struct Bindings {
     /// Bindings the owner forgot.
     #[serde(default)]
     forgotten: Vec<Forgotten>,
+    /// The node and key each device that has not granted yet took a first
+    /// relay ticket for (`fleet.callback`, round 7): its grant must claim
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    first: Vec<FirstTicket>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FirstTicket {
+    device: DeviceId,
+    node: NodeId,
+    key: NodePublicKey,
+    at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +205,36 @@ impl Bindings {
         changed
     }
 
+    /// The node and key `device` took a first relay ticket for, if it did
+    /// and has not been bound since.
+    pub(crate) fn first_of(&self, device: DeviceId) -> Option<(NodeId, &NodePublicKey)> {
+        self.first
+            .iter()
+            .find(|first| first.device == device)
+            .map(|first| (first.node, &first.key))
+    }
+
+    /// Keep that `device` took a first relay ticket for `node` and `key`,
+    /// unless it already took one (the caller checked they agree); whether
+    /// the record changed.
+    pub(crate) fn choose_first(
+        &mut self,
+        device: DeviceId,
+        node: NodeId,
+        key: NodePublicKey,
+    ) -> bool {
+        if self.first_of(device).is_some() {
+            return false;
+        }
+        self.first.push(FirstTicket {
+            device,
+            node,
+            key,
+            at: Utc::now(),
+        });
+        true
+    }
+
     /// The node member device `device` granted for.
     pub(crate) fn node_of(&self, device: DeviceId) -> Option<NodeId> {
         self.devices
@@ -218,6 +268,8 @@ impl Bindings {
         if self.node_of(device).is_none() {
             self.devices.push(DeviceBinding { device, node });
         }
+        // Bound now: what it chose for its first ticket is settled.
+        self.first.retain(|first| first.device != device);
     }
 }
 

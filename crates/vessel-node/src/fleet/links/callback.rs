@@ -18,8 +18,14 @@
 //!   home's record binds to that node and key, holding a current grant,
 //!   gets a day's ticket ([`TICKET_LIFETIME`]). Before its first grant a
 //!   device gets a short one ([`FIRST_TICKET_LIFETIME`], enough to register
-//!   and grant) only for a claim the record would take, and for one key
-//!   only (kept in memory: a home's restart allows one more). A forgotten
+//!   and grant), only within a window after it was paired (an hour,
+//!   `FleetConfig::first_ticket_window`, by the home's record of the
+//!   pairing, and never reaching past it), only for a claim the record
+//!   would take, and for one node and key, kept in the record
+//!   (`bindings.rs`, `first`), which its grant must then claim. Round 7:
+//!   without the window a device that never joined renewed its first
+//!   ticket for good, and with the choice only in memory a restart let it
+//!   take another key. After the window it is invited again. A forgotten
 //!   node's old devices, devices bound elsewhere and revoked devices (which
 //!   cannot connect) get none; a ticket already given lapses within its
 //!   lifetime, and rotating the token voids them all.
@@ -29,13 +35,18 @@
 //!   again with it. The links belong to the current home: another home's
 //!   callback, or leaving (`reconcile`), stops them, and only the grant's
 //!   link names them, never the node's own pairing links.
-//! - Which relays a member dials: at most [`MAX_CALLBACK_RELAYS`], each
-//!   `wss://` to a public host, or any on a host the member reaches its
-//!   home by (its membership's routes: the same machine or network, as the
-//!   tests and the smoke run). No opt-in flag: a home on the same network
-//!   names its relay by that network's address, which its members already
-//!   reach it by. Others are logged and left out, so the home cannot point
-//!   members at their own loopback or private network.
+//! - Which relays a member dials: at most [`MAX_CALLBACK_RELAYS`]: any on a
+//!   host the member reaches its home by (its membership's routes: the same
+//!   machine or network, as the tests and the smoke run), dialed as the
+//!   home is; otherwise only `wss://`, never `localhost`, never a host
+//!   written as a number other than a canonical public dotted quad, and
+//!   then dialed only at the public addresses its host resolves to when
+//!   the link connects (`vessel_relay::Reach::Public`; round 7: checking
+//!   the host's text let `127.1`, CGNAT, `[::ffff:0.0.0.0]` and names
+//!   resolving to loopback through). No opt-in flag: a home on the same
+//!   network names its relay by that network's address, which its members
+//!   already reach it by. Others are logged and left out, so the home
+//!   cannot point members at their own loopback or private network.
 //! - Alternatives: the token (above); the home calling members back over
 //!   the connection they keep to it, which needs no relay secret at all but
 //!   the secure channel's roles reversed at the RPC layer, the pairing and
@@ -46,8 +57,7 @@
 //!   credential for its own key only, of no use without that key's private
 //!   half.
 
-use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -55,12 +65,15 @@ use futures_util::FutureExt as _;
 use tokio_util::sync::CancellationToken;
 use vessel_client::NodeClient;
 use vessel_proto::{
-    Callback, DeviceId, ErrorCode, GetCallback, NodeId, NodePublicKey, RelayToken, RouteUrl,
-    WireError,
+    Callback, DeviceId, ErrorCode, GetCallback, NodeId, RelayToken, RouteUrl, WireError,
 };
-use vessel_relay::{LinkState, issue_ticket, unix_now};
+use vessel_relay::{LinkState, Reach, is_public, issue_ticket, numeric_host, unix_now};
 
-use super::{Claim, Links, check_claim, hop_error, unavailable};
+use chrono::{TimeDelta, Utc};
+
+use super::{
+    Claim, FileError, FleetLock, Links, bindings, blocking, check_claim, hop_error, unavailable,
+};
 use crate::devices::Routes;
 use crate::fleet::member::Membership;
 
@@ -101,12 +114,15 @@ pub(crate) struct HomeRelays {
     pub(crate) relays: Vec<RouteUrl>,
     /// Their registration token.
     pub(crate) token: RelayToken,
+    /// How long after a device was paired it may get a first ticket
+    /// without having granted (`FleetConfig::first_ticket_window`).
+    pub(crate) first_window: Duration,
 }
 
-/// The home's side: devices given a ticket before their first grant, and
-/// for which key (one each).
-#[derive(Debug, Default)]
-pub(super) struct FirstTickets(Mutex<HashMap<DeviceId, NodePublicKey>>);
+/// The first-ticket window of a home with relays (without, it gives none).
+fn home_window(home: Option<&HomeRelays>) -> Duration {
+    home.map_or(Duration::ZERO, |home| home.first_window)
+}
 
 /// The member's side: the ticket its callback links register with now.
 #[derive(Debug, Default)]
@@ -183,35 +199,56 @@ impl Links {
             tracing::info!(device = %member, bound = %node, asked = %request.node, current, "refused a relay ticket: not the device's own node and key with a current grant");
             return Err(refused_ticket());
         }
-        let claim = Claim {
-            member,
-            paired: self.paired_at(member).await,
-            node: request.node,
-            key: &request.key,
-            name: None,
+        // Before its first grant: only within the window after it was
+        // paired (by the home's own record of that), for a claim the record
+        // would take, and for the one node and key it chose, kept in the
+        // record (round 7: renewed for ever, and another key after a
+        // restart).
+        let window = home_window(self.home_relays.as_ref());
+        let Some(paired) = self.paired_at(member).await else {
+            return Err(refused_ticket());
         };
-        {
-            let _granting = self.granting.lock().await;
-            if let Err(error) = check_claim(claim, self.node, &self.name, &bound, &held) {
-                tracing::info!(device = %member, node = %request.node, %error, "refused a first relay ticket");
-                return Err(refused_ticket());
+        let now = Utc::now();
+        let left = paired
+            .checked_add_signed(TimeDelta::from_std(window).unwrap_or(TimeDelta::MAX))
+            .and_then(|closes| closes.signed_duration_since(now).to_std().ok())
+            .filter(|left| !left.is_zero());
+        let Some(left) = left else {
+            tracing::info!(device = %member, %paired, "refused a first relay ticket: the device was paired too long ago without granting");
+            return Err(WireError::new(
+                ErrorCode::Forbidden,
+                "this device was paired too long ago to get a first relay ticket without having \
+                 granted; the node is invited again (`vessel fleet invite`) and joins from there"
+                    .to_owned(),
+            ));
+        };
+        let _granting = self.granting.lock().await;
+        let (files, home, home_name) = (self.files.clone(), self.node, self.name.clone());
+        let (node, key) = (request.node, request.key);
+        let chosen = blocking(move || -> Result<Result<(), WireError>, FileError> {
+            let _lock = FleetLock::acquire(&files)?;
+            let mut bound = bindings::read(&files)?;
+            let claim = Claim {
+                member,
+                paired: Some(paired),
+                node,
+                key: &key,
+                name: None,
+            };
+            if let Err(refused) = check_claim(claim, home, &home_name, &bound, &held) {
+                return Ok(Err(refused));
             }
+            if bound.choose_first(member, node, key) {
+                bindings::write(&files, &bound)?;
+            }
+            Ok(Ok(()))
+        })
+        .await?;
+        if let Err(error) = chosen {
+            tracing::info!(device = %member, %node, %error, "refused a first relay ticket");
+            return Err(refused_ticket());
         }
-        let mut first = self
-            .first_tickets
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        match first.get(&member) {
-            Some(key) if *key != request.key => {
-                tracing::info!(device = %member, "refused a first relay ticket for a second key");
-                Err(refused_ticket())
-            }
-            Some(_) | None => {
-                let _previous = first.insert(member, request.key);
-                Ok(FIRST_TICKET_LIFETIME)
-            }
-        }
+        Ok(FIRST_TICKET_LIFETIME.min(left))
     }
 
     /// What this member's grant names for its home to call it back: `None`
@@ -340,27 +377,57 @@ impl Links {
 }
 
 /// Of the relays a home named, those this member dials (at most
-/// [`MAX_CALLBACK_RELAYS`]), and those it leaves out: `wss://` to a public
-/// host, or any on a host the member reaches its home by.
+/// [`MAX_CALLBACK_RELAYS`]), each with the addresses it may reach, and
+/// those it leaves out. A relay on a host the member reaches its home by is
+/// dialed as the home is. Any other must be `wss://`, not `localhost`, and,
+/// if its host is written as a number, a canonical public address; its
+/// host is then resolved when it is dialed and only public addresses are
+/// tried ([`Reach::Public`], the review's round 7: names like
+/// `127.0.0.1.nip.io` resolve to loopback).
 pub(super) fn dialable(
     offered: &[RouteUrl],
     membership: &Membership,
-) -> (Vec<RouteUrl>, Vec<RouteUrl>) {
+) -> (Vec<(RouteUrl, Reach)>, Vec<RouteUrl>) {
     let home_hosts: Vec<String> = membership
         .relays
         .iter()
         .chain(&membership.direct)
         .filter_map(host_of)
         .collect();
-    let (mut dialed, left_out): (Vec<_>, Vec<_>) = offered.iter().cloned().partition(|relay| {
-        host_of(relay)
-            .is_some_and(|host| (relay.is_tls() && !is_local(&host)) || home_hosts.contains(&host))
-    });
-    dialed.truncate(MAX_CALLBACK_RELAYS);
+    let mut dialed = Vec::new();
+    let mut left_out = Vec::new();
+    for relay in offered {
+        match host_of(relay).and_then(|host| reach_for(relay, &host, &home_hosts)) {
+            Some(reach) if dialed.len() < MAX_CALLBACK_RELAYS => {
+                dialed.push((relay.clone(), reach));
+            }
+            Some(_) | None => left_out.push(relay.clone()),
+        }
+    }
     (dialed, left_out)
 }
 
-/// A route's host, lowercased, without brackets or port.
+/// How `relay`, whose host is `host`, may be dialed, if at all.
+fn reach_for(relay: &RouteUrl, host: &str, home_hosts: &[String]) -> Option<Reach> {
+    if home_hosts.iter().any(|home| home == host) {
+        return Some(Reach::Any);
+    }
+    if !relay.is_tls() || host == "localhost" || host.ends_with(".localhost") {
+        return None;
+    }
+    if let Ok(v6) = host.parse::<Ipv6Addr>() {
+        return is_public(IpAddr::V6(v6)).then_some(Reach::Public);
+    }
+    if numeric_host(host) {
+        // Only the canonical dotted quad: `127.1`, `2130706433`,
+        // `0x7f.0.0.1` and `0177.0.0.1` all mean 127.0.0.1 somewhere.
+        let v4 = host.parse::<Ipv4Addr>().ok()?;
+        return is_public(IpAddr::V4(v4)).then_some(Reach::Public);
+    }
+    Some(Reach::Public)
+}
+
+/// A route's host, lowercased, without brackets, port or a trailing dot.
 fn host_of(route: &RouteUrl) -> Option<String> {
     let rest = route.as_str().split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
@@ -373,36 +440,13 @@ fn host_of(route: &RouteUrl) -> Option<String> {
             .rsplit_once(':')
             .map_or(authority, |(host, _port)| host),
     };
+    let host = host.strip_suffix('.').unwrap_or(host);
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
-}
-
-/// Whether `host` is this machine or a private network: loopback, private,
-/// link-local, unique-local or unspecified addresses, and `localhost`.
-fn is_local(host: &str) -> bool {
-    if host == "localhost" || host.ends_with(".localhost") {
-        return true;
-    }
-    match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(v4)) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-        }
-        Ok(IpAddr::V6(v6)) => {
-            let first = v6.segments().first().copied().unwrap_or(0);
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
-                || v6
-                    .to_ipv4_mapped()
-                    .is_some_and(|v4| v4.is_loopback() || v4.is_private() || v4.is_link_local())
-        }
-        Err(_) => false,
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use vessel_proto::NodePublicKey;
 
     use super::*;
 
@@ -421,32 +465,74 @@ mod tests {
         routes.iter().map(|route| route.parse().unwrap()).collect()
     }
 
+    fn dialed(offered: &[&str], membership: &Membership) -> Vec<(String, Reach)> {
+        dialable(&routes(offered), membership)
+            .0
+            .into_iter()
+            .map(|(relay, reach)| (relay.as_str().to_owned(), reach))
+            .collect()
+    }
+
     #[test]
     fn a_member_dials_only_public_wss_relays_or_its_homes_own_host() {
         let reached_by = membership(&["wss://home.example/vessel"]);
-        let (dialed, left_out) = dialable(
-            &routes(&[
-                "wss://relay.example/vessel",
-                "ws://relay.example:7078",
-                "wss://127.0.0.1:7078",
-                "ws://10.0.0.5:7078",
-                "wss://[fd00::1]:443",
-                "wss://localhost:7078",
-                "wss://192.168.1.2",
-            ]),
-            &reached_by,
+        let offered = [
+            "wss://relay.example/vessel",
+            "ws://relay.example:7078",
+            "wss://127.0.0.1:7078",
+            "ws://10.0.0.5:7078",
+            "wss://[fd00::1]:443",
+            "wss://localhost:7078",
+            "wss://192.168.1.2",
+            "wss://1.1.1.1",
+        ];
+        assert_eq!(
+            dialed(&offered, &reached_by),
+            [
+                ("wss://relay.example/vessel".to_owned(), Reach::Public),
+                ("wss://1.1.1.1".to_owned(), Reach::Public),
+            ]
         );
-        assert_eq!(dialed, routes(&["wss://relay.example/vessel"]));
-        assert_eq!(left_out.len(), 6);
+        assert_eq!(dialable(&routes(&offered), &reached_by).1.len(), 6);
 
-        // The host it reaches its home by: the same machine, or network.
+        // The host it reaches its home by: the same machine, or network,
+        // dialed as the home is.
         let local = membership(&["ws://127.0.0.1:7077"]);
-        let (dialed, left_out) = dialable(
-            &routes(&["ws://127.0.0.1:7078", "ws://127.0.0.2:7078"]),
-            &local,
+        assert_eq!(
+            dialed(&["ws://127.0.0.1:7078", "ws://127.0.0.2:7078"], &local),
+            [("ws://127.0.0.1:7078".to_owned(), Reach::Any)]
         );
-        assert_eq!(dialed, routes(&["ws://127.0.0.1:7078"]));
-        assert_eq!(left_out, routes(&["ws://127.0.0.2:7078"]));
+    }
+
+    /// The review's round 7, `poc_r7_hosts_the_local_check_misses`: these
+    /// were dialed as public. Numbers written other than as a canonical
+    /// dotted quad are refused outright; local and special addresses are
+    /// refused; names (`*.nip.io` and the like) are dialed only at public
+    /// addresses they resolve to (`vessel_relay`'s `Reach::Public`).
+    #[test]
+    fn hosts_that_mean_this_machine_or_a_private_network_are_never_dialed_as_public() {
+        let member = membership(&["wss://home.example/vessel"]);
+        let refused = [
+            "wss://127.1:443",
+            "wss://2130706433",
+            "wss://0x7f.0.0.1",
+            "wss://0177.0.0.1",
+            "wss://[::ffff:0.0.0.0]:443",
+            "wss://[::127.0.0.1]",
+            "wss://100.100.100.100",
+            "wss://[fec0::1]",
+            "wss://localhost.:443",
+            "wss://0.0.0.0.",
+        ];
+        assert_eq!(dialed(&refused, &member), []);
+        // Names are resolved when dialed, and only public addresses tried.
+        assert_eq!(
+            dialed(&["wss://127.0.0.1.nip.io", "wss://localtest.me"], &member),
+            [
+                ("wss://127.0.0.1.nip.io".to_owned(), Reach::Public),
+                ("wss://localtest.me".to_owned(), Reach::Public),
+            ]
+        );
     }
 
     #[test]
@@ -459,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn hosts_are_read_without_port_brackets_or_credentials() {
+    fn hosts_are_read_without_port_brackets_credentials_or_a_trailing_dot() {
         let host = |route: &str| host_of(&route.parse().unwrap());
         assert_eq!(host("ws://127.0.0.1:7078/x").as_deref(), Some("127.0.0.1"));
         assert_eq!(host("wss://[::1]:443").as_deref(), Some("::1"));
@@ -467,8 +553,6 @@ mod tests {
             host("wss://user@Relay.Example").as_deref(),
             Some("relay.example")
         );
-        assert!(is_local("::ffff:192.168.0.1"));
-        assert!(!is_local("relay.example"));
-        assert!(!is_local("203.0.113.9"));
+        assert_eq!(host("wss://localhost.:443").as_deref(), Some("localhost"));
     }
 }

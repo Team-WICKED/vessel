@@ -813,6 +813,43 @@ reproduced problems, fixed in this order:
   - Accepted: a member with no route depends on its home's relay and on
     reaching its home at least once a day; a device's first ticket
     registers one key of its choosing for ten minutes.
+- **Round 7 (the reviewer on 88fe1d4).** Round 6's core held: the token
+  never leaves the home; a ticket works only for its own key, checked
+  (MAC, key, expiry, the 48 h ceiling) before the proof; revoked and
+  forgotten devices are refused; moving homes works; the host-equality
+  rule stands (the home already chooses the routes members dial); the
+  canary covers the path. Two more:
+  - **First tickets renewed for ever.** A `sync` device that never joined
+    renewed its ten-minute first ticket for the same key as often as it
+    asked (5 of 5), keeping a relay place for good, and a home's restart
+    let it name another key (the choice was in memory). Now a first ticket
+    comes only within a window after the device was paired (an hour,
+    `FleetConfig::first_ticket_window`, judged by the home's own record of
+    the pairing, and never reaching past it); the device's node and key
+    are kept in `bindings.json` (`first`), so a restart changes nothing;
+    and its grant must claim that node and key (`check_record`, before the
+    home dials). After the window, the node is invited again. Tests:
+    `e2e/callback.rs` `a_first_ticket_comes_only_within_its_window_after_pairing`
+    (the proof of concept, the window shortened to 2 s) and
+    `a_devices_first_ticket_key_holds_across_a_restart_and_for_its_grant`;
+    each fails with its check taken out.
+  - **The public check missed forms** (low). `127.1`, `2130706433`,
+    `0x7f.0.0.1`, `0177.0.0.1`, `[::ffff:0.0.0.0]`, `[::127.0.0.1]`, CGNAT
+    (`100.64.0.0/10`), site-local `fec0::/10`, `localhost.` and names like
+    `127.0.0.1.nip.io` passed as public. The node had no classifier for
+    "public" (only loopback checks), so `vessel_relay::reach` is one:
+    `is_public` (loopback, private, shared, link- and site-local,
+    multicast, reserved, unspecified; IPv4 in IPv6 judged as IPv4) and
+    `numeric_host`. A relay not on the home's own host is dialed only
+    `wss://`, not `localhost`, with a numeric host only as a canonical
+    public dotted quad, and through `Reach::Public`: the link resolves the
+    host when it connects and connects only to a public address it
+    checked, so a name cannot resolve one way for the check and another
+    for the connection. The host-equality exception is unchanged. Tests:
+    the policy's `hosts_that_mean_this_machine_or_a_private_network_are_never_dialed_as_public`
+    (the proof of concept's list), `vessel-relay`'s `reach` unit tests and
+    `socket::a_public_only_dial_never_reaches_this_machine` (loopback,
+    `localhost` and mapped addresses refused at dial time).
 - **Documented, not changed** (ADR 0013, "Known limits"): an agent's
   limits are per node, so 8 live sessions on each node it reaches (8 × N);
   and a relaying member's own scopes on the home do not cap the calls it
