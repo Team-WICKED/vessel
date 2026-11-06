@@ -12,6 +12,7 @@ mod commands;
 mod connect;
 mod devices;
 mod error;
+mod init;
 mod io;
 mod log;
 mod nodes;
@@ -44,6 +45,7 @@ async fn main() -> ExitCode {
         | Command::Log { .. }
         | Command::Kill { .. }
         | Command::Session { .. }
+        | Command::Init(_)
         | Command::Mcp => "warn",
     };
     tracing_subscriber::fmt()

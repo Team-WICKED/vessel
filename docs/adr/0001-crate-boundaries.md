@@ -41,7 +41,7 @@ vessel-secure   -> proto                   (milestone 3)
 vessel-relay    -> proto, secure           (milestone 3)
 vessel-fleet    -> proto, harness          (milestone 4)
 vessel-mcp      -> proto, client           (milestone 4)
-vessel-cli      -> proto, client, node, remote, mcp
+vessel-cli      -> proto, client, node, remote, mcp, harness
 vessel-testkit  (fake harness binaries for tests; dev-dependency only)
 ```
 
@@ -80,7 +80,10 @@ MCP server a node attaches to every session so its agent can drive
 sessions (ADR 0013). It is a client like any other, so its edges are
 `-> client` (the local-socket connection with the agent's credential) and
 `-> proto`; `vessel-cli -> mcp` runs it. The MCP protocol itself comes from
-the `rmcp` SDK (plan decision 8).
+the `rmcp` SDK (plan decision 8). `vessel-cli -> harness` is for `vessel
+init` (F5): which harnesses are installed, their install and login
+commands, and other accounts' homes, all of which only `vessel-harness`
+knows.
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.

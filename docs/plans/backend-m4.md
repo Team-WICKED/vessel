@@ -366,6 +366,38 @@ member vesseld                         home vesseld
   discovery, login offers, `--join`. Tested against a temporary `HOME` with
   fake harnesses; a second run changes nothing.
 
+### F5 progress
+
+2026-11-06, moved from Track F to Track H's worker, branch
+`backend/m4-profiles`.
+
+- **Done:** `vessel init [--service] [--yes] [--install]` (vessel-cli
+  `init`), with the harness knowledge in `vessel-harness` (`setup`: install
+  commands, login commands, other accounts' homes, adding a profile to the
+  file). Each step says `done`, `already done` or `skipped` with why, and
+  what is left is listed at the end. Steps: the data directory and node
+  identity; the harnesses found; install offers (the vendor's `npm`
+  command, run only after a yes; `--yes` alone never installs, `--install
+  --yes` does); profiles for other accounts' homes beside the default ones
+  (`~/.claude-<name>` holding `.credentials.json` or `.claude.json`,
+  `~/.codex-<name>` holding `auth.json`; names only), written into
+  `profiles.toml` after a yes with the file's own text kept; a login check
+  per profile, with the command to log in printed (only the home variable
+  is ever shown); `--service`: a systemd user unit (with the `PATH` init ran
+  with) or a launchd agent, enabled, with how to undo, left alone if it
+  differs; Windows says it is not available yet.
+- **Waiting for F2:** `--join` refuses before changing anything; the
+  pairing, pull and apply come with fleet sync.
+- **Tests** (vessel-cli, the `vessel` binary with a temporary home, made-up
+  account names, and `fake-tool` as `npm`, `systemctl` and `launchctl` on a
+  `PATH` that holds only fakes): a first run sets up, a second changes no
+  file and runs no tool; no answers or "no" install and write nothing, a
+  yes runs that one install, `--install` needs `--yes`; `--join` changes
+  nothing; the service is installed once, an edited file left alone (and
+  Windows reports it unavailable); logged-out profiles get their login
+  command and a token in `profiles.toml` never appears. Unit tests for
+  discovery, adding a profile, the unit and plist text.
+
 ## Track X: across nodes (after H4 and F2)
 
 - `fleet.forward` on the home, the intersection rule and the creator chain

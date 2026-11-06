@@ -18,7 +18,7 @@ use crate::attach::{self, terminal};
 use crate::connect::{connect, connect_to, data_dir, is_here};
 use crate::error::CliError;
 use crate::selector::SessionSelector;
-use crate::{devices, io, nodes, remote, render};
+use crate::{devices, init, io, nodes, remote, render};
 
 pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
     let target = &cli.target;
@@ -80,6 +80,15 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             Ok(client.kill(info.id).await?)
         }
         Command::Mcp => Ok(Box::pin(vessel_mcp::run_stdio()).await?),
+        Command::Init(args) => {
+            let options = init::Options {
+                service: args.service,
+                join: args.join,
+                consent: init::Consent::new(args.yes, args.install),
+                home: args.home.or_else(dirs::home_dir).ok_or(CliError::NoHome)?,
+            };
+            Box::pin(init::run(data_dir(target)?, options)).await
+        }
         Command::Session {
             command:
                 SessionCommand::MoveProfile {

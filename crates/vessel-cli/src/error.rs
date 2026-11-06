@@ -126,6 +126,22 @@ pub(crate) enum CliError {
     Release(#[from] ReleaseError),
     #[error(transparent)]
     Build(#[from] BuildError),
+    /// `vessel init`: the data directory or `profiles.toml` could not be
+    /// prepared, read or written.
+    #[error("cannot prepare the data directory")]
+    Prepare(#[source] vessel_node::StoreError),
+    /// `vessel init`: a found profile could not be added to `profiles.toml`.
+    #[error("cannot add the profiles")]
+    AddProfile(#[source] vessel_harness::AddProfileError),
+    /// `vessel init`: the profiles to add would not load; nothing was written.
+    #[error("the profiles to add would not load ({0}); nothing was written")]
+    ProfilesAfterAdd(String),
+    /// `vessel init --join` before fleet sync exists (plan F2).
+    #[error(
+        "`vessel init --join` needs fleet sync, which this build does not have yet; \
+         nothing was changed. Run `vessel init` without --join"
+    )]
+    JoinNotYet,
     /// `vessel mcp` stopped (ADR 0013).
     #[error(transparent)]
     Mcp(#[from] vessel_mcp::McpError),
