@@ -40,14 +40,16 @@ yet", after the scope check like every method.)
   only one the member takes `fleet.deliver` from, and leaving revokes it).
   A member grants once per join: if its owner revokes the home's device,
   the home stays cut off until the node joins again.
-  The home keeps a record of every node id it bound to a key and of the
-  node every member device granted for, revoked and replaced devices
-  included, and answers `conflict` to a grant that would rebind a device,
-  bind an id to another key or a key to another id, name the home's own
-  id, or a name the home or another live member uses (the same id and
-  key through another device is the node joined again, and replaces the
-  older grant; an id goes to a new key only after the home's owner runs
-  `vessel fleet forget <node>`); `conflict` also while the same device
+  The home keeps a record of every node id it bound to a key and a name,
+  and of the node every member device granted for, revoked and replaced
+  devices included, and answers `conflict` to a grant that would rebind a
+  device, bind an id to another key or a key to another id, rename a
+  node, name the home's own id, or use a name the home or another member
+  holds (also while that member's device is revoked). The same id and key
+  through another device is the node joined again, and replaces the
+  older grant. An id goes to a new key, or a node to a new name, only
+  after the home's owner runs `vessel fleet forget <node>`, and then only
+  for a member device paired after it (the node is invited again); `conflict` also while the same device
   has a grant in progress; `invalid_request` to a link with no route or
   more than 8; and `unavailable`, without details, when it cannot pair
   (within 30 s); `fleet.peers`

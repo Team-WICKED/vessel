@@ -617,6 +617,35 @@ reproduced problems, fixed in this order:
     member's binding to their own device: a denial of service and a change
     of provenance, with no scope gained; the record keeps the old device
     from claiming anything else.
+- **Round 3 (the reviewer on 5dd51d3).** A to D held (a second grant
+  gets `conflict`, other grants land in half a second, slow ones end at
+  30 s). Two more, in A's area:
+  - **Names after a revocation.** The name check looked only at live
+    grants and the record kept no names: while a member's device was
+    revoked, a `sync` device's own node (its own id and key) took the
+    member's name, the member was then refused for the clash, and calls
+    by that name (`vessel mcp`, `--to`) went to the other node. The
+    record now keeps each node's name (seeded from the kept grants),
+    reserved for it while its device is revoked too; a node keeps its
+    name, and renaming it is the owner's `forget` (`e2e/grants.rs`:
+    `a_revoked_members_name_stays_reserved`, the proof of concept as a
+    refusal, then the member back under its name).
+  - **The window after `forget`.** The forgotten node left the fleet's list
+    for every member device to see, and an impostor's grant for its id (or
+    name) could land before the reinstalled node's. Chosen: (b), a
+    forgotten id or name is taken only by a member device paired after the
+    forget. A reinstalled node has to be invited and join again anyway
+    (its credential went with its data), so this costs the owner nothing
+    and shuts out every device that existed before; (a), `forget --key`,
+    would have the owner find and type the new node's key. An invitation
+    made before the forget and used after it passes, so the owner invites
+    after forgetting (`forget` says so). The trust-on-first-use window
+    for an id nobody has seen stays as accepted (ids are random, and
+    usually seen only after the grant); it and this window are where
+    `secret.copy` could reach an impostor that answers its probe, which
+    is why both matter (`e2e/grants.rs`:
+    `after_a_forget_no_earlier_device_takes_the_id_or_the_name`, and the
+    reinstalled node is granted only once invited again).
 - **Names stay unique (coordinator's decision, 2026-11-06).** Names pick
   nodes (`--to`, `vessel mcp`'s `node`), so a duplicate is ambiguous and
   the home keeps refusing it (fail closed). The operator's path is

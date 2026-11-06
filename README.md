@@ -216,10 +216,12 @@ vessel fleet members
   one: name each node when you join it (`vessel node start --name <name>`
   or `VESSEL_NAME`). A refused member says why in `vessel fleet status`
   and asks again after a restart under its new name.
-- The home binds each member's node id to its key for good. A member
-  reinstalled with a new key is refused until you run `vessel fleet forget
-  <node id>` on the home (`--data-dir` of the home's node); revoke its old
-  device there too if it should not sync any more.
+- The home binds each member's node id to its key and name for good. A
+  member reinstalled with a new key, or renamed, is refused until you run
+  `vessel fleet forget <node id>` on the home (`--data-dir` of the home's
+  node) and then invite it again (`vessel fleet invite`): only a device
+  paired after the forget may take the id and name. Revoke its old device
+  there too if it should not sync any more.
 
 - Edit the sources on the home; members follow within seconds (the home
   watches `<data_dir>/fleet.toml` and its sources).

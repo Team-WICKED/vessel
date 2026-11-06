@@ -322,8 +322,14 @@ async fn forget(files: FleetFiles, node: NodeId) -> Result<(), CliError> {
         None => format!("this home has no binding for node {node}\n"),
         Some(forgot) => {
             let mut said = format!(
-                "forgot node {node}'s key {}; it may grant again under a new one\n",
-                forgot.key
+                "forgot node {node}'s key {}{}; invite it again (`vessel fleet invite`) and \
+                 join it from there: only a device paired from now on may take its id and \
+                 name\n",
+                forgot.key,
+                forgot
+                    .name
+                    .as_deref()
+                    .map_or_else(String::new, |name| format!(" and its name `{name}`"))
             );
             for device in &forgot.devices {
                 let _ok = writeln!(

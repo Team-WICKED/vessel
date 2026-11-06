@@ -238,6 +238,8 @@ impl Drop for InFlight<'_> {
 #[derive(Debug, Clone, Copy)]
 struct Claim<'a> {
     member: DeviceId,
+    /// When that device was paired (`None`: not known, so not recent).
+    paired: Option<DateTime<Utc>>,
     node: NodeId,
     key: &'a NodePublicKey,
     name: Option<&'a str>,
@@ -279,30 +281,7 @@ fn check_claim(
              (`--to`, `vessel mcp`), so they are unique in a fleet: {RENAME}"
         )));
     }
-    // The record, revoked and replaced devices included: a device keeps its
-    // node, a node its key, a key its node.
-    if let Some(node) = bound.node_of(claim.member)
-        && node != claim.node
-    {
-        return Err(conflict(format!(
-            "this device speaks for node {node} on this home; a device's node never changes \
-             (join again from the other node)"
-        )));
-    }
-    if bound.key_of(claim.node).is_some_and(|key| key != claim.key) {
-        return Err(conflict(format!(
-            "node {node} is bound to another key on this home; if it was reinstalled, the \
-             home's owner runs `vessel fleet forget {node}` there",
-            node = claim.node
-        )));
-    }
-    if let Some(node) = bound.node_with(claim.key)
-        && node != claim.node
-    {
-        return Err(conflict(format!(
-            "the link's key belongs to node {node} on this home"
-        )));
-    }
+    check_record(claim, bound)?;
     // The live grants (also those from before the record): the same node
     // through another device replaces its grant; names are unique.
     let mut replaced = Vec::new();
@@ -344,6 +323,73 @@ fn check_claim(
         }
     }
     Ok(replaced)
+}
+
+/// The part of [`check_claim`] the home's record decides (`bindings.rs`),
+/// revoked and replaced devices included.
+fn check_record(claim: Claim<'_>, bound: &Bindings) -> Result<(), WireError> {
+    // The record, revoked and replaced devices included: a device keeps its
+    // node, a node its key, a key its node.
+    if let Some(node) = bound.node_of(claim.member)
+        && node != claim.node
+    {
+        return Err(conflict(format!(
+            "this device speaks for node {node} on this home; a device's node never changes \
+             (join again from the other node)"
+        )));
+    }
+    if bound.key_of(claim.node).is_some_and(|key| key != claim.key) {
+        return Err(conflict(format!(
+            "node {node} is bound to another key on this home; if it was reinstalled, the \
+             home's owner runs `vessel fleet forget {node}` there and invites it again",
+            node = claim.node
+        )));
+    }
+    if let Some(node) = bound.node_with(claim.key)
+        && node != claim.node
+    {
+        return Err(conflict(format!(
+            "the link's key belongs to node {node} on this home"
+        )));
+    }
+    // Names too, also while a member's device is revoked; a node keeps its
+    // own (round 3, finding 1).
+    if let Some(name) = claim.name {
+        if let Some(known) = bound.name_of(claim.node)
+            && known != name
+        {
+            return Err(conflict(format!(
+                "this node is known as `{known}` on this home, not `{name}`; a node keeps \
+                 its name there (start it as `{known}` again, or the home's owner runs \
+                 `vessel fleet forget {node}` and invites it again)",
+                node = claim.node
+            )));
+        }
+        if let Some(node) = bound.node_named(name)
+            && node != claim.node
+        {
+            return Err(conflict(format!(
+                "this node is named `{name}`, as node {node} is on this home (kept for it \
+                 while its device is revoked too); names pick nodes (`--to`, `vessel \
+                 mcp`), so they are unique in a fleet: {RENAME}"
+            )));
+        }
+    }
+    // A forgotten id or name goes only to a device paired after the forget
+    // (round 3, finding 2).
+    if bound.key_of(claim.node).is_none() {
+        let name = claim.name.filter(|name| bound.node_named(name).is_none());
+        if let Some(forgotten) = bound.forgotten_at(claim.node, name)
+            && claim.paired.is_none_or(|paired| paired <= forgotten)
+        {
+            return Err(conflict(format!(
+                "this home's owner forgot this node (or its name) at {forgotten}; only a \
+                 device paired since may take them: the node is invited again (`vessel \
+                 fleet invite`) and joins from there"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn client_info() -> ClientInfo {
@@ -806,10 +852,12 @@ impl Links {
         }
         let _accepting = self.accepting(member)?;
         let node = offer.node;
+        let since = self.paired_at(member).await;
         {
             let _granting = self.granting.lock().await;
             let claim = Claim {
                 member,
+                paired: since,
                 node,
                 key: &offer.key,
                 name: None,
@@ -842,6 +890,7 @@ impl Links {
             let mut bound = bindings::read(&files)?;
             let claim = Claim {
                 member,
+                paired: since,
                 node: grant.node,
                 key: &grant.key,
                 name: Some(&grant.name),
@@ -861,7 +910,7 @@ impl Links {
                 files::remove(&dir.join(format!("{old}.json")))?;
                 files::remove(&dir.join(format!("{old}.credential")))?;
             }
-            bound.bind(member, grant.node, grant.key);
+            bound.bind(member, grant.node, grant.key, Some(&grant.name));
             bindings::write(&files, &bound)?;
             Ok(Ok(replaced))
         })
@@ -870,6 +919,17 @@ impl Links {
         drop(self.members.lock().await.remove(&node));
         tracing::info!(member = %node, device = %member, replaced = ?replaced, "a member granted this home a credential");
         Ok(())
+    }
+
+    /// When member device `member` was paired.
+    async fn paired_at(&self, member: DeviceId) -> Option<DateTime<Utc>> {
+        self.devices
+            .list()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|device| device.id == member)
+            .map(|device| device.created_at)
     }
 
     /// The record of bindings (`bindings.rs`).
@@ -1084,9 +1144,10 @@ mod tests {
 
     /// The checks of a grant against the record and the grants held (the
     /// review of 2026-11-06: a `sync` device claimed another member's node
-    /// id; round 2: while that member's device was revoked).
+    /// id; round 2: while that member's device was revoked; round 3: its
+    /// name, and the id and name right after a forget).
     #[test]
-    fn a_grant_may_not_make_one_nodes_id_or_key_another_s() {
+    fn a_grant_may_not_make_one_nodes_id_key_or_name_another_s() {
         let home = NodeId::random();
         let (desktop, laptop, newcomer, old_tablet) = (
             DeviceId::random(),
@@ -1104,11 +1165,12 @@ mod tests {
         // The record: the two live grants, and a tablet whose device the
         // home's owner revoked (so it has no live grant).
         let mut bound = Bindings::default();
-        bound.bind(desktop, desktop_node, keys[1]);
-        bound.bind(laptop, laptop_node, keys[2]);
-        bound.bind(old_tablet, tablet_node, keys[4]);
+        bound.bind(desktop, desktop_node, keys[1], Some("desktop"));
+        bound.bind(laptop, laptop_node, keys[2], Some("laptop"));
+        bound.bind(old_tablet, tablet_node, keys[4], Some("tablet"));
         let claim = |member, node, key_byte: usize, name| Claim {
             member,
+            paired: Some(Utc::now()),
             node,
             key: &keys[key_byte],
             name,
@@ -1147,9 +1209,14 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        // Another member's name, once the home knows the node's.
-        let message = refused(check(claim(newcomer, new_node, 3, Some("laptop"))));
-        assert!(message.contains("named `laptop`"), "{message}");
+        // Names: another member's, live or with its device revoked; and a
+        // node keeps its own.
+        for name in ["laptop", "tablet"] {
+            let message = refused(check(claim(newcomer, new_node, 3, Some(name))));
+            assert!(message.contains(&format!("named `{name}`")), "{message}");
+        }
+        let message = refused(check(claim(newcomer, desktop_node, 1, Some("desk"))));
+        assert!(message.contains("known as `desktop`"), "{message}");
         // The same node joined again through a new device: it replaces the
         // older grant; the revoked tablet comes back with its own key.
         assert_eq!(
@@ -1161,5 +1228,44 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// Round 3, finding 2: after the owner forgets a node, its id and name
+    /// go only to a device paired since.
+    #[test]
+    fn a_forgotten_id_or_name_goes_only_to_a_device_paired_since() {
+        let home = NodeId::random();
+        let dir = tempfile::tempdir().unwrap();
+        let files = FleetFiles::new(&vessel_store::DataDir::new(dir.path()));
+        let (desktop, desktop_node) = (DeviceId::random(), NodeId::random());
+        let mut bound = Bindings::default();
+        bound.bind(desktop, desktop_node, key(1), Some("desktop"));
+        bindings::write(&files, &bound).unwrap();
+        let before = Utc::now();
+        let _forgot = bindings::forget(&files, desktop_node).unwrap().unwrap();
+        let after = Utc::now();
+        let bound = bindings::read(&files).unwrap();
+        let keys = [key(5), key(6)];
+        let claim = |paired, node, key_byte: usize, name| Claim {
+            member: DeviceId::random(),
+            paired,
+            node,
+            key: &keys[key_byte],
+            name,
+        };
+        let check = |claim| check_claim(claim, home, "home", &bound, &[]);
+
+        // A device from before the forget: neither the id nor the name.
+        for paired in [Some(before), None] {
+            let message = refused(check(claim(paired, desktop_node, 0, None)));
+            assert!(message.contains("forgot"), "{message}");
+            let message = refused(check(claim(paired, NodeId::random(), 1, Some("desktop"))));
+            assert!(message.contains("forgot"), "{message}");
+        }
+        // One paired since: both, with a new key.
+        let since = after.checked_add_signed(chrono::TimeDelta::seconds(1));
+        assert!(check(claim(since, desktop_node, 0, Some("desktop"))).is_ok());
+        // Other ids and names are not held up.
+        assert!(check(claim(Some(before), NodeId::random(), 1, Some("phone"))).is_ok());
     }
 }
