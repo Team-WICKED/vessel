@@ -27,7 +27,7 @@ use crate::blobs::BlobStore;
 use crate::dir::Dir;
 use crate::files::Mode;
 use crate::managed::{Content, Managed, Record};
-use crate::place::{Found, Walk, look, reach};
+use crate::place::{Found, Reached, Walk, look, reach};
 use crate::plan::{Decision, Place, Plan, Step, decide, incoming_place};
 
 /// What applying a plan did.
@@ -263,7 +263,7 @@ fn write(
     let Walk::Reached(reached) = reach(&place.root, &place.rel, &plan.protected, true)? else {
         return Err(ApplyError::Changed);
     };
-    let parent = reached.parent()?;
+    let parent = reached.parent();
     let name = place.rel.name();
     if !expected(&look(parent, name, &plan.protected)?) {
         return Err(ApplyError::Changed);
@@ -330,7 +330,7 @@ fn remove(plan: &Plan, place: &Place, record: &Record) -> Result<bool, ApplyErro
     let Walk::Reached(reached) = reach(&place.root, &place.rel, &plan.protected, false)? else {
         return Ok(false);
     };
-    let parent = reached.parent()?;
+    let parent = reached.parent();
     let name = place.rel.name();
     // Checked once more through the open directory, right before removing.
     let Found::File { content, identity } = look(parent, name, &plan.protected)? else {
@@ -340,14 +340,14 @@ fn remove(plan: &Plan, place: &Place, record: &Record) -> Result<bool, ApplyErro
         return Ok(false);
     }
     parent.remove_file(name)?;
-    remove_empty_parents(plan, place, &reached.dirs);
+    remove_empty_parents(plan, place, &reached);
     Ok(true)
 }
 
 /// Remove the now empty directories above `place`, deepest first, never
 /// the skills directory or anything above it; a directory that is not
 /// empty ends it.
-fn remove_empty_parents(plan: &Plan, place: &Place, dirs: &[Dir]) {
+fn remove_empty_parents(plan: &Plan, place: &Place, reached: &Reached) {
     let names = place.rel.names();
     let keep = plan
         .roots
@@ -360,7 +360,7 @@ fn remove_empty_parents(plan: &Plan, place: &Place, dirs: &[Dir]) {
     let mut depth = names.len().saturating_sub(1);
     while depth > keep {
         let above = depth.saturating_sub(1);
-        let (Some(dir), Some(name)) = (dirs.get(above), names.get(above)) else {
+        let (Some(dir), Some(name)) = (reached.at(above), names.get(above)) else {
             break;
         };
         if dir.remove_dir(name).is_err() {

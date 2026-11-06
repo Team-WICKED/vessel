@@ -31,13 +31,18 @@ pub(crate) fn hash_reader(mut reader: impl Read) -> io::Result<(BlobHash, u64)> 
     }
 }
 
+/// A path that names no file (`/`, `..`) where a file was meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a path without a file name")]
+pub(crate) struct NoFileName;
+
 /// `.<name>.<random>.tmp` beside `path`.
 pub(crate) fn temporary_beside(path: &Path) -> io::Result<PathBuf> {
     let mut suffix = [0_u8; 8];
     getrandom::fill(&mut suffix).map_err(io::Error::other)?;
     let name = path
         .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a path without a file name"))?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, NoFileName))?
         .to_string_lossy()
         .into_owned();
     Ok(path.with_file_name(format!(".{name}.{:016x}.tmp", u64::from_le_bytes(suffix))))

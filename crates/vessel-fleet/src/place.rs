@@ -96,17 +96,25 @@ pub(crate) enum Found {
 /// The directories from the root down to a place's own directory, open.
 #[derive(Debug)]
 pub(crate) struct Reached {
-    /// `dirs[i]` is the directory at the first `i` names of the place
-    /// (`dirs[0]` the root); the last is the place's own directory.
-    pub(crate) dirs: Vec<Dir>,
+    /// The directories above the place's own, the root first.
+    above: Vec<Dir>,
+    /// The place's own directory.
+    parent: Dir,
 }
 
 impl Reached {
     /// The place's own directory.
-    pub(crate) fn parent(&self) -> io::Result<&Dir> {
-        self.dirs
-            .last()
-            .ok_or_else(|| io::Error::other("no directory was opened"))
+    pub(crate) const fn parent(&self) -> &Dir {
+        &self.parent
+    }
+
+    /// The directory at the place's first `depth` names (0: the root).
+    pub(crate) fn at(&self, depth: usize) -> Option<&Dir> {
+        if depth == self.above.len() {
+            Some(&self.parent)
+        } else {
+            self.above.get(depth)
+        }
     }
 }
 
@@ -129,15 +137,13 @@ pub(crate) fn reach(
     protected: &Protected,
     create: bool,
 ) -> io::Result<Walk> {
-    let mut dirs = vec![Dir::open_root(root)?];
+    let mut above = Vec::new();
+    let mut current = Dir::open_root(root)?;
     let parents = rel
         .names()
         .split_last()
         .map_or(&[][..], |(_last, parents)| parents);
     for name in parents {
-        let current = dirs
-            .last()
-            .ok_or_else(|| io::Error::other("no directory was opened"))?;
         let canonical = current.path().join(name);
         if protected.covers(&canonical) {
             return Ok(Walk::Stopped(Found::Source));
@@ -149,9 +155,12 @@ pub(crate) fn reach(
             Entry::Symlink => return Ok(Walk::Stopped(symlink(canonical, protected))),
             Entry::File | Entry::Other => return Ok(Walk::Stopped(Found::Blocked)),
         };
-        dirs.push(next);
+        above.push(std::mem::replace(&mut current, next));
     }
-    Ok(Walk::Reached(Reached { dirs }))
+    Ok(Walk::Reached(Reached {
+        above,
+        parent: current,
+    }))
 }
 
 /// What is at `rel` under `root` (canonical), without following any
@@ -159,7 +168,7 @@ pub(crate) fn reach(
 pub(crate) fn inspect(root: &Path, rel: &Rel, protected: &Protected) -> io::Result<Found> {
     match reach(root, rel, protected, false)? {
         Walk::Stopped(found) => Ok(found),
-        Walk::Reached(reached) => look(reached.parent()?, rel.name(), protected),
+        Walk::Reached(reached) => look(reached.parent(), rel.name(), protected),
     }
 }
 

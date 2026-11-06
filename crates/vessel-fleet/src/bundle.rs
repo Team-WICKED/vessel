@@ -81,7 +81,11 @@ impl Sources {
 /// A name pattern: `*` matches any run of characters, `?` any one, within
 /// one name (no `/`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SkipGlob(String);
+pub struct SkipGlob {
+    text: String,
+    /// The pattern's characters, split once so matching allocates nothing.
+    pattern: Box<[char]>,
+}
 
 /// Text that is not a [`SkipGlob`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -95,13 +99,16 @@ impl FromStr for SkipGlob {
         if text.is_empty() || text.contains(['/', '\\']) {
             return Err(InvalidSkipGlob(text.to_owned()));
         }
-        Ok(Self(text.to_owned()))
+        Ok(Self {
+            text: text.to_owned(),
+            pattern: text.chars().collect(),
+        })
     }
 }
 
 impl fmt::Display for SkipGlob {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.text)
     }
 }
 
@@ -109,32 +116,33 @@ impl SkipGlob {
     /// Whether `name` matches.
     #[must_use]
     pub fn matches(&self, name: &str) -> bool {
-        let pattern: Vec<char> = self.0.chars().collect();
-        let name: Vec<char> = name.chars().collect();
-        // Greedy match with one backtrack point for the last `*`.
+        let char_at = |at: usize| name.get(at..).and_then(|rest| rest.chars().next());
+        // Greedy match with one backtrack point for the last `*`; `n` is a
+        // byte offset into `name`, `p` an index into the pattern.
         let (mut p, mut n) = (0_usize, 0_usize);
         let mut star: Option<(usize, usize)> = None;
-        while n < name.len() {
-            match pattern.get(p) {
+        while let Some(c) = char_at(n) {
+            match self.pattern.get(p) {
                 Some('*') => {
                     star = Some((p, n));
                     p = p.saturating_add(1);
                 }
-                Some(&c) if c == '?' || Some(&c) == name.get(n) => {
+                Some(&wanted) if wanted == '?' || wanted == c => {
                     p = p.saturating_add(1);
-                    n = n.saturating_add(1);
+                    n = n.saturating_add(c.len_utf8());
                 }
                 Some(_) | None => match star {
                     Some((star_p, star_n)) => {
+                        let skipped = char_at(star_n).map_or(1, char::len_utf8);
                         p = star_p.saturating_add(1);
-                        n = star_n.saturating_add(1);
+                        n = star_n.saturating_add(skipped);
                         star = Some((star_p, n));
                     }
                     None => return false,
                 },
             }
         }
-        pattern
+        self.pattern
             .get(p..)
             .is_some_and(|rest| rest.iter().all(|&c| c == '*'))
     }
@@ -227,6 +235,9 @@ pub enum BundleError {
     /// A file could not be put in the blob store.
     #[error("the blob store: {0}")]
     Store(#[source] io::Error),
+    /// A bundle path this version builds is refused (a bug).
+    #[error("bundle path: {0}")]
+    Path(#[source] vessel_proto::InvalidBundlePath),
     /// The generation number ran out.
     #[error("the bundle generation ran out")]
     Generation,
@@ -252,8 +263,9 @@ pub fn bundle(
         visited: BTreeSet::new(),
     };
     if let Some(instructions) = &sources.instructions {
-        let path = bundle_path(crate::INSTRUCTIONS)
-            .ok_or_else(|| read_error(instructions, invalid("no bundle path")))?;
+        let path = crate::INSTRUCTIONS
+            .parse::<BundlePath>()
+            .map_err(BundleError::Path)?;
         builder.add_file(instructions, path, true)?;
     }
     if let Some(skills) = &sources.skills {
@@ -480,10 +492,6 @@ fn read_error(path: &Path, source: io::Error) -> BundleError {
     }
 }
 
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message.to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,6 +513,9 @@ mod tests {
         assert!(glob("*").matches(""));
         assert!(glob("*.md").matches("x.y.md"));
         assert!(!glob("*.md").matches("x.mdx"));
+        assert!(glob("노*").matches("노드-추가"));
+        assert!(glob("?드*").matches("노드"));
+        assert!(!glob("?드").matches("노드-"));
         assert!("a/b".parse::<SkipGlob>().is_err());
         assert!("".parse::<SkipGlob>().is_err());
     }

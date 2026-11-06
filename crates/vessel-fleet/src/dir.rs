@@ -74,6 +74,13 @@ pub(crate) struct Opened {
 #[error("not a regular file")]
 pub(crate) struct NotRegular;
 
+/// Something other than a plain directory where one was needed (Windows;
+/// on Unix the open itself refuses it).
+#[cfg_attr(unix, expect(dead_code, reason = "Unix refuses it in `openat`"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{} is not a plain directory", .0.display())]
+pub(crate) struct NotADirectory(PathBuf);
+
 /// An open directory.
 #[derive(Debug)]
 pub(crate) struct Dir {
@@ -216,7 +223,7 @@ mod imp {
     fn not_a_directory(path: &Path) -> io::Error {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{} is not a plain directory", path.display()),
+            super::NotADirectory(path.to_path_buf()),
         )
     }
 
