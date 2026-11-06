@@ -13,30 +13,53 @@ file references.
 
 ## State (2026-11-06)
 
-- **Track P, on `backend/m3-pair`:**
+- **Track P, on `backend/m3-pair`, integrated with Track S:**
   - store: `node.key` (32 bytes, 0600, created on every start, never
-    replaced); the `devices` table (schema version 2) with SHA-256
-    credential hashes compared in constant time, revoked devices kept as
-    tombstones.
+    replaced, wiped from memory when dropped); the `devices` table
+    (schema version 2) with SHA-256 credential hashes compared in constant
+    time, revoked devices kept as tombstones.
   - node: principals per connection and the scope check for every call
-    (`guard::Guarded`); `device.invite` (in-memory, single-use, by hash,
-    at most a day and 64 waiting), `device.list`, `device.revoke` (closes
-    the device's connections); the device preamble and `SecureGateway`
-    over any frame transport; `--relay`, `--relay-token-file`, `--public`.
-  - client: paired nodes in the book (`key`, `relay`, `direct`,
-    `credential`), credential files, `pairing::pair`/`authenticate`, and
-    `NodeClient` device calls.
-  - CLI: `vessel node pair` (link and QR code), `vessel node devices
-    [revoke]`, the key fingerprint in `node status` and `nodes show`.
-  - With `vessel-secure` (936dd9d): the node's key pair from `node.key`,
-    `NodeInfo.public_key`, real pairing links, `SecureGateway::accept`
-    (respond, preamble, protocol); the client's `secure::open`/`pair` over
-    any carrier. Tested over `memory_pair` against a real node.
-- **Waiting for `vessel-relay`:** `AxumCarrier` for `/secure` (closing
-  with 4401 on a failed handshake) and relay data connections into
-  `SecureGateway::accept`; `SecureConnector` (route order, the websocket
-  dial, 4401 as final) and the `wss://` TLS client; `vessel nodes add
-  --pair` and connecting to paired nodes; resume over the relay (P5).
+    (`guard::Guarded`, the only `Handler`); `device.invite` (in-memory,
+    single-use, by hash, at most a day and 64 waiting), `device.list`,
+    `device.revoke` (closes the device's connections; pairing registers
+    the connection before storing the device, as authentication does);
+    `/secure` (an `AxumCarrier` with messages capped at one record) and
+    one `NodeLink` per `--relay` (token from `--relay-token-file`, TLS
+    from the system roots for `wss://`) both feed `SecureGateway::accept`,
+    which answers through `vessel_relay::respond` (4401 on a failed
+    handshake); at most 64 channels may wait in their handshake or
+    preamble; `Node::relay_links` reports each link's state.
+  - client: paired nodes in the book; credential files bound to the
+    link's node id and key (never sent to another key or id, checked
+    before any dial); `SecureConnector` (direct routes first with 3 s,
+    relays with 10 s, then the handshake, preamble and hello; 4401 and
+    refused `Revoked`/`UnknownDevice` final, `4404`/`4408`/`4429`
+    transient, a refusal ends the search) over a `Dialer` seam, with
+    `WsDialer` (`vessel_relay::connect`/`dial`, close codes through
+    `node_close`/`relay_close`); `pair_over` the link's routes.
+  - CLI: `vessel node pair`, `vessel nodes add NAME --pair` (the link
+    from standard input only, the key fingerprint confirmed or `--yes`),
+    `vessel node devices [revoke]`, and every command on a paired node by
+    name.
+  - End to end through `vessel_relay::serve` and the misbehaving relay
+    (`vessel-node` `tests/e2e/secure.rs`, `vessel-cli` `tests/cli/
+    devices.rs`): pairing over a relay; a used, expired or wrongly keyed
+    link refused; direct first, the relay when the direct address is
+    unreachable; an attach resumed on a second relay after the first
+    drops a record and goes away, gap-free; a revoked device's attach
+    ended while another carries on; replayed, corrupted and reordered
+    records ending the connection with no frame applied twice or at all;
+    `nodes add --pair` from a piped link, then `run` through the relay.
+  - Track R's review of Track P (items 1 to 10) is addressed, including
+    the 64 KiB frame limit until the preamble is answered
+    (`SecureChannel::set_max_frame`, 00caafa).
+- **Decided, waiting for `vessel-relay`:** direct `/secure` connections
+  should be kept alive like relayed ones: the node pings every 10 s and
+  drops a connection silent for 30 s, and the client's direct carrier
+  fails after 30 s of silence, so a half-open connection (a laptop that
+  slept, a NAT mapping that expired) is noticed and the attach resumes,
+  instead of hanging until TCP gives up. It needs `AxumCarrier` to send
+  pings and `vessel_relay::connect` to set the idle limit.
 
 ## Goal
 

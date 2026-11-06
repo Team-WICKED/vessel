@@ -95,7 +95,12 @@ What Paseo does (read 2026-11-06, ideas only; file references in the plan's
   difference.
   - Invitations live in the node's memory. A restart voids those
     outstanding, which is acceptable for something that lives ten minutes.
-- **Using it.** `vessel nodes add NAME --pair '<link>'`:
+- **Using it.** `vessel nodes add NAME --pair`, with the link pasted at
+  its prompt or piped in. Never on the command line: other users of the
+  machine can read a process's arguments, and shells keep them in their
+  history, so someone else could redeem the link first (`--pair LINK` is
+  refused, and the link called exposed; amended 2026-11-06 after Track R's
+  review).
   1. The client parses the link, prints the node's key fingerprint, and asks
      to confirm when it is at a terminal (`--yes` otherwise).
   2. It connects (direct addresses first, then relays) and runs the Noise NK
@@ -104,11 +109,19 @@ What Paseo does (read 2026-11-06, ideas only; file references in the plan's
   3. It sends `PairRequest { invite, device_name }` as the first frame inside
      the channel.
   4. The node checks and consumes the invitation, creates the device, and
-     answers `Paired { device_id, secret, node }`.
-  5. The client writes the book entry (`key`, `id`, `relay`, `direct`) and
-     the credential to a separate 0600 file. The book itself never holds a
-     secret (ADR 0005's rule for tokens, and the book is meant to be
-     hand-edited and shared between machines).
+     answers `Paired { device_id, secret, node }`. The client accepts it
+     only if `node` carries the link's id and key.
+  5. The client writes the credential to a separate 0600 file, then the
+     book entry (`key`, `id`, `relay`, `direct`). The book itself never
+     holds a secret (ADR 0005's rule for tokens, and the book is meant to
+     be hand-edited and shared between machines).
+  - The credential file also names the node id and key from the link, and
+    the client sends the secret to no other key or id (checked before it
+    dials). Since the book is shared and hand-edited, an entry could name
+    an attacker's key and relay while pointing at this node's credential
+    file; the handshake to the attacker's key would succeed, so only the
+    binding keeps the secret from them (amended 2026-11-06, Track R's
+    review).
 - **No short code in M3** (option 3 deferred). A PAKE is the only safe way to
   make a code short enough to type, since a short code cannot carry a
   32-byte key. It is a later addition that would sit beside the link, not

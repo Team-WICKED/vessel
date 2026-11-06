@@ -35,7 +35,7 @@ vessel-agent    -> proto, proc
 vessel-session  -> proto, harness, pty, agent
 vessel-store    -> proto
 vessel-node     -> proto, rpc, harness, session, store, secure, relay
-vessel-client   -> proto, rpc, secure      (relay: with Track P's dial)
+vessel-client   -> proto, rpc, secure, relay
 vessel-remote   -> proto, rpc, client      (milestone 2)
 vessel-secure   -> proto                   (milestone 3)
 vessel-relay    -> proto, secure           (milestone 3)
@@ -59,8 +59,10 @@ client's dial, and the websocket carriers both ends use. Track P added
 `vessel-node -> secure` (answering handshakes with the node's key pair) and
 `vessel-client -> secure` (initiating them to a pinned key, and
 fingerprints). `vessel-node` gains `-> relay` for `vesseld relay` and, with
-Track P's integration, `/secure` and relay data connections; the client's
-`-> relay` (for `dial` and `WsCarrier`) comes with that integration.
+Track P's integration, `/secure` and relay data connections. The client's
+`-> relay` (Track P's integration) is for `connect`, `dial`, `WsCarrier`,
+the close codes and `TlsConfig`: `SecureConnector`'s websocket dialer
+(`WsDialer`).
 `vessel-testkit` (dev-only) has a `relay` feature: a misbehaving relay
 proxy built on `tokio-tungstenite`, with no edge to Vessel crates.
 

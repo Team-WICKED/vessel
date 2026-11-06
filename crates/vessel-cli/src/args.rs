@@ -144,6 +144,26 @@ pub(crate) enum DevicesCommand {
     },
 }
 
+/// `--pair` reads its link from standard input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FromStdin;
+
+/// `--pair` or `--pair -`, and nothing else: a link on the command line is
+/// readable by every user of the machine (`ps`, `/proc`) and stays in the
+/// shell's history, so someone else could redeem it first.
+fn link_from_stdin(text: &str) -> Result<FromStdin, String> {
+    if text == "-" {
+        return Ok(FromStdin);
+    }
+    Err(
+        "the pairing link is read from standard input, never from the command line, where \
+         other users of this machine can read it and your shell history keeps it. Make a new \
+         link with `vessel node pair` (this one has been exposed), then run `vessel nodes add \
+         NAME --pair` and paste it"
+            .to_owned(),
+    )
+}
+
 /// Longest pairing link lifetime, as the node allows (ADR 0010).
 const MAX_TTL_SECS: u32 = 24 * 60 * 60;
 
@@ -220,14 +240,16 @@ pub(crate) enum Source {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum NodesCommand {
-    /// Add a node: `vessel nodes add gpu-box me@gpu-box`, or a websocket
-    /// node with `--token-file`.
+    /// Add a node: `vessel nodes add gpu-box me@gpu-box`, a websocket node
+    /// with `--token-file`, or pair with one: `vessel nodes add gpu-box
+    /// --pair`, then paste the link `vessel node pair` printed.
     Add {
         /// Its name (letters, digits, `.`, `_`, `-`).
         name: NodeName,
         /// How to reach it: `[user@]host` or `ssh://[user@]host[:port]` over
         /// SSH, or a `ws://` URL.
-        address: String,
+        #[arg(required_unless_present = "pair")]
+        address: Option<String>,
         /// A websocket node's token file.
         #[arg(long)]
         token_file: Option<PathBuf>,
@@ -235,6 +257,21 @@ pub(crate) enum NodesCommand {
         /// `~/.vessel`).
         #[arg(long)]
         remote_data_dir: Option<RemotePath>,
+        /// Pair with the node: the link is read from standard input (pasted
+        /// at the prompt, or piped), never from the command line.
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "-",
+            value_name = "-",
+            value_parser = link_from_stdin,
+            conflicts_with_all = ["address", "token_file", "remote_data_dir"],
+        )]
+        pair: Option<FromStdin>,
+        /// Pair without asking to confirm the node's key (needed when the
+        /// link is piped in). Only with `--pair`.
+        #[arg(long)]
+        yes: bool,
         /// Make it the default node.
         #[arg(long)]
         default: bool,
@@ -295,7 +332,46 @@ fn parse_seq(text: &str) -> Result<EventSeq, std::num::ParseIntError> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
+
     use super::*;
+
+    /// Review item 3: a pairing link never comes from the command line,
+    /// where other users and the shell's history see it.
+    #[test]
+    fn a_pairing_link_on_the_command_line_is_refused() {
+        let parse = |args: &[&str]| Cli::try_parse_from(args);
+        let error = parse(&[
+            "vessel",
+            "nodes",
+            "add",
+            "box",
+            "--pair",
+            "vessel://pair#e30",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("standard input"), "{error}");
+        assert!(error.contains("Make a new link"), "{error}");
+        for args in [
+            &["vessel", "nodes", "add", "box", "--pair"][..],
+            &["vessel", "nodes", "add", "box", "--pair", "-"],
+            &["vessel", "nodes", "add", "box", "--pair", "--yes"],
+        ] {
+            let Cli {
+                command:
+                    Command::Nodes {
+                        command: NodesCommand::Add { pair, address, .. },
+                    },
+                ..
+            } = parse(args).unwrap()
+            else {
+                panic!("{args:?}");
+            };
+            assert_eq!((pair, address), (Some(FromStdin), None), "{args:?}");
+        }
+        assert!(parse(&["vessel", "nodes", "add", "box", "me@box", "--pair"]).is_err());
+    }
 
     #[test]
     fn pairing_link_lifetimes_read_like_durations_and_stay_within_a_day() {
