@@ -22,10 +22,16 @@ pub enum NodeError {
     /// Another node already uses this data directory.
     #[error("another node already uses this data directory")]
     AlreadyRunning(#[source] StoreError),
-    /// Relays are configured but their registration token is missing or
-    /// unreadable.
-    #[error("{0}")]
-    RelayToken(String),
+    /// Relays are configured without `--relay-token-file`.
+    #[error("a relay needs its registration token: pass --relay-token-file")]
+    NoRelayToken,
+    /// The relays' registration token file is unreadable or empty.
+    #[error(transparent)]
+    RelayToken(#[from] vessel_relay::TokenFileError),
+    /// A `wss://` relay is configured, and no TLS root certificate could
+    /// be loaded to verify it.
+    #[error("cannot verify wss:// relays")]
+    RelayTls(#[source] vessel_relay::TlsError),
     /// The local socket (or named pipe) could not be bound.
     #[error("cannot listen on the local socket {}", path.display())]
     LocalSocket {

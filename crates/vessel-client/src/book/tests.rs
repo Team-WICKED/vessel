@@ -7,6 +7,7 @@ use vessel_proto::NodeId;
 
 use super::*;
 use crate::address::{NodeAddress, RemotePath, SshTarget};
+use crate::url::NodeUrl;
 
 const ID: &str = "6f1c3a52-7e1b-4c55-9a43-2f9a0c5e8d11";
 

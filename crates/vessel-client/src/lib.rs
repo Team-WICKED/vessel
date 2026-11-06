@@ -56,7 +56,7 @@ pub use address::{
 };
 pub use client::NodeClient;
 pub use connector::{Connector, WsConnector};
-pub use credential::{CredentialError, CredentialSource, DeviceCredential};
+pub use credential::{CredentialError, CredentialMismatch, CredentialSource, DeviceCredential};
 pub use error::{ConnectError, StreamError};
 pub use pinned::{Pinned, PinnedError};
 pub use resume::{Backoff, ResumingStream, follow_resuming};

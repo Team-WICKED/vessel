@@ -22,8 +22,8 @@ Plan: `docs/plans/backend-m1.md`.
 
 Milestone 2 (SSH transport, remote install and update, named nodes) is
 implemented on `backend/m2` (plan `docs/plans/backend-m2.md`, ADRs 0007 and
-0008). Milestone 3, the relay, is drafted in `docs/plans/backend-m3.md`, with
-proposed ADRs 0009 and 0010.
+0008). Milestone 3, the relay and pairing (`docs/plans/backend-m3.md`, ADRs
+0009 and 0010), is built on `backend/m3` and awaits its manual smoke test.
 
 - [x] SSH stdio transport (`vesseld attach`, Zed's proxy/daemon split).
 - [x] Versioned side-by-side `vesseld` install and update on a remote.
