@@ -25,7 +25,9 @@ use vessel_rpc::CallError;
 use vessel_secure::NodeKeypair;
 use vessel_testkit::relay::{MisbehavingRelay, Tamper, Toward};
 
-use crate::support::{Fixture, client, keys, output_of, seqs, terminal_spec, within};
+use crate::support::{
+    Fixture, STEP, client, keys, output_of, seqs, step, tail, terminal_spec, within,
+};
 
 const TOKEN: &str = "e2e-relay-token";
 
@@ -85,9 +87,9 @@ pub(crate) async fn relayed_with(
             adjust(config);
         })
         .await;
-    for (_relay, mut state) in node.relay_links() {
-        let _registered = state
-            .wait_for(|state| *state == LinkState::Registered)
+    for (relay, mut state) in node.relay_links() {
+        let registered = state.wait_for(|state| *state == LinkState::Registered);
+        let _registered = step(format!("the node registering with {relay}"), registered)
             .await
             .unwrap();
     }
@@ -156,21 +158,32 @@ const FAST: Backoff = Backoff {
 };
 
 /// Read `stream` until the output holds `needle`, keeping records and
-/// notices apart.
+/// notices apart. Fails after [`STEP`] showing the notices and the end of
+/// the output, escaped.
 async fn until<C: Connector + 'static>(
     stream: &mut ResumingStream<C>,
     records: &mut Vec<EventRecord>,
     notices: &mut Vec<StreamError>,
     needle: &str,
 ) {
-    while !output_of(records).contains(needle) {
-        match stream.next().await {
-            Some(Ok(record)) => records.push(record),
-            Some(Err(notice)) if notice.is_fatal() => panic!("{notice}; before {needle:?}"),
-            Some(Err(notice)) => notices.push(notice),
-            None => panic!("the stream ended before {needle:?}"),
+    tracing::info!("step: reading the attach until {needle:?}");
+    let reading = async {
+        while !output_of(records).contains(needle) {
+            match stream.next().await {
+                Some(Ok(record)) => records.push(record),
+                Some(Err(notice)) if notice.is_fatal() => panic!("{notice}; before {needle:?}"),
+                Some(Err(notice)) => notices.push(notice),
+                None => panic!("the stream ended before {needle:?}"),
+            }
         }
-    }
+    };
+    let read = tokio::time::timeout(STEP, reading).await;
+    assert!(
+        read.is_ok(),
+        "no {needle:?} in the attach after {} s (notices {notices:?}); it ends with {:?}",
+        STEP.as_secs(),
+        tail(&output_of(records), 600)
+    );
 }
 
 fn gap_free(records: &[EventRecord]) -> bool {
@@ -283,7 +296,11 @@ async fn a_relay_drop_during_an_attach_resumes_on_the_next_relay() {
         // one dropped, nothing would. Wait for the drop, then type again.
         flaky.tamper(Toward::Client, Tamper::Drop);
         owner.send(session, keys("one\r")).await.unwrap();
-        flaky.applied(1).await;
+        step(
+            "the relay dropping a record toward the laptop",
+            flaky.applied(1),
+        )
+        .await;
         drop(flaky);
         owner.send(session, keys("two\r")).await.unwrap();
         until(&mut stream, &mut records, &mut notices, "echo: two").await;
@@ -333,15 +350,18 @@ async fn a_revoked_device_loses_its_attach_and_others_carry_on() {
             .revoke_device(laptop_pairing.credential.device)
             .await
             .unwrap();
-        let ended = loop {
-            match stream.next().await {
-                Some(Ok(_record)) => {}
-                Some(Err(StreamError::Unreachable { reason })) => break reason,
-                Some(Err(notice)) if notice.is_fatal() => panic!("{notice}"),
-                Some(Err(_notice)) => {}
-                None => panic!("ended without a reason"),
+        let ending = async {
+            loop {
+                match stream.next().await {
+                    Some(Ok(_record)) => {}
+                    Some(Err(StreamError::Unreachable { reason })) => break reason,
+                    Some(Err(notice)) if notice.is_fatal() => panic!("{notice}"),
+                    Some(Err(_notice)) => {}
+                    None => panic!("ended without a reason"),
+                }
             }
         };
+        let ended = step("the revoked laptop's attach ending", ending).await;
         assert!(ended.contains("revoked"), "{ended}");
         assert!(stream.next().await.is_none());
 
@@ -359,6 +379,10 @@ async fn a_revoked_device_loses_its_attach_and_others_carry_on() {
 /// replayed input is never applied twice (its genuine first copy may be,
 /// or may be dropped with the connection, ADR 0007), a corrupted or
 /// reordered one never.
+///
+/// Every wait is a labelled [`step`] naming its round: this test hung
+/// once on a Windows runner with nothing but the safety net's "test timed
+/// out" to show for it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
     within(async {
@@ -367,10 +391,12 @@ async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
         let flaky_url: RouteUrl = flaky.url().parse().unwrap();
         let fixture = Fixture::new();
         let node = relayed(&fixture, &[&flaky_url]).await;
-        let owner = fixture.connect(&node).await;
-        let paired = pair(&owner, "laptop").await;
-        let session = terminal(&fixture, &owner).await;
-        let mut watch = owner.follow(session, EventSeq::ZERO).await.unwrap();
+        let owner = step("the owner connecting", fixture.connect(&node)).await;
+        let paired = step("pairing the laptop", pair(&owner, "laptop")).await;
+        let session = step("starting the terminal", terminal(&fixture, &owner)).await;
+        let mut watch = step("following the terminal", owner.follow(session, EventSeq::ZERO))
+            .await
+            .unwrap();
         let mut seen = Vec::new();
         crate::support::collect_until(&mut watch, &mut seen, "> ").await;
         let laptop = device(&paired, &[], &[&flaky_url]);
@@ -381,22 +407,53 @@ async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
             .into_iter()
             .enumerate()
         {
-            let connection = laptop.connect(client()).await.unwrap();
+            let at = |what: &str| format!("round {round} ({tamper:?}): {what}");
+            let connection = step(
+                at("the laptop connecting through the relay"),
+                laptop.connect(client()),
+            )
+            .await
+            .unwrap();
             flaky.tamper(Toward::Node, tamper);
             // The first input's record is the one tampered with (taken by
             // the relay before the second is sent); the second follows.
-            let first = tokio::spawn({
+            let mut first = tokio::spawn({
                 let connection = connection.clone();
                 async move { connection.send(session, keys("first\r")).await }
             });
-            flaky.applied(u64::try_from(round).unwrap() + 1).await;
-            let second = connection.send(session, keys("second\r")).await;
-            let first = first.await.unwrap();
+            // Nothing answers the first input before the relay has taken
+            // its record, so its call ending first means the connection
+            // was gone before the record left: say so rather than wait.
+            let rounds = u64::try_from(round).unwrap().checked_add(1).unwrap();
+            let taken = async {
+                tokio::select! {
+                    biased;
+                    () = flaky.applied(rounds) => {}
+                    ended = &mut first => panic!(
+                        "{}",
+                        at(&format!("the first input's call ended ({ended:?}) before the relay took its record"))
+                    ),
+                }
+            };
+            step(at("the relay taking the first input's record"), taken).await;
+            let second = step(
+                at("the second input's call ending"),
+                connection.send(session, keys("second\r")),
+            )
+            .await;
+            let first = step(at("the first input's call ending"), first)
+                .await
+                .unwrap();
             assert!(matches!(second, Err(CallError::Disconnected)), "{tamper:?}");
             let before = firsts(&seen);
             // A marker from the owner: whatever the device's records did
             // reached the log before it.
-            owner.send(session, keys(markers[round])).await.unwrap();
+            step(
+                at("the owner sending its marker"),
+                owner.send(session, keys(markers[round])),
+            )
+            .await
+            .unwrap();
             let marker = format!("echo: marker {round}");
             crate::support::collect_until(&mut watch, &mut seen, &marker).await;
             let applied = firsts(&seen).checked_sub(before).unwrap();
@@ -416,8 +473,8 @@ async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
             let output = output_of(&seen);
             assert_eq!(output.matches("echo: second").count(), 0, "{tamper:?}");
         }
-        node.stop().await.unwrap();
-        relay.stop().await;
+        step("stopping the node", node.stop()).await.unwrap();
+        step("stopping the relay", relay.stop()).await;
     })
     .await;
 }
@@ -553,10 +610,12 @@ async fn a_frozen_direct_route_is_dropped_by_keepalive_and_the_attach_resumes() 
             ),
             "{notices:?}"
         );
-        assert!(
-            path.closed_by_node.recv().await.is_some(),
-            "the node dropped the frozen connection"
-        );
+        let closed = step(
+            "the node dropping the frozen connection",
+            path.closed_by_node.recv(),
+        )
+        .await;
+        assert!(closed.is_some(), "the node dropped the frozen connection");
         node.stop().await.unwrap();
     })
     .await;

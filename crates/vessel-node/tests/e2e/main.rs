@@ -3,7 +3,10 @@
 //! with testkit fakes standing in for the harnesses.
 //!
 //! Tests wait on records and replies, never on time; the timeout in
-//! `support::within` only turns a hang into a failure.
+//! `support::within` only turns a hang into a failure, and the shorter
+//! ones of `support::step` and the output readers say which wait it was.
+//! A failing test's output holds the node's, relay's and client's debug
+//! logs (`support::logs`).
 
 #[cfg(test)]
 mod across;
