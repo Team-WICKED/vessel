@@ -64,9 +64,45 @@ impl FromStr for RouteUrl {
 
 serde_via_text!(RouteUrl);
 
+/// The pairing-link format version. Only version 1 exists; a link from a
+/// newer format is refused with a clear error rather than half-understood.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct OfferVersion;
+
+impl OfferVersion {
+    /// The number on the wire.
+    pub const NUMBER: u8 = 1;
+}
+
+impl Serialize for OfferVersion {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u8(Self::NUMBER)
+    }
+}
+
+impl<'de> Deserialize<'de> for OfferVersion {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let number = u8::deserialize(deserializer)?;
+        if number == Self::NUMBER {
+            Ok(Self)
+        } else {
+            Err(serde::de::Error::custom(format!(
+                "pairing link format {number} is newer than this vessel understands (1); update vessel"
+            )))
+        }
+    }
+}
+
 /// Everything a client needs to pair with a node, carried by a pairing link.
+///
+/// Unknown fields are refused (ADR 0010): an offer is security-relevant, so a
+/// field this version does not understand must not be silently ignored;
+/// format changes bump `v` instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairingOffer {
+    /// Format version (always 1).
+    pub v: OfferVersion,
     /// The node's id (pinned like an SSH node's).
     pub node: NodeId,
     /// The node's static key (pinned; the handshake checks it).
@@ -181,6 +217,7 @@ mod tests {
 
     fn offer() -> PairingOffer {
         PairingOffer {
+            v: OfferVersion,
             node: NodeId::random(),
             key: NodePublicKey::from_bytes([9; 32]),
             relays: vec!["wss://relay.example/vessel".parse().unwrap()],
@@ -214,6 +251,16 @@ mod tests {
         let link = PairingLink::encode(&offer()).unwrap();
         assert_eq!(format!("{link:?}"), "PairingLink(<redacted>)");
         assert_eq!(secret.to_string().parse::<DeviceSecret>().unwrap(), secret);
+    }
+
+    #[test]
+    fn offers_refuse_other_versions_and_unknown_fields() {
+        let json = serde_json::to_string(&offer()).unwrap();
+        assert!(json.starts_with(r#"{"v":1,"#));
+        let newer = json.replacen(r#""v":1"#, r#""v":2"#, 1);
+        assert!(serde_json::from_str::<PairingOffer>(&newer).is_err());
+        let extra = json.replacen('{', r#"{"scopes":["admin"],"#, 1);
+        assert!(serde_json::from_str::<PairingOffer>(&extra).is_err());
     }
 
     #[test]

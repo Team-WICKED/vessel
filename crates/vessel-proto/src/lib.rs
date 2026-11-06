@@ -45,7 +45,7 @@ pub use key::{KeyTextError, NodePublicKey, RoutingId};
 pub use node::{
     MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,
 };
-pub use pairing::{InvalidRoute, LinkError, PairingLink, PairingOffer, RouteUrl};
+pub use pairing::{InvalidRoute, LinkError, OfferVersion, PairingLink, PairingOffer, RouteUrl};
 pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use relay::{

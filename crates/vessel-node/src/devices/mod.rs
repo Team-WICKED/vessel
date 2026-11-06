@@ -21,7 +21,7 @@ use chrono::{TimeDelta, Utc};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     DeviceId, DeviceInfo, DeviceSecret, Invitation, InvitationSecret, InviteDevice, NodeId,
-    NodePublicKey, PairingLink, PairingOffer, RefusalReason, RouteUrl, Scope,
+    NodePublicKey, OfferVersion, PairingLink, PairingOffer, RefusalReason, RouteUrl, Scope,
 };
 use vessel_store::{CredentialHash, Store};
 
@@ -84,6 +84,7 @@ impl Devices {
         getrandom::fill(&mut bytes).map_err(ServiceError::Random)?;
         let invite = InvitationSecret::from_bytes(bytes);
         let offer = PairingOffer {
+            v: OfferVersion,
             node: self.node,
             key,
             relays: self.routes.relays.clone(),
