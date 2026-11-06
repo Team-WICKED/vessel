@@ -3,9 +3,11 @@
 use std::path::PathBuf;
 
 use vessel_harness::fakes::{Role, install};
-use vessel_harness::{HarnessError, Lookup, discover, launch};
+use vessel_harness::{HarnessError, Lookup, Profile, discover};
+use vessel_proc::CommandSpec;
 use vessel_proto::{
-    HarnessKind, ModelId, SessionMode, SessionSpec, StructuredSupport, TerminalSize,
+    HarnessKind, ModelId, ResolvedMcpServers, SessionMode, SessionSpec, StructuredSupport,
+    TerminalSize,
 };
 
 use support::{TempDir, fake_tui};
@@ -44,6 +46,15 @@ mod support {
     pub(super) fn fake_tui() -> PathBuf {
         Fake::Tui.path().unwrap()
     }
+}
+
+/// The launch from before profiles: the default profile, no MCP servers.
+#[expect(clippy::panic_in_result_fn, reason = "a test helper")]
+fn launch(lookup: &Lookup, spec: &SessionSpec) -> Result<CommandSpec, HarnessError> {
+    let profile = Profile::default_for(spec.harness);
+    let launch = vessel_harness::launch(lookup, spec, &profile, &ResolvedMcpServers::new())?;
+    assert!(launch.mcp_file.is_none() && launch.unattached.is_empty());
+    Ok(launch.command)
 }
 
 fn terminal(harness: HarnessKind, args: &[&str], cwd: Option<PathBuf>) -> SessionSpec {
