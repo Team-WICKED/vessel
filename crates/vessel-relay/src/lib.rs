@@ -42,6 +42,7 @@
 //! including the node's own `/secure` ([`AxumCarrier`]) and its handshake
 //! ([`respond`], which tells a client with the wrong key so).
 
+pub mod address;
 mod backoff;
 mod carrier;
 mod dial;
@@ -55,6 +56,7 @@ mod token;
 
 use vessel_proto::RouteUrl;
 
+pub use address::{BadProxy, TrustedProxy};
 pub use carrier::{
     AxumCarrier, Keepalive, NodeCarrier, NodeClosed, RelayClosed, WsCarrier, node_close,
     relay_close, respond,
@@ -62,7 +64,7 @@ pub use carrier::{
 pub use dial::{DialError, connect, connect_with, dial, dial_with};
 pub use link::{LinkState, NodeLink};
 pub use reach::{Reach, is_public, numeric_host};
-pub use server::{BadProxy, Limits, RelayConfig, TrustedProxy, Unbalanced, serve};
+pub use server::{Limits, RelayConfig, Unbalanced, serve};
 pub use ticket::{MAX_TICKET_LIFETIME, TicketError, check_ticket, issue_ticket, unix_now};
 pub use tls::{TlsConfig, TlsError};
 pub use token::{TokenFileError, read_token_file};
@@ -82,11 +84,11 @@ pub const HEALTH_PATH: &str = "/health";
 /// still open somewhat later as admitted (`Limits::client_settle`).
 pub const RELAYED_ADMISSION: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// How many relayed channels a node lets wait for admission at once: a
-/// budget of their own, apart from the direct route's, so a crowd through
-/// a relay never takes the direct route's room. A relay's startup check
-/// keeps one IPv6 `/48`'s share of one node's clients under half of it
-/// (`Limits::check`).
+/// How many channels a node lets wait for admission at once through one
+/// relay link: each link's budget is its own, apart from the other links'
+/// and the direct route's, so a crowd through one relay never takes
+/// another route's room. A relay's startup check keeps one IPv6 `/48`'s
+/// share of one node's clients under half of it (`Limits::check`).
 pub const RELAYED_UNADMITTED: usize = 40;
 
 /// The URL of `path` (with its query) on `relay`, which may carry a path

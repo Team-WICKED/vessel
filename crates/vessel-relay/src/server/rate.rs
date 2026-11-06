@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::address::{Block, blocks};
+use crate::address::{Block, blocks};
 
 /// Blocks tracked at once.
 const TRACKED: usize = 16_384;

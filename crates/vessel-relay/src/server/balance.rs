@@ -29,7 +29,7 @@
 use std::fmt;
 
 use super::Limits;
-use super::address::WIDEST;
+use crate::address::WIDEST;
 
 /// One pool and the share of it one holder may take.
 struct Rule {
@@ -101,8 +101,8 @@ impl fmt::Display for Holder {
 enum Pool {
     /// A limit, by its flag (without `--`).
     Flag(&'static str),
-    /// A node's budget for relayed channels waiting to be admitted
-    /// (`RELAYED_UNADMITTED`): fixed, the node's.
+    /// A node's budget for channels waiting to be admitted through one
+    /// relay (`RELAYED_UNADMITTED`): fixed, the node's.
     NodeRelayed,
 }
 
@@ -110,7 +110,7 @@ impl fmt::Display for Pool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Flag(flag) => write!(f, "--{flag}"),
-            Self::NodeRelayed => f.write_str("the relayed channels a node admits at once,"),
+            Self::NodeRelayed => f.write_str("what a node admits at once through one relay,"),
         }
     }
 }
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(
             check(&limits).unwrap_err().to_string(),
             "--max-node-clients-per-address 5 lets one IPv6 /48 (4 times the per-address \
-             limit) hold 20, half or more of the relayed channels a node admits at once, 40: \
+             limit) hold 20, half or more of what a node admits at once through one relay, 40: \
              --max-node-clients-per-address 4 at most passes"
         );
     }
