@@ -76,6 +76,7 @@ wildcard_enum_match_arm = "warn"
 [workspace.dependencies]
 vessel-agent = { path = "crates/vessel-agent" }
 vessel-client = { path = "crates/vessel-client" }
+vessel-fleet = { path = "crates/vessel-fleet" }
 vessel-harness = { path = "crates/vessel-harness" }
 vessel-node = { path = "crates/vessel-node" }
 vessel-proc = { path = "crates/vessel-proc" }
