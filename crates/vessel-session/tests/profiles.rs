@@ -767,7 +767,8 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
 /// the project memory stayed where it was.
 #[tokio::test]
 async fn a_moved_session_continues_its_conversation_in_the_other_home() {
-    within(async {
+    // Boxed: on Windows the future is over clippy's size limit.
+    within(Box::pin(async {
         let fixture = Fixture::new();
         let profiles = profiles(fixture.homes());
         let (alt, work) = (
@@ -820,7 +821,7 @@ async fn a_moved_session_continues_its_conversation_in_the_other_home() {
         reader.until_moved().await;
         assert_eq!(reader.ask("loaded").await, format!("loaded {session}"));
         fixture.runtime.shutdown().await;
-    })
+    }))
     .await;
 }
 
