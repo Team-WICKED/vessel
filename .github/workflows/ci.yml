@@ -1,11 +1,38 @@
 name: CI
 
+# [Decision Log] (2026-11-06)
+# - Purpose: check the gate (AGENTS.md section 1) on Linux, Windows and macOS.
+# - Constraint: the repository is private, so hosted minutes count against
+#   the organisation's 2,000 a month, at 1x for Linux, 2x for Windows and 10x
+#   for macOS. Running all three on every push to `backend/**` (milestones
+#   1-3) used the whole month's minutes in two days (Linux 215, Windows 408,
+#   macOS 107 minutes).
+# - Alternatives: keep push triggers but Linux only (still a hosted run per
+#   push, and agents push often); a self-hosted Linux runner on ingwdev1
+#   (free, needs a dedicated unprivileged user; pending the operator's go);
+#   no CI (Windows and macOS regressions only found at release).
+# - Choice: nothing runs on push. Pull requests to `main` run Linux. Windows
+#   and macOS run only when started by hand (`gh workflow run CI -r <branch>
+#   -f platforms=all`), at milestone merges. Agents run the gate locally,
+#   plus the cross-target clippy where it works.
+# - Trade-off: a Windows- or macOS-only break is found at the milestone
+#   merge instead of on the track branch.
 on:
-  push:
-    # `backend/**` lets track branches get Windows and macOS results without
-    # a pull request; agents cannot run those platforms locally.
-    branches: [main, "backend/**"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Platforms to run"
+        type: choice
+        options: [linux, linux-windows, all]
+        default: linux
   pull_request:
+    branches: [main]
+
+# A newer run on the same ref replaces an older one instead of queueing
+# behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,10 +41,13 @@ jobs:
   check:
     name: fmt / clippy / test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # One line: the expression parser is not documented to accept the
+        # line breaks a folded block keeps for more-indented lines.
+        os: ${{ fromJSON(inputs.platforms == 'all' && '["ubuntu-latest","windows-latest","macos-latest"]' || inputs.platforms == 'linux-windows' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
