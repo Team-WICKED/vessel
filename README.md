@@ -43,8 +43,14 @@ Milestone 1 (one node, done properly; see
   the node daemon `vesseld` (`vessel-node`), the typed client
   (`vessel-client`) and the `vessel` CLI (`vessel-cli`).
 
-Not yet: other machines (SSH transport, relay, TLS), fleet sync, harness
-profiles, model routing, the LSP bridge. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Milestone 2 (any node, over SSH; see
+[docs/plans/backend-m2.md](docs/plans/backend-m2.md)) is in progress: a
+remote machine needs only SSH access. `vessel` installs its own `vesseld`
+there on first contact, `attach` starts the node, and attaching survives
+a lost connection.
+
+Not yet: relay, TLS, fleet sync, harness profiles, model routing, the LSP
+bridge. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Try it
 
@@ -62,6 +68,31 @@ cargo build --release
 
 Sessions survive client disconnects; stopping the node marks live ones
 `Interrupted`, and their logs stay readable after a restart.
+
+### Another machine, over SSH
+
+Any machine you can `ssh` to with a key works (Linux or macOS,
+`x86_64` or `aarch64`); nothing needs to be installed or opened there
+first.
+
+```bash
+./target/release/vessel nodes add gpu-box me@gpu-box --default
+./target/release/vessel run claude          # installs vesseld, starts the node, attaches
+./target/release/vessel --node gpu-box sessions
+./target/release/vessel node status         # version, serving/draining, live sessions
+./target/release/vessel node update --when-idle   # new vesseld once its sessions end
+```
+
+- The first contact uploads `vesseld` to `~/.vessel/bin/` on that machine:
+  the build next to `vessel` (a development checkout, named by content
+  hash), or this version's release (fetched with `gh`). `vessel node
+  install --from local|release` does it explicitly.
+- The node's id is recorded in `~/.config/vessel/nodes.toml`, and a
+  different machine answering at that name later is refused.
+- A project can pick one of your nodes with `.vessel/config.toml`
+  (`default_node = "gpu-box"`), and may do nothing else.
+- A dropped connection during `attach` reconnects by itself and continues
+  where it was.
 
 ## Layout
 
