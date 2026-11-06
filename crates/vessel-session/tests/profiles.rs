@@ -9,8 +9,8 @@
 
 use vessel_harness::{HarnessError, Profile, SessionFilesError, home};
 use vessel_proto::{
-    ContentBlock, Creator, DeviceId, ErrorCode, HarnessKind, HarnessSessionId, SessionId,
-    SessionInput, SessionStatus, StopReason,
+    ContentBlock, Creator, DeviceId, ErrorCode, HarnessKind, HarnessSessionId, NodeId, SessionId,
+    SessionInput, SessionOrigin, SessionStatus, StopReason,
 };
 use vessel_session::{LaunchOptions, MoveError, ProfileMove, SessionError};
 
@@ -667,7 +667,9 @@ async fn codex_terminals_get_values_in_the_environment_only() {
 
 #[tokio::test]
 async fn structured_sessions_get_the_profile_and_servers_over_acp() {
-    within(async {
+    // Boxed: the launch options it checks against, held across awaits,
+    // make the future large.
+    within(Box::pin(async {
         let fixture = Fixture::new();
         let profiles = profiles(fixture.homes());
         let alt = named(&profiles, "claude-alt");
@@ -681,15 +683,24 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
             created_by: device.clone(),
             notices: vec!["vessel: a notice".to_owned()],
             id: Some(SessionId::random()),
+            // As an import from another node would record it (protocol 6).
+            origin: Some(SessionOrigin::Imported {
+                node: NodeId::random(),
+                session: SessionId::random(),
+            }),
+            via: Some(NodeId::random()),
         };
         let created = fixture
             .create(structured(None), options.clone())
             .await
             .unwrap();
         drop(created.durable);
-        // Recorded as asked: the id, the profile and who created it.
+        // Recorded as asked: the id, the profile, who created it and where
+        // it came from.
         let info = created.handle.info();
         assert_eq!(Some(info.id), options.id);
+        assert_eq!(info.origin, options.origin);
+        assert_eq!(info.via, options.via);
         // The id is taken while the runtime has the session.
         let error = fixture
             .create(structured(None), options.clone())
@@ -747,7 +758,7 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
         let mcp = reader.ask("mcp").await;
         assert!(mcp.contains(SECRETS[0]), "{mcp}");
         fixture.runtime.shutdown().await;
-    })
+    }))
     .await;
 }
 
@@ -756,7 +767,8 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
 /// the project memory stayed where it was.
 #[tokio::test]
 async fn a_moved_session_continues_its_conversation_in_the_other_home() {
-    within(async {
+    // Boxed: on Windows the future is over clippy's size limit.
+    within(Box::pin(async {
         let fixture = Fixture::new();
         let profiles = profiles(fixture.homes());
         let (alt, work) = (
@@ -809,7 +821,7 @@ async fn a_moved_session_continues_its_conversation_in_the_other_home() {
         reader.until_moved().await;
         assert_eq!(reader.ask("loaded").await, format!("loaded {session}"));
         fixture.runtime.shutdown().await;
-    })
+    }))
     .await;
 }
 

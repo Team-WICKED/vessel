@@ -124,18 +124,39 @@ fn every_hop_of_the_envelope_has_its_own_scope() {
     assert_eq!(Method::ExportMemory.scope(), Scope::Admin);
     assert_eq!(Method::ImportMemory.scope(), Scope::Admin);
     assert_eq!(Method::ExportSession.scope(), Scope::Operate);
-    // An envelope is never wrapped in another, and streams do not travel.
-    for method in [
-        Method::Forward,
-        Method::Relay,
-        Method::Deliver,
-        Method::Subscribe,
-        Method::Unsubscribe,
-    ] {
-        assert!(!method.forwardable(), "{method:?}");
-    }
-    assert!(Method::ReadEvents.forwardable());
-    assert!(Method::CreateSession.forwardable());
+}
+
+#[test]
+fn the_forwardable_set_is_pinned() {
+    // Changing this list is a decision about what other nodes may do here
+    // (`Method::forwardable` says why each group is in or out).
+    let forwardable: Vec<_> = Method::ALL
+        .iter()
+        .filter(|method| method.forwardable())
+        .map(|method| method.as_str())
+        .collect();
+    assert_eq!(
+        forwardable,
+        [
+            "node.info",
+            "harness.list",
+            "session.list",
+            "session.get",
+            "session.create",
+            "session.send",
+            "session.kill",
+            "session.read",
+            "profile.list",
+            "session.move_profile",
+            "session.export",
+            "session.import",
+            "memory.export",
+            "memory.import",
+            "transfer.read",
+            "transfer.close",
+            "secret.set"
+        ]
+    );
 }
 
 #[test]
