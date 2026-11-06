@@ -118,13 +118,14 @@ process, so it needs no process groups and no `vessel-proc` edge.
 
 ### `vessel-rpc::framed`
 ```rust
-pub struct Framed<S> { /* tokio_util::codec::Framed<S, LengthDelimitedCodec> */ }
-impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Framed<S> {
-    pub fn new(stream: S, max_frame: NonZeroUsize) -> Self;
+// As built (Track N): a reader and a writer, so a socket's halves and a
+// child's stdout/stdin take the same constructor.
+pub struct Framed<R, W> { /* FramedRead<R, _> + FramedWrite<W, _> */ }
+impl<R: AsyncRead, W: AsyncWrite> Framed<R, W> {
+    pub fn new(reader: R, writer: W, max_frame: NonZeroUsize) -> Self;
 }
-impl<S> FrameTransport for Framed<S> { type TransportError = FramedError; }
-// Also usable on split halves: Framed::from_parts(reader, writer, max_frame)
-// for a child's stdout/stdin.
+// A FrameTransport through the blanket impl; TransportError = FramedError.
+pub const MAX_FRAME: NonZeroUsize; // 16 MiB
 ```
 
 ### `vesseld` command line (Track N owns it; Track C calls it)
@@ -152,15 +153,25 @@ The node ignores `SIGHUP` when started this way.
 
 ### `vessel-client`
 ```rust
+// As built (Track C, accepted by the coordinator 2026-11-06).
 pub trait Connector: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
     fn connect(&self, client: ClientInfo) -> impl Future<Output = Result<NodeClient, Self::Error>> + Send;
+    /// Whether a later attempt may succeed; a resuming stream gives up on
+    /// `false` (a refused token, a changed node id). Defaults to `true`.
+    fn is_transient(&self, error: &Self::Error) -> bool { true }
 }
 pub struct WsConnector { url: NodeUrl, token: BearerToken, config: ClientConfig }
+/// Accepts only the pinned node (from the book, or the first one seen);
+/// any other id is a non-transient `PinnedError::Changed`.
+pub struct Pinned<C> { /* inner: C, id: OnceLock<NodeId> */ }
 /// A session stream that redials through `connector` and resumes from its
 /// cursor; reconnects show up as non-fatal `StreamError::Reconnecting`
-/// and `StreamError::Resumed` items. Capped exponential backoff.
-pub fn follow_resuming<C: Connector>(connector: C, session: SessionId, from: EventSeq) -> ResumingStream<C>;
+/// and `StreamError::Resumed` items. Capped exponential backoff
+/// (0.5-30 s, jittered). `.reusing(client)` starts on an open connection;
+/// `.client()` publishes the current one for sending input.
+pub fn follow_resuming<C: Connector + 'static>(connector: C, client: ClientInfo,
+                                               session: SessionId, from: EventSeq) -> ResumingStream<C>;
 pub enum NodeAddress { Ws(NodeUrl), Ssh(SshTarget) }   // plain data
 pub struct SshTarget { pub host: String, pub user: Option<String>, pub port: Option<u16>,
                        pub data_dir: Option<RemotePath> }
