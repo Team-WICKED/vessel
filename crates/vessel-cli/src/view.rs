@@ -34,9 +34,13 @@ pub(crate) enum Action {
     Nothing,
 }
 
-/// Help shown when attaching.
+/// Help shown when attaching. Ctrl-D is described as what it is, the end
+/// of input: the attach then waits for the turns it started to finish
+/// (`attach::structured`), so it does not leave at once during a turn the
+/// way `/detach` does.
 pub(crate) const HELP: &str = "type a message and press Enter; while a permission request is \
-open, a number answers it; /cancel stops the turn; /detach (or Ctrl-D) leaves\n";
+open, a number answers it; /cancel stops the turn; /detach leaves now; Ctrl-D ends input and \
+leaves once the turn in progress has finished\n";
 
 /// Which streamed message, if any, the current output line belongs to.
 /// Chunks of the same message continue the line; anything else starts a
