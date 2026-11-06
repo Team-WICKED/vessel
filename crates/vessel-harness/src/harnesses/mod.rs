@@ -11,6 +11,9 @@ mod codex;
 mod gemini;
 mod opencode;
 
+#[cfg(feature = "fakes")]
+pub(crate) use claude::slug as claude_slug;
+
 use std::path::Path;
 
 use vessel_proto::{HarnessKind, HarnessSessionId, ResolvedMcpServers};

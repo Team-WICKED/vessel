@@ -3,7 +3,10 @@
 //! Behaviour, in order:
 //!
 //! 1. `fake-tui --version` prints `fake-tui <version>` and exits 0, like the
-//!    version probe expects of a real harness.
+//!    version probe expects of a real harness. `fake-tui auth status` and
+//!    `fake-tui login status` (the login checks of `claude` and `codex`)
+//!    print `logged in` and exit 0, or `not logged in` and exit 1 when
+//!    `FAKE_TUI_LOGGED_OUT` is set (a profile's environment can set it).
 //! 2. Otherwise it starts a grandchild (`fake-tui --sleeper`) that inherits
 //!    stdout and sleeps forever, and prints `grandchild <pid>`. The
 //!    grandchild stays in the process group, so it dies only if the group is
@@ -35,6 +38,17 @@ fn main() -> ExitCode {
         Some("--version") => {
             say(&format!("fake-tui {}", env!("CARGO_PKG_VERSION")));
             ExitCode::SUCCESS
+        }
+        // The guard consumes one argument; `run` reads none, so a failed
+        // match changes nothing.
+        Some("auth" | "login") if args.next().as_deref() == Some("status") => {
+            if std::env::var_os("FAKE_TUI_LOGGED_OUT").is_some() {
+                say("not logged in");
+                ExitCode::FAILURE
+            } else {
+                say("logged in");
+                ExitCode::SUCCESS
+            }
         }
         Some("--sleeper") => loop {
             // Parked forever; `park` may return spuriously, hence the loop.

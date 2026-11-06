@@ -63,6 +63,7 @@ mod config;
 mod error;
 mod handle;
 mod lifecycle;
+mod moving;
 mod publish;
 mod ring;
 mod runtime;
@@ -73,6 +74,7 @@ mod terminal;
 pub use config::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, RuntimeConfig};
 pub use error::{InputKind, ModeKind, RemoveError, SessionError};
 pub use handle::SessionHandle;
+pub use moving::{MoveError, ProfileMove, Restart};
 pub use ring::{Follow, FollowError};
 pub use runtime::{Created, LaunchOptions, SessionRuntime};
 /// Suggested [`RuntimeConfig::agent_handshake_timeout`].

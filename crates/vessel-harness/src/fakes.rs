@@ -70,3 +70,12 @@ fn place(fake: &Path, dir: &Path, name: &str) -> io::Result<PathBuf> {
     )?;
     Ok(target)
 }
+
+/// Where Claude Code keeps the conversations started in `cwd` under the
+/// harness home `home` (`projects/<cwd slug>`), so a test can lay out a
+/// fake Claude home for a session to move; `None` for a relative or
+/// non-Unicode `cwd`.
+#[must_use]
+pub fn claude_project(home: &Path, cwd: &Path) -> Option<PathBuf> {
+    crate::harnesses::claude_slug(cwd).map(|slug| home.join("projects").join(slug))
+}
