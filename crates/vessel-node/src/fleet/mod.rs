@@ -63,7 +63,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_proto::HarnessKind;
 
-pub(crate) use chunks::{FetchError, fetch, serve};
+pub(crate) use chunks::{fetch, serve};
 pub use config::{FleetInit, InitError, SourcesError, init};
 pub use files::{FileError, FleetFiles};
 pub(crate) use home::Home;
@@ -74,6 +74,7 @@ pub use member::{DEFAULT_GRANT, JoinError, Joined, join, leave};
 pub(crate) use secrets::secret_value;
 pub use secrets::{SecretsError, delete_secret, secret_names, set_secret};
 pub use state::{ConflictEntry, ConflictWhy, FailureEntry, FleetState, FleetStatus, Role, status};
+pub(crate) use vessel_client::FetchError;
 /// A `skip` pattern of `fleet.toml` (`vessel fleet init --skip`).
 pub use vessel_fleet::SkipGlob;
 

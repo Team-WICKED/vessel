@@ -377,7 +377,8 @@ member vesseld                         home vesseld
 - **F4 (done, 2026-11-06):** `session.export`, `memory.export`,
   `transfer.read`/`close` and `session.import`/`memory.import`, between
   profiles of one node and between fleet nodes, the client's calls and
-  checked reader, `vessel session copy|move` and `vessel fleet memory
+  streaming reader (`fetch_transfer_file` into a blob writer, checked by
+  hash, never held in memory), `vessel session copy|move` and `vessel fleet memory
   copy` (ADR 0012, "As built (history and memory, F4)"). Imports pull
   through a `Source`: this node, or another through the envelope
   (`pass_on`) as the importing caller. Codex resuming in another
@@ -637,7 +638,7 @@ The target runs a delivered call as a **delegated principal**:
 | `vessel-harness` | Which files a session or a profile's memory is (`session_files`, a new `memory_files`), and renaming a project directory for another working directory (`rebase`: Claude Code's slug; Codex keeps dates, so its rollouts need no rename). |
 | `vessel-fleet` | Transfers as file sets: snapshot into a staging blob store, read by hash, and `place` (write a received set into a home without following links, never overwriting, conflicts beside), shared with the materialiser; `secrets.toml`. |
 | `vessel-node` | The handlers: `transfers` (open, read, close, expiry), imports (pulling through the fleet link), `fleet.forward`/`relay`/`deliver` and the delegated principal in the guard, `fleet.grant` on both sides, `fleet.peers`/`nodes`, `session.read` waiting. |
-| `vessel-client` | Typed calls, `NodeClient::on(node)` for forwarded calls, a transfer reader that checks hashes. |
+| `vessel-client` | Typed calls, `NodeClient::on(node)` for forwarded calls, a transfer reader that streams into a hash-checking writer. |
 | `vessel-mcp` | The tools take `node` (below). |
 | `vessel-cli` | `vessel session move|copy --to NODE [--cwd]`, `vessel fleet memory copy`, `vessel fleet secret set|list|delete|copy`, `--node` on a fleet node through forwarding. |
 

@@ -37,7 +37,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`, `profiles.toml`, `mcp/`), SQLite event log (schema 3: sessions' current profile and creator; schema 4: where a session came from, `origin` and `via`, protocol 6), retention, restart recovery. | proto |
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting; this node's secrets) (milestone 4); transfers (`transfers`: `session.export`/`memory.export` snapshots held for whoever opened them, `transfer.read`/`close`, expiry, and `session.import`/`memory.import` pulling through a `Source`: this node, or another through the envelope as the caller) (protocol 6, F4); `envelope` and `fleet/links` (protocol 6, Track X): `fleet.forward`/`relay`/`deliver` with the delegated principal (the delivering device's scopes ∩ the origin's, ownership and agent limits applied to the origin), the mutual grant (`fleet.grant`, `fleet/granted.json` on a member, `fleet/grants/` on the home), `fleet.peers`/`nodes`, and `session.read` waiting. | proto, rpc, harness, session, store, secure, relay, fleet, client |
-| `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4). | proto, rpc, secure, relay |
+| `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4); fetching a file chunk by chunk into a caller's `ChunkSink` (`fetch_chunks`, protocol 6). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
@@ -486,7 +486,10 @@ they started.
     imported`. From another fleet node the same four calls go through the
     envelope (`pass_on`) as the importing caller, so the source's grant to
     the home and its ownership rules apply there. The client
-    has the calls and a reader that checks hashes; the CLI `vessel session
+    has the calls and `fetch_transfer_file`, which streams a file into a
+    `ChunkSink` (the fleet's blob writer: hashed as written, kept only if
+    right) through `fetch_chunks`, the one per-file loop the member's pull
+    and the import use too; the CLI `vessel session
     copy|move [--to NODE] [--profile] [--cwd]` (a move kills the source once
     the copy started) and `vessel fleet memory copy`. Tested end to end with
     `fake-acp` (Claude Code and Codex profiles in temporary homes) and

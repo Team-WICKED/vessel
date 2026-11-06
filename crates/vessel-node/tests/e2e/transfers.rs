@@ -9,7 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
-use vessel_client::{NodeClient, SessionStream};
+use vessel_client::{ChunkSink, NodeClient, SessionStream};
+use vessel_fleet::{BlobStore, BlobWriter};
 use vessel_harness::fakes::claude_project;
 use vessel_proto::{
     AgentEvent, BundlePath, ContentBlock, ErrorCode, EventRecord, EventSeq, HarnessKind,
@@ -50,6 +51,20 @@ fn through_link(dir: &Path) -> PathBuf {
 #[cfg(not(unix))]
 fn through_link(dir: &Path) -> PathBuf {
     dir.to_owned()
+}
+
+/// The fleet's blob writer as the client's chunk sink: written as it
+/// arrives, kept only if its hash is right.
+struct Blob(BlobWriter);
+
+impl ChunkSink for Blob {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        std::io::Write::write_all(&mut self.0, data)
+    }
+
+    fn finish(self) -> std::io::Result<()> {
+        self.0.finish().map(drop)
+    }
 }
 
 fn name(text: &str) -> ProfileName {
@@ -189,17 +204,35 @@ async fn exports(fixture: &Fixture, client: &NodeClient, alt: &Path, source: &mu
     };
     assert_eq!((harness_session, cwd), (&source.session, &fixture.cwd()));
     assert_eq!(info.id, id);
+    // Streamed into a blob store, each file checked against its hash.
+    let staging = tempfile::tempdir().unwrap();
+    let blobs = BlobStore::open(staging.path().join("blobs")).unwrap();
     for (path, file) in &manifest.files {
-        let data = client
-            .read_transfer_file(manifest.transfer, file)
+        let writer = Blob(blobs.writer(file.hash).unwrap());
+        client
+            .fetch_transfer_file(manifest.transfer, file, writer)
             .await
             .unwrap();
         assert_eq!(
-            data,
+            std::fs::read(blobs.path(&file.hash)).unwrap(),
             std::fs::read(alt.join(path.as_str())).unwrap(),
             "{path}"
         );
     }
+    // A manifest that lies about a file: refused, nothing kept.
+    let (_, first) = manifest.files.iter().next().unwrap();
+    let mut wrong = first.clone();
+    wrong.hash = vessel_proto::BlobHash::from_bytes([9; 32]);
+    let elsewhere = BlobStore::open(staging.path().join("other")).unwrap();
+    let refused = client
+        .fetch_transfer_file(
+            manifest.transfer,
+            &wrong,
+            Blob(elsewhere.writer(wrong.hash).unwrap()),
+        )
+        .await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(!elsewhere.contains(&wrong.hash));
     client.close_transfer(manifest.transfer).await.unwrap();
     let some = manifest.files.values().next().unwrap();
     assert_eq!(
