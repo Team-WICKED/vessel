@@ -1,6 +1,7 @@
 //! The terminal-mode session actor: a PTY's output becomes events.
 
 use bytes::Bytes;
+use vessel_harness::WrittenMcpFile;
 use vessel_proto::{SessionEvent, SessionStatus, TerminalBytes, TerminalOutput};
 use vessel_pty::{PtyOutput, PtyProcess};
 
@@ -11,6 +12,9 @@ pub(crate) struct TerminalActor {
     pub(crate) pty: PtyProcess,
     pub(crate) output: PtyOutput,
     pub(crate) life: Lifecycle,
+    /// The session's MCP configuration file, removed when the actor ends
+    /// (the program has exited by then).
+    pub(crate) _mcp_file: Option<WrittenMcpFile>,
 }
 
 impl TerminalActor {

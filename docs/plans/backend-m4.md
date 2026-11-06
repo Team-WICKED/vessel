@@ -256,6 +256,31 @@ member vesseld                         home vesseld
   and count limits; a device with `read` cannot start a session whose agent
   operates.
 
+### Track H progress
+
+Harness side of H1-H3, 2026-11-06, branch `backend/m4-profiles` (crates
+`vessel-harness`, `vessel-agent`, `vessel-session`, `vessel-testkit`):
+
+- Done: `Profile` (default per harness, `info()`, redacted `Debug`),
+  `parse_profiles` for `profiles.toml` text, `home`, `login_check`,
+  `session_files` and `link_session`, `launch`/`launch_in` with profile and
+  MCP servers, ACP `session/new`/`session/load` with MCP servers,
+  `SessionRuntime::create_with(spec, LaunchOptions)`, and the fakes
+  reporting environment, arguments, MCP servers and the loaded session id.
+  Tests cover: two profiles give two homes, `unset` removes, another
+  harness's profile is refused, values never reach `ProfileInfo` or
+  `Debug`, MCP servers arrive at the fake (new and load; HTTP left out for
+  an agent without it), no value on any command line, the MCP file is
+  owner-only and removed with the session, and linking on a fake Claude
+  layout (same inode, `memory/` untouched, no symbolic link followed).
+- Refinements: ADR 0011 and ADR 0012, "As built" sections.
+- Left for the node, after the protocol 5 contract (step 1b): reading
+  `profiles.toml` (owner-only check), `profile.list`/`reload`, `--profile`,
+  `SessionSpec.profile` and `SessionInfo.profile`, passing the resolved
+  profile and an owner-only MCP directory into `create_with`, and H2's
+  `session.move_profile` on top of `login_check`, `session_files` and
+  `link_session`. H4 is not started.
+
 ## Track F: fleet and first run
 
 - **F1. `vessel-fleet`.** Manifests, blob store, plan and apply with
