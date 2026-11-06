@@ -8,7 +8,10 @@
 //! and login check ([`home`], [`login_check`]), where a session's files are
 //! and linking them into another home ([`session_files`],
 //! [`link_session`]), MCP servers for terminal sessions ([`McpFile`]), and
-//! where shared instructions and skills live in a home ([`layout`]).
+//! where shared instructions and skills live in a home ([`layout`]), and
+//! what first-run setup offers: install commands ([`missing`]), login
+//! commands ([`login_command`]), other accounts' homes ([`account_homes`])
+//! and adding their profiles ([`add_profile`]).
 //!
 //! Must not: run sessions, speak ACP, or leak harness specifics. Nothing
 //! outside this crate matches on `HarnessKind` to decide behaviour; callers
@@ -59,6 +62,7 @@ mod lookup;
 mod mcp;
 mod profile;
 mod sessions;
+mod setup;
 
 pub use discover::discover;
 pub use error::HarnessError;
@@ -72,4 +76,8 @@ pub use profile::{
 };
 pub use sessions::{
     LinkError, Linked, SessionFiles, SessionFilesError, link_session, session_files,
+};
+pub use setup::{
+    AccountHome, AddProfileError, Install, InstallPart, account_homes, add_profile, home_variable,
+    login_command, missing,
 };

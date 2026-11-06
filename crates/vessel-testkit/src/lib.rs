@@ -14,6 +14,9 @@
 //! - `fake-ssh`: the OpenSSH client's command line, running the "remote"
 //!   command on this machine under a fake home, with an injectable
 //!   connection drop (ADR 0007 tests). See `src/bin/fake_ssh.rs`.
+//! - `fake-tool`: an installer or service manager that only logs its calls
+//!   and answers "is it enabled" from that log (`vessel init` tests). See
+//!   `src/bin/fake_tool.rs`.
 //!
 //! It also locates a freshly built `vesseld` ([`vesseld()`]) for tests
 //! outside `vessel-node` that need the real node binary (installing it on a
@@ -90,6 +93,9 @@ pub enum Fake {
     /// `$FAKE_SSH_HOME`, and can drop the connection
     /// (`FAKE_SSH_DROP_AFTER`). Unix only. See `src/bin/fake_ssh.rs`.
     Ssh,
+    /// `fake-tool`: stands in for `npm`, `systemctl` or `launchctl`,
+    /// logging each call to `$FAKE_TOOL_LOG`. See `src/bin/fake_tool.rs`.
+    Tool,
 }
 
 impl Fake {
@@ -100,6 +106,7 @@ impl Fake {
             Self::Tui => "fake-tui",
             Self::Acp => "fake-acp",
             Self::Ssh => "fake-ssh",
+            Self::Tool => "fake-tool",
         }
     }
 

@@ -192,6 +192,16 @@ impl DataDir {
         }))
     }
 
+    /// Write `profiles.toml` (`vessel init` adding profiles), owner-only and
+    /// atomically: a node reading it sees the old file or the new one.
+    ///
+    /// # Errors
+    /// The file cannot be written.
+    pub fn write_profiles(&self, text: &str) -> Result<(), StoreError> {
+        let path = self.profiles_path();
+        files::replace(&path, text.as_bytes()).map_err(StoreError::io(&path))
+    }
+
     /// Create the MCP directory owner-only, and remove the files a previous
     /// run left in it: they belonged to sessions that are over, and may
     /// hold secrets. Returns the directory.

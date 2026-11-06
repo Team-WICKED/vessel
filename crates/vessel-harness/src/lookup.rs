@@ -60,8 +60,11 @@ impl Lookup {
     /// Absolute path of the executable `binary`, if any directory has it.
     ///
     /// Does filesystem lookups; call it from a blocking context. On Windows
-    /// it also tries `PATHEXT` extensions (`.exe`, `.cmd`, ...).
-    pub(crate) fn find(&self, binary: &str) -> Option<PathBuf> {
+    /// it also tries `PATHEXT` extensions (`.exe`, `.cmd`, ...). Public so
+    /// first-run setup finds the tools it offers to run (an installer, the
+    /// service manager) the way harnesses are found.
+    #[must_use]
+    pub fn find(&self, binary: &str) -> Option<PathBuf> {
         let joined = self.joined.as_ref()?;
         which::which_in(binary, Some(joined), Path::new("/")).ok()
     }
