@@ -31,6 +31,8 @@
 //!     `session/new` or `session/load` as ACP sent them (values included);
 //!   - `loaded`: one message chunk `loaded <id>` (the id `session/load`
 //!     got) or `loaded none`;
+//!   - `cwd`: one message chunk `cwd <path>`, the working directory of the
+//!     last `session/new` or `session/load`;
 //!   - `args`: one message chunk `args <JSON array of its arguments>`;
 //!   - `exit`, `garbage`: a message chunk and a permission request, then,
 //!     with both still open, the connection fails: `exit` exits with code
@@ -106,10 +108,12 @@ struct State {
     mcp_servers: Vec<McpServer>,
     /// The id the last `session/load` got.
     loaded: Option<String>,
+    /// The working directory of the last `session/new` or `session/load`.
+    cwd: Option<std::path::PathBuf>,
 }
 
 /// The answer to a prompt that reports what the fake was given, if it is
-/// one (`env NAME`, `mcp`, `loaded`, `args`).
+/// one (`env NAME`, `mcp`, `loaded`, `cwd`, `args`).
 fn report(prompt: &str, state: &State) -> Option<String> {
     if let Some(name) = prompt.strip_prefix("env ") {
         return Some(match std::env::var_os(name) {
@@ -125,6 +129,13 @@ fn report(prompt: &str, state: &State) -> Option<String> {
         "loaded" => Some(format!(
             "loaded {}",
             state.loaded.as_deref().unwrap_or("none")
+        )),
+        "cwd" => Some(format!(
+            "cwd {}",
+            state
+                .cwd
+                .as_deref()
+                .map_or_else(|| "none".into(), std::path::Path::to_string_lossy)
         )),
         "args" => {
             let args: Vec<String> = std::env::args_os()
@@ -188,6 +199,7 @@ async fn serve() -> ExitCode {
                     let (id, model) = {
                         let mut state = lock(&state);
                         state.mcp_servers = request.mcp_servers;
+                        state.cwd = Some(request.cwd);
                         state.sessions = state.sessions.saturating_add(1);
                         let id = format!("fake-session-{}", state.sessions);
                         let model = state.model.get_or_insert_with(|| MODELS[0].to_owned());
@@ -220,6 +232,7 @@ async fn serve() -> ExitCode {
                         let mut state = lock(&state);
                         state.mcp_servers.clone_from(&request.mcp_servers);
                         state.loaded = Some(request.session_id.0.to_string());
+                        state.cwd = Some(request.cwd.clone());
                         state
                             .model
                             .get_or_insert_with(|| MODELS[0].to_owned())

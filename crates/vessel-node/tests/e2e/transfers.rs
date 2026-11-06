@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 use vessel_client::{NodeClient, SessionStream};
 use vessel_harness::fakes::claude_project;
 use vessel_proto::{
-    AgentEvent, BundlePath, ContentBlock, ErrorCode, EventRecord, EventSeq, HarnessSessionId,
-    ImportMemory, ImportSession, MemoryRef, NodeId, ProfileName, SessionId, SessionInput,
-    SessionOrigin, SessionRef, SessionStatus, TransferDetail,
+    AgentEvent, BundlePath, ContentBlock, ErrorCode, EventRecord, EventSeq, HarnessKind,
+    HarnessSessionId, ImportMemory, ImportSession, MemoryRef, NodeId, ProfileName, SessionId,
+    SessionInput, SessionMode, SessionOrigin, SessionRef, SessionSpec, SessionStatus,
+    TransferDetail,
 };
 use vessel_rpc::CallError;
 
@@ -358,8 +359,7 @@ async fn memory_goes_beside_what_differs_and_terminal_sessions_stay() {
         );
 
         // A terminal session is not copied.
-        let mut terminal =
-            crate::support::terminal_spec(&fixture, vessel_proto::HarnessKind::ClaudeCode);
+        let mut terminal = crate::support::terminal_spec(&fixture, HarnessKind::ClaudeCode);
         terminal.profile = Some(name("claude-alt"));
         let terminal = client.create_session(terminal).await.unwrap().id;
         assert_eq!(
@@ -371,6 +371,83 @@ async fn memory_goes_beside_what_differs_and_terminal_sessions_stay() {
             ErrorCode::NotFound
         );
         client.kill(terminal).await.unwrap();
+        node.stop().await.unwrap();
+    })
+    .await;
+}
+
+/// Codex files a rollout by date and finds it by id, so a copy into
+/// another profile and directory lands at the same path and resumes with
+/// `session/load` given the new directory. Checked with fakes only
+/// (fake-acp as `codex-acp`), never a Codex login: what the real adapter
+/// does with that directory is recorded in ADR 0012.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_codex_rollout_keeps_its_place_and_resumes_in_the_new_directory() {
+    within(async {
+        let fixture = Fixture::with_codex();
+        let homes = tempfile::tempdir().unwrap();
+        for home in ["a", "b"] {
+            std::fs::create_dir_all(homes.path().join(home)).unwrap();
+        }
+        let toml = format!(
+            "[profiles.codex-a]\nharness = \"codex\"\nenv = {{ CODEX_HOME = '{}' }}\n\n\
+             [profiles.codex-b]\nharness = \"codex\"\nenv = {{ CODEX_HOME = '{}' }}\n",
+            homes.path().join("a").display(),
+            homes.path().join("b").display(),
+        );
+        std::fs::write(fixture.data_dir().profiles_path(), toml).unwrap();
+        let node = fixture.start().await;
+        let client = fixture.connect(&node).await;
+        let node_id = client.node_info().await.unwrap().id;
+
+        let mut spec = SessionSpec::new(
+            HarnessKind::Codex,
+            SessionMode::Structured {
+                model: None,
+                resume: None,
+            },
+        )
+        .with_cwd(fixture.cwd());
+        spec.profile = Some(name("codex-a"));
+        let id = client.create_session(spec).await.unwrap().id;
+        let mut stream = client.follow(id, EventSeq::ZERO).await.unwrap();
+        let mut seen = Vec::new();
+        read_until(&mut stream, &mut seen, |record| {
+            status_of(record) == Some(&SessionStatus::Running)
+        })
+        .await;
+        let session = client.session(id).await.unwrap().harness_session.unwrap();
+        let rollout = format!("sessions/2026/11/06/rollout-2026-11-06T10-00-00-{session}.jsonl");
+        write(&homes.path().join("a").join(&rollout), "{}\n");
+
+        let other = tempfile::tempdir().unwrap();
+        let from = SessionRef {
+            node: node_id,
+            session: id,
+        };
+        let imported = client
+            .import_session(import(from, "codex-b", Some(other.path().to_owned()), true))
+            .await
+            .unwrap();
+        assert_eq!(imported.written, 1);
+        assert!(homes.path().join("b").join(&rollout).is_file(), "same path");
+        let copy = imported.session.unwrap();
+        let mut copy_stream = client.follow(copy.id, EventSeq::ZERO).await.unwrap();
+        let mut copy_seen = Vec::new();
+        read_until(&mut copy_stream, &mut copy_seen, |record| {
+            status_of(record) == Some(&SessionStatus::Running)
+        })
+        .await;
+        assert_eq!(
+            ask(&client, &mut copy_stream, &mut copy_seen, copy.id, "loaded").await,
+            format!("loaded {session}")
+        );
+        assert_eq!(
+            ask(&client, &mut copy_stream, &mut copy_seen, copy.id, "cwd").await,
+            format!("cwd {}", other.path().display())
+        );
+        client.kill(copy.id).await.unwrap();
+        client.kill(id).await.unwrap();
         node.stop().await.unwrap();
     })
     .await;
