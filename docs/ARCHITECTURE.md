@@ -180,6 +180,12 @@ depend on the node, so there is no cycle).
     archive and `SHA256SUMS` fetched locally with `gh release download`
     and checked). Tested against a temporary home through `ssh` and `gh`
     stand-ins (Unix only).
+  - Release workflow (`.github/workflows/release.yml`, milestone 2): on a
+    `v<version>` tag matching the workspace version, it builds `vesseld`
+    for the four targets (musl through `cargo-zigbuild`), packaged as
+    `vesseld-<version>-<target>.tar.gz` with `SHA256SUMS`, and attaches
+    them to the tag's release. Not run yet: no tag has been pushed.
+    Signing waits for the owner's decision on public releases.
   - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
     the `Handler` routing to `sessions` (live runtime sessions plus stored
     ones; a session whose log is complete, final status included, is
