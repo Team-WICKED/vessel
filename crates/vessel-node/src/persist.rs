@@ -8,6 +8,9 @@
 //! If the store fails, the session cannot keep its gap-free log, so the
 //! task kills it and marks its durability [`Durability::Broken`]; readers
 //! waiting for those records get an error instead of a silent hole.
+//!
+//! The task reports how it ended ([`Persisted`]); `sessions` then hands the
+//! session over to the store and removes it from the runtime.
 
 use std::sync::Arc;
 
@@ -29,6 +32,16 @@ pub(crate) enum Durability {
     Broken,
 }
 
+/// How persisting a session's log ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Persisted {
+    /// Every record is committed, through the final status: the durable
+    /// channel was drained to its end, which means the session ended.
+    Complete,
+    /// The store failed; the session was killed and may still be ending.
+    Incomplete,
+}
+
 /// The log of `session` could not be persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the log of session {0} could not be persisted")]
@@ -40,12 +53,18 @@ pub(crate) async fn run(
     handle: SessionHandle,
     mut durable: mpsc::Receiver<Arc<EventRecord>>,
     durability: watch::Sender<Durability>,
-) {
+) -> Persisted {
     let session = handle.id();
     let mut batch = Vec::with_capacity(BATCH);
     while durable.recv_many(&mut batch, BATCH).await > 0 {
+        // The runtime never hands out the last `u64` (it stops the session
+        // instead), so this only guards against a broken invariant; the log
+        // then counts as incomplete.
         let Some(next) = batch.last().and_then(|record| record.seq.next()) else {
-            break;
+            tracing::error!(%session, "record sequence exhausted; stopping persistence");
+            durability.send_modify(|durability| *durability = Durability::Broken);
+            handle.kill();
+            return Persisted::Incomplete;
         };
         let records = std::mem::replace(&mut batch, Vec::with_capacity(BATCH));
         if let Err(error) = store.append(session, records).await {
@@ -54,11 +73,12 @@ pub(crate) async fn run(
             handle.kill();
             // Dropping `durable` here lets the session finish without
             // waiting for a store that cannot take its records.
-            return;
+            return Persisted::Incomplete;
         }
         durability.send_modify(|durability| *durability = Durability::Through(next));
     }
     tracing::debug!(%session, "session log fully persisted");
+    Persisted::Complete
 }
 
 /// Wait until every record before `target` is committed.

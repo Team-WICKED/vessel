@@ -265,8 +265,8 @@ async fn tiny_rings_force_store_gap_fills_and_lag_without_losing_records() {
 
 /// Regression: with retention pruning the store past the ring, a late
 /// follower from zero used to make the node ask the ring for the same gap
-/// forever. It now gets the pruned range reported once, then the ring, then
-/// the end.
+/// forever. It now gets the pruned range reported once, then the ring and
+/// the live records, gap-free to the end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows() {
     within(async {
@@ -286,37 +286,39 @@ async fn a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows() {
         let mut first = client.follow(id, EventSeq::ZERO).await.unwrap();
         let mut seen = Vec::new();
         collect_until(&mut first, &mut seen, "> ").await;
-        for line in ["one\n", "two\n", "three\n", "exit\n"] {
+        for line in ["one\n", "two\n", "three\n"] {
             client.send(id, keys(line)).await.unwrap();
         }
-        // The first follower lags too; it only has to reach the end.
-        let mut last = EventSeq::ZERO;
-        while let Some(record) = first.next().await {
-            match record {
-                Ok(record) => last = record.seq,
+        // The first follower lags too; it only has to see the output.
+        while !output_of(&seen).contains("echo: three") {
+            match first.next().await.unwrap() {
+                Ok(record) => seen.push(record),
                 Err(error) => assert!(!error.is_fatal(), "{error}"),
             }
         }
-        assert!(last.get() >= 8, "too few records to leave a gap: {last}");
 
+        // The session still runs, so the late follower starts at the ring;
+        // the store keeps only the newest record.
         let late = fixture.connect(&node).await;
         let mut replay = late.follow(id, EventSeq::ZERO).await.unwrap();
-        let oldest_cached = EventSeq::new(last.get() - 3);
-        match replay.next().await {
+        let resumed_at = match replay.next().await {
             Some(Err(vessel_client::StreamError::Missing {
                 expected,
                 resumed_at,
             })) => {
                 assert_eq!(expected, EventSeq::ZERO);
-                assert_eq!(resumed_at, oldest_cached);
+                resumed_at
             }
             other => panic!("expected the pruned range first, got {other:?}"),
-        }
+        };
+        assert!(resumed_at.get() >= 4, "nothing was pruned: {resumed_at}");
+        client.kill(id).await.unwrap();
         let mut rest = Vec::new();
         while let Some(record) = replay.next().await {
             rest.push(record.unwrap());
         }
-        let expected: Vec<u64> = (oldest_cached.get()..=last.get()).collect();
+        let expected: Vec<u64> =
+            (resumed_at.get()..resumed_at.get() + u64::try_from(rest.len()).unwrap()).collect();
         assert_eq!(seqs(&rest), expected);
         assert!(matches!(
             rest.last().and_then(status_of),

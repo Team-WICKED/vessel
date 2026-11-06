@@ -1,11 +1,14 @@
 //! The node's sessions: live ones in the runtime, and every one ever
 //! stored, including those from earlier runs.
 //!
-//! A session created in this run is "live" here for the whole run, even
-//! after its process ended: the runtime still has its ring for followers
-//! and the node still knows how far its log is committed. Sessions from
-//! earlier runs exist only in the store; they can be listed, read and
-//! followed, and refuse input with `Conflict`.
+//! A session created in this run is "live" here while the runtime has it:
+//! from its creation until its whole log, final status included, is
+//! committed. Then it is handed over: removed from the runtime (which frees
+//! its ring) and from the durability table, and served from the store like
+//! a session of an earlier run. Stored sessions can be listed, read and
+//! followed, and refuse input with `Conflict`. Handles and subscriptions
+//! taken before the hand-over keep working (the runtime guarantees that),
+//! and every record they could still need is in the store by then.
 //!
 //! The only state this type adds to the runtime's is each live session's
 //! durability watch, kept in a small id-keyed table that is written once per
@@ -29,16 +32,16 @@ use vessel_session::{Created, SessionHandle, SessionRuntime};
 use vessel_store::Store;
 
 use crate::error::ServiceError;
-use crate::persist::{self, Durability};
+use crate::persist::{self, Durability, Persisted};
 
 /// Where a session was found.
 pub(crate) enum Found {
-    /// Created in this run.
+    /// Created in this run and not yet handed over to the store.
     Live {
         handle: SessionHandle,
         durability: watch::Receiver<Durability>,
     },
-    /// From an earlier run (ended).
+    /// Ended, and served from the store.
     Stored(SessionInfo),
 }
 
@@ -82,7 +85,7 @@ impl Sessions {
             .map_err(ServiceError::Task)?
     }
 
-    async fn start(&self, spec: SessionSpec) -> Result<SessionInfo, ServiceError> {
+    async fn start(self: &Arc<Self>, spec: SessionSpec) -> Result<SessionInfo, ServiceError> {
         let Created { handle, durable } = self.runtime.create(spec).await?;
         let id = handle.id();
         // Visible from here on (see the module docs). Readers that need the
@@ -103,22 +106,52 @@ impl Sessions {
             tracing::error!(session = %id, %error, "cannot store a new session; killing it");
             durability.send_modify(|durability| *durability = Durability::Broken);
             handle.kill();
-            drop(
-                self.durability
-                    .write()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(&id),
-            );
+            self.forget(id);
+            drop(durable);
+            // Remove it from the runtime once it has ended, without holding
+            // up this call's answer.
+            let sessions = Arc::clone(self);
+            drop(self.tasks.spawn(async move {
+                sessions.hand_over(handle, Persisted::Incomplete).await;
+            }));
             return Err(error.into());
         }
         let info = handle.info();
-        drop(self.tasks.spawn(persist::run(
-            self.store.clone(),
-            handle,
-            durable,
-            durability,
-        )));
+        let sessions = Arc::clone(self);
+        let store = self.store.clone();
+        drop(self.tasks.spawn(async move {
+            let persisted = persist::run(store, handle.clone(), durable, durability).await;
+            sessions.hand_over(handle, persisted).await;
+        }));
         Ok(info)
+    }
+
+    /// The session's log is complete in the store (or never will be): let
+    /// the store serve it, and free what the runtime kept for it.
+    ///
+    /// A complete log means the durable channel was drained to its end, so
+    /// the session has ended and `remove` accepts it. Otherwise persistence
+    /// stopped early and killed the session; it is removed once it has
+    /// ended.
+    async fn hand_over(&self, handle: SessionHandle, persisted: Persisted) {
+        let id = handle.id();
+        if persisted == Persisted::Incomplete {
+            let _final = handle.ended().await;
+        }
+        if let Err(error) = self.runtime.remove(id) {
+            tracing::warn!(session = %id, %error, "cannot remove a finished session from the runtime");
+        }
+        self.forget(id);
+    }
+
+    /// Drop a session's durability entry; it is then found in the store.
+    fn forget(&self, id: SessionId) {
+        drop(
+            self.durability
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&id),
+        );
     }
 
     pub(crate) async fn find(&self, id: SessionId) -> Result<Found, ServiceError> {
@@ -184,7 +217,7 @@ impl Sessions {
     ) -> Result<(), ServiceError> {
         match self.find(id).await? {
             Found::Live { handle, .. } => Ok(handle.send(input).await?),
-            Found::Stored(_) => Err(ServiceError::EndedEarlier(id)),
+            Found::Stored(_) => Err(ServiceError::Ended(id)),
         }
     }
 

@@ -134,8 +134,10 @@ depend on the node, so there is no cycle).
     refused: no TLS stack in milestone 1 (ADR 0005 amendment).
   - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
     the `Handler` routing to `sessions` (live runtime sessions plus stored
-    ones from earlier runs), `persist` (one task per session drains its
-    durable channel into the store and publishes "durable through N"),
+    ones; a session whose log is complete, final status included, is
+    removed from the runtime with `SessionRuntime::remove` and served from
+    the store), `persist` (one task per session drains its durable channel
+    into the store and publishes "durable through N"),
     `subscribe` (ring, then a durable-gated store gap fill, then live;
     `Lagged` when a subscriber falls behind), and an ordered shutdown in
     which subscribers still receive the final `Interrupted` status. Both
