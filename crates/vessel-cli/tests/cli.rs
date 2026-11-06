@@ -406,8 +406,20 @@ async fn remote_nodes_need_an_explicit_token_and_an_absolute_cwd() {
         assert!(run.ok, "{}", run.stderr);
         let id = run.stdout.trim().to_owned();
         let attach = fixture.vessel(&["attach", &id], b"cwd\rexit\r").await;
-        let expected = format!("cwd {}", std::fs::canonicalize(&sub).unwrap().display());
-        assert!(attach.stdout.contains(&expected), "{}", attach.stdout);
+        // Compare canonical forms: on Windows the program may report a short
+        // (8.3) name while `canonicalize` gives the verbatim `\\?\` form of
+        // the same directory.
+        let reported = attach
+            .stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("cwd "))
+            .unwrap_or_else(|| panic!("no cwd line in {}", attach.stdout));
+        assert_eq!(
+            std::fs::canonicalize(reported.trim()).unwrap(),
+            std::fs::canonicalize(&sub).unwrap(),
+            "{}",
+            attach.stdout
+        );
         fixture.stop().await;
     })
     .await;
