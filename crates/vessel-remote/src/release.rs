@@ -22,7 +22,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use crate::install::{Build, InvalidDigest, Sha256Digest};
+use crate::build::Build;
+use crate::digest::{InvalidDigest, Sha256Digest};
 use crate::platform::Platform;
 
 /// The repository releases come from, by default.
