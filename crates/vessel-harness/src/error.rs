@@ -24,6 +24,17 @@ pub enum HarnessError {
         /// What is missing and how to fix it.
         reason: String,
     },
+    /// The requested working directory is relative. It would be resolved
+    /// against the node's own working directory, which the client does not
+    /// know, so it is refused; clients send absolute paths.
+    #[error(
+        "working directory {} is relative; send an absolute path (the node's own working directory means nothing to the client)",
+        cwd.display()
+    )]
+    RelativeDirectory {
+        /// The rejected directory.
+        cwd: PathBuf,
+    },
     /// The requested working directory is not a directory.
     #[error("working directory {} does not exist or is not a directory", cwd.display())]
     NoSuchDirectory {

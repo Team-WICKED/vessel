@@ -70,7 +70,9 @@ impl SessionError {
             Self::Launch(HarnessError::StructuredUnavailable { .. }) | Self::Unsupported { .. } => {
                 ErrorCode::Unsupported
             }
-            Self::Launch(HarnessError::NoSuchDirectory { .. })
+            Self::Launch(
+                HarnessError::NoSuchDirectory { .. } | HarnessError::RelativeDirectory { .. },
+            )
             | Self::NoWorkingDirectory
             | Self::Input(InputError::InvalidContent(_) | InputError::UnknownOption { .. }) => {
                 ErrorCode::InvalidRequest
