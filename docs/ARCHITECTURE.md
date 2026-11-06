@@ -41,6 +41,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
+| `vessel-fleet` | Fleet bundles (milestone 4, ADR 0012): the home's sources into a manifest and a content-addressed blob store; plan and apply into harness homes with recorded hashes (`managed.json`), local edits kept with the incoming version beside them, symlinks never followed, targets linked to the sources left alone; skills named by `SKILL.md`; MCP secret references resolved at launch. | proto |
 | `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node, remote |
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. | - |
 
@@ -368,6 +369,27 @@ they started.
     plaintext), a relay restart behind a forwarder, and
     `vessel-testkit`'s misbehaving relay (drop, replay, reorder, corrupt
     both ways end the channel; delay does not).
+- Milestone 4, Track F (in progress, `backend/m4-fleet`):
+  - `vessel-fleet` (F1, 2026-11-06): `bundle` turns the home's sources
+    (an instructions file, a skills directory, `skip` globs, MCP
+    definitions) into a `Manifest` and a content-addressed `BlobStore`
+    (`<root>/<2 hex>/<sha256>`, owner-only, written under temporary names,
+    chunked reads for `fleet.blob`, hash-checked writers for members).
+    Bundle paths are `instructions.md` and `skills/<name>/...`, `<name>`
+    being the `name` in the skill's `SKILL.md` (that one field, read
+    strictly). The generation rises only when files or MCP servers change.
+    Symlinks in the sources are followed only inside the skills directory.
+    `plan` decides per place in each `Target` (a harness home with its
+    instruction file and skills directory names): write, adopt identical
+    content, keep a local edit (or a file Vessel never wrote) with the
+    incoming version beside it (`.vessel-incoming`) as a conflict, remove
+    what left the bundle if unchanged, skip places in or linked to the
+    sources and symlinks below the root (never followed). `apply` checks
+    each place again, creates directories without crossing symlinks,
+    writes atomically and records hashes in `Managed` (`managed.json`).
+    `resolve` fills secret references and names every missing secret.
+    Tested over temporary trees, including the operator's linked layout
+    (Unix).
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.
