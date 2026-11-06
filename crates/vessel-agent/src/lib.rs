@@ -45,6 +45,7 @@ mod model;
 mod output;
 mod permissions;
 mod process;
+mod recent;
 mod stderr;
 mod transport;
 
