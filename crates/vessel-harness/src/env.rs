@@ -133,15 +133,17 @@ mod tests {
 
     #[test]
     fn only_home_variables_are_carried_and_homes_follow_them() {
+        // Absolute on every system (`/x` is not, on Windows).
+        let elsewhere = std::env::temp_dir().join("elsewhere-codex");
         let env = HarnessEnv::from_vars(PathBuf::from("/u"), |name| match name {
-            "CODEX_HOME" => Some(OsString::from("/elsewhere/codex")),
+            "CODEX_HOME" => Some(elsewhere.clone().into_os_string()),
             _ => None,
         })
         .with_var("PATH", OsString::from("/bin"));
         assert_eq!(env.var("PATH"), None);
         assert_eq!(env.var("CLAUDE_CONFIG_DIR"), None);
         let codex = Profile::default_for(HarnessKind::Codex);
-        assert_eq!(env.home(&codex), Some(PathBuf::from("/elsewhere/codex")));
+        assert_eq!(env.home(&codex), Some(elsewhere));
         let claude = Profile::default_for(HarnessKind::ClaudeCode);
         assert_eq!(env.home(&claude), Some(Path::new("/u").join(".claude")));
         assert!(HarnessEnv::variables().any(|name| name == "CLAUDE_CONFIG_DIR"));
