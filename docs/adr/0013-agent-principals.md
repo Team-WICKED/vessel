@@ -218,6 +218,20 @@ creator chain) are Track X.
   text), `kill_session`. Every tool but `list_nodes` takes `node` (an id
   or a name from `list_nodes`); a call for another node goes in
   `fleet.forward`, and that node applies its own grant, ownership and
-  limits. A name more than one node has is refused, asking for the id. Waiting is a long poll of `session.read` with `wait`, on every
-  node alike. The node's refusals come back as tool errors with the
-  protocol's code; a wrong call is a JSON-RPC error.
+  limits. A name more than one node has is refused, asking for the id.
+  Waiting is a long poll of `session.read` with `wait`, on every node
+  alike. The node's refusals come back as tool errors with the protocol's
+  code; a wrong call is a JSON-RPC error.
+- **Known limits (the review of Track X, 2026-11-06).**
+  - The limits are counted by the node that holds the sessions, so an
+    agent may own 8 live sessions on each node it reaches: up to 8 × N
+    across a fleet of N nodes. Depth is carried in the origin and holds
+    across nodes.
+  - A relaying member's own scopes on the home do not cap the calls it
+    relays: a call runs on the target with the target's grant to the home
+    intersected with the origin's scopes, whatever else the relaying
+    device holds; there is no read-only relay. A capped relay would store
+    a scope set with the `relay` scope (`vessel fleet invite
+    --relay=read,operate`), and the home would intersect the origin's
+    scopes with it before passing a call on; that needs a field on the
+    invitation and the device record, so a protocol change.
