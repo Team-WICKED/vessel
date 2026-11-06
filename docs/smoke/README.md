@@ -1,0 +1,101 @@
+# Manual smokes
+
+Checks a person runs by hand before a milestone closes, where the
+automated tests cannot reach: real accounts, a fresh machine. Each script
+prints what it does, stops at the first failure with the reason and the
+end of the node's log, and ends with `PASS`.
+
+Build first (both scripts default to the workspace's `target/release`; pass
+`--bin DIR` for another build):
+
+```bash
+cargo build --release --workspace --bins
+```
+
+## Milestone 4
+
+The plan's done criteria (`docs/plans/backend-m4.md`) ask for two smokes.
+
+### (a) Four profiles on one node, a session moved between them
+
+`profiles.sh` starts a throwaway node, gives it one profile per account
+you name, starts a structured Claude Code session under the first, and
+moves it to each next profile and back to the first. After every move it
+asks the agent for a word it was told before the first move: the reply
+must hold it, so the conversation came along.
+
+```bash
+docs/smoke/profiles.sh \
+    --profile first=/path/to/first-account-home \
+    --profile second=/path/to/second-account-home \
+    --profile third=/path/to/third-account-home \
+    --profile fourth=/path/to/fourth-account-home \
+    --model <a small model>
+```
+
+- Each home is a Claude Code configuration directory (what
+  `CLAUDE_CONFIG_DIR` names) with a logged-in account. Profile names and
+  homes come only from these arguments; nothing about your accounts is
+  stored anywhere but the script's temporary directory.
+- Needs `claude-agent-acp` and `claude` on `PATH`. The node runs with your
+  environment, minus anything that points `vessel` at your own node, book
+  or data directory (`VESSEL_*`) and minus `CLAUDE_CONFIG_DIR`; it listens
+  on a free loopback port with a temporary data directory, which is
+  removed at the end (`--keep` keeps it).
+- Costs: five short turns, one per account and one more on the first,
+  each on that account's quota. `--model` picks the model.
+- What stays: each move hard-links the conversation's files into the next
+  account's home, as a move does (ADR 0011), so the smoke's conversation
+  remains under `projects/` in every account's home, named after a
+  temporary working directory. The script lists those directories at the
+  end; remove them if you do not want them.
+- `--fake` runs the same steps against the testkit fakes with four
+  temporary homes (no account, no quota): use it to check the script
+  itself after a change.
+
+### (b) A fresh machine joins a fleet
+
+`join.sh` sets up a throwaway home with sample instructions, a skill and
+two MCP servers, then a "fresh machine" whose home directory holds four
+account directories (two Claude Code, two Codex) and nothing of Vessel.
+The fresh machine runs `vessel init --join` with the home's link, starts
+its node, and the script checks, timing each step:
+
+- `vessel init` made a profile for each extra account;
+- the fleet's instructions (`CLAUDE.md`, `AGENTS.md`) and skill are in all
+  four homes;
+- both MCP servers reach a structured session in every profile, the one
+  needing a secret with the value set on that node (read back from the
+  harness, never printed);
+- after a local edit to one home's instructions and a new version on the
+  home, the edit is kept, the home's version is beside it as
+  `CLAUDE.md.vessel-incoming`, the other homes follow, and `vessel fleet
+  status` lists the edit.
+
+```bash
+docs/smoke/join.sh --docker              # in a throwaway container (needs Docker)
+docs/smoke/join.sh --local               # or here, under a temporary HOME
+```
+
+- `--docker` runs both nodes in one container with no network (they talk
+  over its loopback), the binaries mounted read-only, and the container
+  removed at the end. The binaries need the build machine's C library or a
+  newer one: the default image is `ubuntu:24.04` (`--image` for another);
+  Docker pulls it if it is missing.
+- `--local` runs the same steps here with nothing of your environment but
+  the paths it creates: a temporary HOME for each node, loopback ports,
+  and no `--service`, so nothing is installed into this machine's service
+  manager and your own node, book and accounts are left alone.
+- The harnesses are the testkit fakes under the real names (`claude`,
+  `codex` and their ACP adapters), so no login or account is involved; a
+  real harness found on the script's `PATH` stops it before it runs.
+- A run takes about ten seconds once the binaries are built; the
+  `--deadline` for each step defaults to two minutes.
+- Expected in the output: `vessel init` lists Gemini CLI and OpenCode as
+  not installed (offered, never run), and `vessel fleet status` on the
+  fresh machine says the home did not take its grant (the fresh machine's
+  node has no route the home could call back on; syncing does not need
+  one).
+- `--service` is not part of the run: in a container there is no user
+  service manager, and on this machine it would install one. `vessel init
+  --service` is covered by `vessel-cli`'s tests against a temporary home.
