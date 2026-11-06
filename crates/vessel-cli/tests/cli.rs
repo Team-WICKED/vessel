@@ -130,6 +130,19 @@ mod support {
             std::fs::read_to_string(&merged).unwrap()
         }
 
+        /// Start `vessel <args>` against this fixture's node with piped
+        /// stdio, for tests that interact with it while it runs.
+        #[cfg(unix)]
+        pub(super) fn spawn_vessel(&self, args: &[&str]) -> tokio::process::Child {
+            let node = self.node.address().to_string();
+            command(&node, self.data.path(), self.data.path(), args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        }
+
         /// `vessel run claude --detach`; returns the new session's id.
         pub(super) async fn run_detached(&self) -> String {
             let cwd = self.cwd();
@@ -388,6 +401,73 @@ async fn remote_nodes_need_an_explicit_token_and_an_absolute_cwd() {
         let attach = fixture.vessel(&["attach", &id], b"cwd\rexit\r").await;
         let expected = format!("cwd {}", std::fs::canonicalize(&sub).unwrap().display());
         assert!(attach.stdout.contains(&expected), "{}", attach.stdout);
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// Under the kitty keyboard protocol (which Codex turns on) `Ctrl-]`
+/// arrives as `CSI 93;5u`. It detaches like the plain byte, and the keys
+/// typed before it still reach the session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_kitty_encoded_ctrl_bracket_detaches_after_the_keys_before_it() {
+    within(async {
+        let fixture = Fixture::start().await;
+        let id = fixture.run_detached().await;
+        let detached = fixture
+            .vessel(&["attach", &id], b"before detach\r\x1b[93;5u")
+            .await;
+        assert!(detached.ok, "{}", detached.stderr);
+        assert!(detached.stderr.contains("detached"), "{}", detached.stderr);
+        let attach = fixture.vessel(&["attach", &id], b"exit\r").await;
+        assert!(
+            attach.stdout.contains("echo: before detach"),
+            "{}",
+            attach.stdout
+        );
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// `SIGTERM` detaches cleanly (exit 0, the terminal restored) instead of
+/// killing the CLI mid-attach.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sigterm_detaches_cleanly() {
+    use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+
+    within(async {
+        let fixture = Fixture::start().await;
+        let id = fixture.run_detached().await;
+        let mut child = fixture.spawn_vessel(&["attach", &id]);
+        // Output is shown only once the attach loop runs, and its signal
+        // handlers are installed before that.
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        while !line.contains("ready") {
+            line.clear();
+            assert!(stdout.read_line(&mut line).await.unwrap() > 0, "no output");
+        }
+        let pid = child.id().unwrap().to_string();
+        let killed = tokio::process::Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .await
+            .unwrap();
+        assert!(killed.success());
+        let status = child.wait().await.unwrap();
+        let mut stderr = String::new();
+        let _read = child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .await
+            .unwrap();
+        assert!(status.success(), "{status:?} {stderr}");
+        assert!(stderr.contains("detached"), "{stderr}");
+        drop(child.stdin.take());
         fixture.stop().await;
     })
     .await;
