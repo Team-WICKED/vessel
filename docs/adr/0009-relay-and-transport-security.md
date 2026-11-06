@@ -434,3 +434,33 @@ was counted as the proxy, and charged no rate. Now:
   behind it a relay settles such a client early; that node also has the
   old shared budget, so it is protected only by upgrading. A device must
   finish its handshake and preamble through a relay within 5 s.
+
+## Amendment (2026-11-06): one budget per relay link, and per address directly
+
+The review's round 10 found the round-9 budgets still shared where they
+should not be. A node's 40 places for relayed channels waiting to be
+admitted were one budget for every relay it was linked to, while each
+relay holds one `/48` to 16 of a node's clients on its own: through three
+relays one `/48` held all 40 (16, 16 and 8), and every relayed connection
+to the node failed. A fleet member with no route of its own, which only
+its home's relays reach (up to 8), was cut off. And the direct route's
+64 places had no per-address limit, so one host could hold all of them,
+20 s at a time, on a node listening beyond loopback. Now:
+
+- Each relay link has its own budget of 40, made when the link starts
+  and gone with it. Links are few (the configured relays, and at most 8
+  that a home names), so the total stays bounded, and a relay's startup
+  check (one `/48`'s share, 16, under half of 40) holds per link.
+- The direct route counts its unadmitted channels per address as a relay
+  counts its own: 7 for an IPv4 address or an IPv6 `/64`, 14 for a
+  `/56`, 28 for a `/48`, under half of 64. The address is the socket's
+  peer; the node has no proxy mode, so there is no header to trust. The
+  block layering moved to a public module, `vessel_relay::address`
+  (`blocks`, `BlockCounts`, `WIDEST`), which the relay and the node share.
+- Alternatives: one relayed budget split evenly among the links (a link
+  added later would shrink the others', and a link gone would leave its
+  share unused); 8 per address directly (a `/48`'s 32 is half of 64,
+  which the startup rule refuses).
+- Cost: a node linked to many relays may hold up to 40 unadmitted
+  channels through each, so its memory bound grows with the number of
+  links (64 KiB frames at most until admitted).

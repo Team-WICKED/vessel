@@ -191,9 +191,11 @@ every method.)
   - A node gives a channel a relay spliced to it 5 s
     (`vessel_relay::RELAYED_ADMISSION`) for the Noise handshake and the
     device preamble together, and drops it otherwise (a direct channel
-    keeps 10 s for each); at most 40 relayed channels wait at once,
-    apart from 64 direct ones. A client must send its preamble as soon
-    as its handshake is done.
+    keeps 10 s for each); at most 40 channels wait at once through each
+    relay link, apart from 64 direct ones, of which one address (an IPv4
+    address or an IPv6 `/64`) holds 7, a `/56` 14 and a `/48` 28; past
+    those the carrier is dropped at once. A client must send its preamble
+    as soon as its handshake is done.
   - A node that does not know `full` or `ticket` reads the message as
     malformed and retries; a client that does not know `4503` sees a
     plain close; a relay from before tickets refuses a ticket as
