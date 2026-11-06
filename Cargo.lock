@@ -2258,6 +2258,7 @@ dependencies = [
  "vessel-node",
  "vessel-proto",
  "vessel-remote",
+ "vessel-store",
  "vessel-testkit",
 ]
 
@@ -2372,6 +2373,7 @@ dependencies = [
  "vessel-client",
  "vessel-proto",
  "vessel-rpc",
+ "vessel-store",
  "vessel-testkit",
 ]
 

@@ -13,12 +13,15 @@ vessel-proto.workspace = true
 vessel-rpc.workspace = true
 
 sha2.workspace = true
+# A scratch directory for a release download before it is uploaded.
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+# Tests stop any node they started (its lock names its pid).
+vessel-store.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 vessel-testkit.workspace = true
 

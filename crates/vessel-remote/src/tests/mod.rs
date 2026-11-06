@@ -7,6 +7,7 @@
 //! tests (drops the options, runs the command under `sh -c` in the fake
 //! home with `HOME` set to it).
 
+mod connector;
 mod install;
 mod release;
 mod ssh;
