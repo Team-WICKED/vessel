@@ -201,11 +201,14 @@ enum Dialed {
 
 impl<C: Connector + 'static> ResumingStream<C> {
     /// Start on `client`, a connection already open to the same node,
-    /// instead of dialling one. Later connections are dialled.
+    /// instead of dialling one. Later connections are dialled. `client` is
+    /// published ([`client`](Self::client)) at once: input can be sent on
+    /// it before the first record is read.
     #[must_use]
     pub fn reusing(mut self, client: NodeClient) -> Self {
         let session = self.session;
         let from = self.cursor;
+        let _none = self.current.send_replace(Some(client.clone()));
         let dial: Dial = Box::pin(async move { follow(client, session, from).await });
         self.state = State::Dialing { attempt: 0, dial };
         self

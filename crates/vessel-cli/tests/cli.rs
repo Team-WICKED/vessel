@@ -5,7 +5,7 @@
 //! Tests wait on the CLI process and on the session's own end, never on
 //! time; the timeout only turns a hang into a failure.
 
-use support::{Fixture, within};
+use support::{Captured, Fixture, Proxy, within};
 
 #[cfg(test)]
 mod support {
@@ -120,6 +120,30 @@ mod support {
             child.wait_with_output().await.unwrap().into()
         }
 
+        /// Run `vessel <args>` without `--node` (the node book and project
+        /// files decide) in `dir`, with extra environment `env`.
+        pub(super) async fn vessel_book(
+            &self,
+            dir: &Path,
+            args: &[&str],
+            env: &[(&str, &std::ffi::OsStr)],
+        ) -> Ran {
+            let mut command = book_command(self.data.path(), dir, args);
+            for (key, value) in env {
+                let _ = command.env(key, value);
+            }
+            command.stdin(Stdio::null()).output().await.unwrap().into()
+        }
+
+        /// The node book `vessel` uses in these tests.
+        pub(super) fn book(&self) -> std::path::PathBuf {
+            self.data
+                .path()
+                .join("config")
+                .join("vessel")
+                .join("nodes.toml")
+        }
+
         /// Run `vessel <args>` with stdout and stderr going to one file, as
         /// `2>&1` does; returns what was written, in the order written.
         pub(super) async fn vessel_merged(&self, args: &[&str]) -> String {
@@ -150,6 +174,16 @@ mod support {
                 .unwrap()
         }
 
+        /// Start `vessel --node <node> <args>` with piped stdio.
+        pub(super) fn spawn_vessel_at(&self, node: &str, args: &[&str]) -> tokio::process::Child {
+            command(node, self.data.path(), self.data.path(), args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        }
+
         /// `vessel run claude --detach`; returns the new session's id.
         pub(super) async fn run_detached(&self) -> String {
             let cwd = self.cwd();
@@ -165,17 +199,134 @@ mod support {
         }
     }
 
+    /// A TCP forwarder to a node that the test can cut, as a network drop
+    /// would: every open connection closes at once; new ones are still
+    /// accepted.
+    pub(super) struct Proxy {
+        pub(super) address: SocketAddr,
+        open: std::sync::Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
+        accepting: tokio::task::JoinHandle<()>,
+    }
+
+    impl Proxy {
+        pub(super) async fn start(to: SocketAddr) -> Self {
+            let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let address = listener.local_addr().unwrap();
+            let open = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let tracked = std::sync::Arc::clone(&open);
+            let accepting = tokio::spawn(async move {
+                while let Ok((mut inbound, _peer)) = listener.accept().await {
+                    let forwarding = tokio::spawn(async move {
+                        let Ok(mut outbound) = tokio::net::TcpStream::connect(to).await else {
+                            return;
+                        };
+                        let _done =
+                            tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                    });
+                    tracked.lock().unwrap().push(forwarding.abort_handle());
+                }
+            });
+            Self {
+                address,
+                open,
+                accepting,
+            }
+        }
+
+        /// Close every connection open now.
+        pub(super) fn cut(&self) {
+            for connection in self.open.lock().unwrap().drain(..) {
+                connection.abort();
+            }
+        }
+    }
+
+    impl Drop for Proxy {
+        fn drop(&mut self) {
+            self.cut();
+            self.accepting.abort();
+        }
+    }
+
+    /// Write an executable script. The text goes to a side file and `cp`
+    /// creates the script, so this process never holds it open for
+    /// writing: a test forking on another thread meanwhile would keep that
+    /// descriptor and running the script would fail with `ETXTBSY`.
+    #[cfg(unix)]
+    pub(super) fn executable(path: &Path, text: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut source = path.as_os_str().to_owned();
+        source.push(".source");
+        std::fs::write(&source, text).unwrap();
+        let copied = std::process::Command::new("cp")
+            .arg(&source)
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(copied.success());
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Everything a stream has produced so far, readable while it runs.
+    pub(super) struct Captured(tokio::sync::watch::Receiver<String>);
+
+    impl Captured {
+        pub(super) fn start(stream: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> Self {
+            use tokio::io::AsyncReadExt as _;
+
+            let (sender, receiver) = tokio::sync::watch::channel(String::new());
+            drop(tokio::spawn(async move {
+                let mut stream = stream;
+                let mut buffer = [0_u8; 4096];
+                while let Ok(read) = stream.read(&mut buffer).await {
+                    if read == 0 {
+                        return;
+                    }
+                    let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                    sender.send_modify(|text| text.push_str(&chunk));
+                }
+            }));
+            Self(receiver)
+        }
+
+        /// Wait until the output contains `needle` `times` times.
+        pub(super) async fn wait_for(&mut self, needle: &str, times: usize) {
+            let seen = self
+                .0
+                .wait_for(|text| text.matches(needle).count() >= times)
+                .await
+                .is_ok();
+            assert!(seen, "output ended without {needle:?}: {}", self.text());
+        }
+
+        pub(super) fn text(&self) -> String {
+            self.0.borrow().clone()
+        }
+    }
+
+    /// `vessel` against `node` (or, with `None`, whatever the book says),
+    /// with `data` as its local data directory and `<data>/config` as its
+    /// configuration directory, so no test reads the user's own node book.
     fn command(node: &str, data: &Path, dir: &Path, args: &[&str]) -> Command {
+        let mut command = book_command(data, dir, args);
+        let _ = command.arg("--node").arg(node);
+        command
+    }
+
+    fn book_command(data: &Path, dir: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_vessel"));
         let _ = command
-            .arg("--node")
-            .arg(node)
             .arg("--data-dir")
             .arg(data)
             .args(args)
             .current_dir(dir)
+            .env("VESSEL_CONFIG_DIR", data.join("config"))
             .env_remove("VESSEL_TOKEN")
-            .env_remove("VESSEL_NODE");
+            .env_remove("VESSEL_NODE")
+            .env_remove("VESSEL_SSH");
         command
     }
 }
@@ -489,6 +640,264 @@ async fn sigterm_detaches_cleanly() {
         assert!(status.success(), "{status:?} {stderr}");
         assert!(stderr.contains("detached"), "{stderr}");
         drop(child.stdin.take());
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// The node book: a websocket node added by name becomes the default, its
+/// id is recorded on first contact, and a different node answering later
+/// is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_nodes_are_added_used_and_pinned() {
+    within(async {
+        let fixture = Fixture::start().await;
+        let dir = fixture.data();
+        let url = format!("ws://{}", fixture.node_address());
+        let token = fixture.data().join("token");
+        let token = token.to_str().unwrap();
+        let added = fixture
+            .vessel_book(
+                dir,
+                &[
+                    "nodes",
+                    "add",
+                    "here",
+                    &url,
+                    "--token-file",
+                    token,
+                    "--default",
+                ],
+                &[],
+            )
+            .await;
+        assert!(added.ok, "{}", added.stderr);
+        let list = fixture.vessel_book(dir, &["nodes", "list"], &[]).await;
+        assert!(list.stdout.contains("* here"), "{}", list.stdout);
+        let before = fixture
+            .vessel_book(dir, &["nodes", "show", "here"], &[])
+            .await;
+        assert!(before.stdout.contains("not seen yet"), "{}", before.stdout);
+
+        // No --node: the book's default, with its token file.
+        let status = fixture.vessel_book(dir, &["status"], &[]).await;
+        assert!(status.ok, "{}", status.stderr);
+        assert!(status.stdout.contains("claude-code"), "{}", status.stdout);
+        let shown = fixture
+            .vessel_book(dir, &["nodes", "show", "here"], &[])
+            .await;
+        let id = shown
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("id: "))
+            .unwrap()
+            .to_owned();
+        assert!(
+            id.parse::<vessel_proto::NodeId>().is_ok(),
+            "{}",
+            shown.stdout
+        );
+
+        // Another node answering at that address is refused.
+        let book = std::fs::read_to_string(fixture.book()).unwrap();
+        let other = vessel_proto::NodeId::random().to_string();
+        std::fs::write(fixture.book(), book.replace(&id, &other)).unwrap();
+        let refused = fixture.vessel_book(dir, &["status"], &[]).await;
+        assert!(!refused.ok);
+        assert!(
+            refused.stderr.contains("a different node answered"),
+            "{}",
+            refused.stderr
+        );
+
+        let removed = fixture
+            .vessel_book(dir, &["nodes", "remove", "here"], &[])
+            .await;
+        assert!(removed.ok, "{}", removed.stderr);
+        let empty = fixture.vessel_book(dir, &["nodes", "list"], &[]).await;
+        assert!(empty.stdout.contains("no nodes yet"), "{}", empty.stdout);
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// A project's `.vessel/config.toml` picks one of the user's nodes, and
+/// may do nothing else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_project_file_only_picks_among_the_users_nodes() {
+    within(async {
+        let fixture = Fixture::start().await;
+        let url = format!("ws://{}", fixture.node_address());
+        let token = fixture.data().join("token");
+        let added = fixture
+            .vessel_book(
+                fixture.data(),
+                &[
+                    "nodes",
+                    "add",
+                    "lab",
+                    &url,
+                    "--token-file",
+                    token.to_str().unwrap(),
+                ],
+                &[],
+            )
+            .await;
+        assert!(added.ok, "{}", added.stderr);
+
+        let project = tempfile::tempdir().unwrap();
+        let nested = project.path().join("src");
+        std::fs::create_dir_all(project.path().join(".vessel")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        let config = project.path().join(".vessel").join("config.toml");
+        std::fs::write(&config, "default_node = \"lab\"\n").unwrap();
+        let status = fixture.vessel_book(&nested, &["status"], &[]).await;
+        assert!(status.ok, "{}", status.stderr);
+
+        std::fs::write(&config, "[nodes.evil]\nssh = \"attacker.example\"\n").unwrap();
+        let refused = fixture.vessel_book(&nested, &["status"], &[]).await;
+        assert!(!refused.ok);
+        assert!(
+            refused.stderr.contains("may only set `default_node`"),
+            "{}",
+            refused.stderr
+        );
+        std::fs::write(&config, "default_node = \"elsewhere\"\n").unwrap();
+        let unknown = fixture.vessel_book(&nested, &["status"], &[]).await;
+        assert!(!unknown.ok);
+        assert!(
+            unknown.stderr.contains("not a node in your book"),
+            "{}",
+            unknown.stderr
+        );
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// A connection lost during a terminal attach (the network between client
+/// and node dropped): the CLI says so, reconnects, and goes on where it
+/// was, with nothing shown twice or skipped and input working again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_terminal_attach_survives_a_lost_connection() {
+    use tokio::io::AsyncWriteExt as _;
+
+    within(async {
+        let fixture = Fixture::start().await;
+        let id = fixture.run_detached().await;
+        let proxy = Proxy::start(fixture.node_address().parse().unwrap()).await;
+        let node = proxy.address.to_string();
+        let mut child = fixture.spawn_vessel_at(&node, &["attach", &id]);
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = Captured::start(child.stdout.take().unwrap());
+        let mut stderr = Captured::start(child.stderr.take().unwrap());
+
+        stdin.write_all(b"one\r").await.unwrap();
+        stdout.wait_for("echo: one", 1).await;
+
+        proxy.cut();
+        stderr.wait_for("connection lost; reconnecting", 1).await;
+        stderr.wait_for("reconnected", 1).await;
+
+        stdin.write_all(b"two\r").await.unwrap();
+        stdout.wait_for("echo: two", 1).await;
+        stdin.write_all(b"exit\r").await.unwrap();
+        drop(stdin);
+        let status = child.wait().await.unwrap();
+        assert!(status.success(), "{}", stderr.text());
+        let shown = stdout.text();
+        assert_eq!(shown.matches("echo: one").count(), 1, "{shown}");
+        assert_eq!(shown.matches("echo: two").count(), 1, "{shown}");
+        assert!(
+            stderr.text().contains("session exited (0)"),
+            "{}",
+            stderr.text()
+        );
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// `vessel node install` uploads a local build to an SSH node and names it
+/// by content; a second install finds it. Through a stand-in `ssh` that
+/// runs the command in a temporary "remote" home, and a stand-in `vesseld`
+/// (Unix only: both are shell scripts).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn node_install_uploads_a_local_build_over_ssh() {
+    within(async {
+        let fixture = Fixture::start().await;
+        let remote = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        let ssh = tools.path().join("ssh");
+        support::executable(
+            &ssh,
+            "#!/bin/sh\n\
+             while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n\
+             shift\n\
+             cd \"$FAKE_SSH_HOME\" || exit 255\n\
+             HOME=\"$FAKE_SSH_HOME\" exec sh -c \"$*\"\n",
+        );
+        let os = if cfg!(target_os = "macos") {
+            "apple-darwin"
+        } else {
+            "unknown-linux-gnu"
+        };
+        let triple = format!("{}-{os}", std::env::consts::ARCH);
+        let vesseld = tools.path().join("vesseld");
+        support::executable(
+            &vesseld,
+            &format!(
+                "#!/bin/sh\ncase \"$1\" in version) echo '0.2.0 {triple}' ;; cleanup) ;; *) exit 2 ;; esac\n"
+            ),
+        );
+        let env = [
+            ("VESSEL_SSH", ssh.as_os_str()),
+            ("FAKE_SSH_HOME", remote.path().as_os_str()),
+        ];
+        let dir = fixture.data();
+        let added = fixture
+            .vessel_book(dir, &["nodes", "add", "gpu", "me@gpu-box"], &env)
+            .await;
+        assert!(added.ok, "{}", added.stderr);
+        let args = [
+            "--node",
+            "gpu",
+            "node",
+            "install",
+            "--vesseld",
+            vesseld.to_str().unwrap(),
+        ];
+        let installed = fixture.vessel_book(dir, &args, &env).await;
+        assert!(installed.ok, "{}", installed.stderr);
+        assert!(
+            installed.stdout.contains("installed ~/.vessel/bin/vesseld-0.2.0-dev-")
+                && installed.stdout.contains(" on gpu"),
+            "{}",
+            installed.stdout
+        );
+        let bin = remote.path().join(".vessel").join("bin");
+        let names: Vec<_> = std::fs::read_dir(&bin)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert!(names[0].starts_with("vesseld-0.2.0-dev-"), "{names:?}");
+
+        let again = fixture.vessel_book(dir, &args, &env).await;
+        assert!(again.ok, "{}", again.stderr);
+        assert!(again.stdout.contains("already installed"), "{}", again.stdout);
+
+        let ws = format!("ws://{}", fixture.node_address());
+        let not_ssh = fixture
+            .vessel_book(dir, &["--node", &ws, "node", "install"], &env)
+            .await;
+        assert!(!not_ssh.ok);
+        assert!(
+            not_ssh.stderr.contains("is not an SSH node"),
+            "{}",
+            not_ssh.stderr
+        );
         fixture.stop().await;
     })
     .await;

@@ -209,6 +209,10 @@ async fn an_open_connection_is_reused_and_redialled_only_after_a_loss() {
     )
     .reusing(client)
     .with_backoff(FAST);
+    assert!(
+        stream.client().borrow().is_some(),
+        "a reused connection is published before the first record"
+    );
 
     let seen = drain(&mut stream, async |records| {
         if records == 1 {

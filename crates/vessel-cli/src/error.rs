@@ -2,8 +2,10 @@
 
 use std::path::PathBuf;
 
-use vessel_client::{CallError, ConnectError, NodeUrl, StreamError};
+use vessel_client::book::BookError;
+use vessel_client::{CallError, ConnectError, InvalidAddress, NodeUrl, PinnedError, StreamError};
 use vessel_node::NodeError;
+use vessel_remote::{BuildError, InstallError, PlatformError, ReleaseError, SshError};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
@@ -30,7 +32,47 @@ pub(crate) enum CliError {
         "--cwd {} is relative, but {node} is not on this machine: give an absolute path on that machine",
         cwd.display()
     )]
-    RelativeCwd { cwd: PathBuf, node: NodeUrl },
+    RelativeCwd { cwd: PathBuf, node: String },
+    /// A book entry's token file could not be read or holds no token.
+    #[error("cannot use the token file {}", path.display())]
+    TokenFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The node book or a project file.
+    #[error(transparent)]
+    Book(#[from] BookError),
+    /// Text that names no node.
+    #[error("`{text}` is not a node address")]
+    Address {
+        text: String,
+        #[source]
+        source: InvalidAddress,
+    },
+    /// A different node answered than the one the book pinned.
+    #[error(transparent)]
+    Changed(PinnedError<ConnectError>),
+    /// A command that needs an SSH node got another kind.
+    #[error("{node} is not an SSH node; {what} works only over SSH")]
+    NotSsh { node: String, what: &'static str },
+    /// Arguments that do not fit together.
+    #[error("{0}")]
+    Usage(&'static str),
+    #[error(transparent)]
+    Ssh(#[from] SshError),
+    #[error(transparent)]
+    Install(#[from] InstallError),
+    #[error(transparent)]
+    Platform(#[from] PlatformError),
+    #[error(transparent)]
+    Release(#[from] ReleaseError),
+    #[error(transparent)]
+    Build(#[from] BuildError),
+    /// SSH nodes are reached through `vessel-remote`'s connector, which
+    /// comes with the node side's framed transport (milestone 2, C5).
+    #[error("{0} is an SSH node; connecting to SSH nodes is not available in this build yet")]
+    SshNotYet(String),
     /// The local token file holds something a client cannot send.
     #[error("the token in {} cannot be sent as a bearer token", .0.display())]
     UnusableToken(PathBuf),

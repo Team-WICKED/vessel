@@ -1,7 +1,7 @@
 //! `vessel`: the command-line client for Vessel nodes.
 //!
-//! Commands: `node start`, `status`, `harnesses`, `sessions`, `run`,
-//! `attach`, `send`, `log`, `kill`. Everything goes through
+//! Commands: `node start`, `node install`, `nodes`, `status`, `harnesses`,
+//! `sessions`, `run`, `attach`, `send`, `log`, `kill`. Everything goes through
 //! `vessel-client`; this crate only parses arguments, resolves the token,
 //! and turns results into text. Output goes to stdout, notes and errors to
 //! stderr, so `vessel log ID > file` captures exactly the session's output.
@@ -13,6 +13,8 @@ mod connect;
 mod error;
 mod io;
 mod log;
+mod nodes;
+mod remote;
 mod render;
 mod selector;
 mod view;
@@ -29,7 +31,8 @@ async fn main() -> ExitCode {
     // A node shows its lifecycle; client commands only warnings.
     let default_level = match cli.command {
         Command::Node { .. } => "info",
-        Command::Status
+        Command::Nodes { .. }
+        | Command::Status
         | Command::Harnesses
         | Command::Sessions
         | Command::Run(_)

@@ -9,13 +9,12 @@
 //! `echo "fix the build" | vessel attach ID` prints the whole reply and
 //! exits.
 
-use vessel_client::{NodeClient, SessionStream};
 use vessel_proto::{
-    AgentEvent, ContentBlock, EventRecord, EventSeq, PermissionOutcome, SessionEvent, SessionId,
+    AgentEvent, ContentBlock, EventRecord, PermissionOutcome, SessionEvent, SessionInfo,
     SessionInput, SessionStatus,
 };
 
-use super::{Ended, send};
+use super::{Ended, Sent, Stream, notice, send};
 use crate::error::CliError;
 use crate::io;
 use crate::view::{Action, Conversation, HELP};
@@ -61,15 +60,11 @@ impl Turns {
     }
 }
 
-pub(super) async fn attach(
-    client: &NodeClient,
-    session: SessionId,
-    from: EventSeq,
-) -> Result<Ended, CliError> {
-    let mut stream = client.follow(session, from).await?;
+pub(super) async fn attach(mut stream: Stream, session: &SessionInfo) -> Result<Ended, CliError> {
+    let clients = stream.client();
     let mut view = View::default();
-    // History first, up to where the session was when the stream opened.
-    let joined_at = stream.info().next_seq;
+    // History first, up to where the session was when it was looked up.
+    let joined_at = session.next_seq;
     while stream.cursor() < joined_at {
         if let Some(ended) = view.next(&mut stream).await? {
             return Ok(ended);
@@ -112,7 +107,14 @@ pub(super) async fn attach(
                     Action::Nothing => continue,
                 };
                 let is_prompt = matches!(input, SessionInput::Prompt { .. });
-                if send(client, session, input).await? && is_prompt {
+                // While reconnecting there is no connection to send on; the
+                // line is dropped, not queued, since what it answers may
+                // have changed by the time the connection is back.
+                let Some(client) = clients.borrow().clone() else {
+                    io::note("[vessel] not connected right now; that line was not sent\n").await?;
+                    continue;
+                };
+                if send(&client, session.id, input).await? == Sent::Accepted && is_prompt {
                     view.turns.unstarted = view.turns.unstarted.saturating_add(1);
                 }
             }
@@ -130,7 +132,7 @@ struct View {
 
 impl View {
     /// Show the next record; `Some` when the session has ended.
-    async fn next(&mut self, stream: &mut SessionStream) -> Result<Option<Ended>, CliError> {
+    async fn next(&mut self, stream: &mut Stream) -> Result<Option<Ended>, CliError> {
         match stream.next().await {
             None => Ok(Some(Ended::Session(self.last_status.take()))),
             Some(Ok(record)) => {
@@ -144,7 +146,7 @@ impl View {
                 Ok(None)
             }
             Some(Err(error)) if !error.is_fatal() => {
-                io::note(&format!("[vessel] {error}\n")).await?;
+                notice(&error, "\n").await?;
                 Ok(None)
             }
             Some(Err(error)) => Err(error.into()),

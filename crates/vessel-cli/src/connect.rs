@@ -1,11 +1,25 @@
-//! Connecting to the node named on the command line.
+//! Connecting to the node the command line names.
+//!
+//! A command first resolves its node ([`nodes::resolve`]: `--node`, the
+//! project's default, the book's, or this machine's), then connects
+//! through a [`NodeConnector`]. The connector is kept with the connection
+//! ([`Connected`]) so that an attach can dial again the same way when the
+//! connection drops (`vessel_client::ResumingStream`), and every dial
+//! accepts only the node pinned in the book (`vessel_client::Pinned`).
 
-use vessel_client::{BearerToken, NodeClient};
+use std::sync::Arc;
+
+use vessel_client::book::{Resolved, TokenSource};
+use vessel_client::{
+    BearerToken, ConnectError, Connector, NodeAddress, NodeClient, NodeUrl, Pinned, PinnedError,
+    WsConnector,
+};
 use vessel_node::DataDir;
 use vessel_proto::ClientInfo;
 
 use crate::args::Target;
 use crate::error::CliError;
+use crate::nodes;
 
 /// The local data directory: `--data-dir`, or `~/.vessel`.
 pub(crate) fn data_dir(target: &Target) -> Result<DataDir, CliError> {
@@ -17,8 +31,106 @@ pub(crate) fn data_dir(target: &Target) -> Result<DataDir, CliError> {
         .ok_or(CliError::NoHome)
 }
 
-/// Connect with `--token`/`VESSEL_TOKEN`, or, for a node on this machine,
-/// the local token file.
+/// How this client introduces itself.
+pub(crate) fn client_info() -> ClientInfo {
+    ClientInfo {
+        name: "vessel-cli".to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+    }
+}
+
+/// An open connection, and how to open another to the same node.
+#[derive(Debug, Clone)]
+pub(crate) struct Connected {
+    pub(crate) client: NodeClient,
+    pub(crate) connector: Arc<NodeConnector>,
+}
+
+/// Opens connections to the resolved node, whatever its transport.
+#[derive(Debug)]
+pub(crate) enum NodeConnector {
+    Ws(Pinned<WsConnector>),
+}
+
+/// Why [`NodeConnector`] could not connect.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NodeConnectError {
+    #[error(transparent)]
+    Ws(PinnedError<ConnectError>),
+}
+
+impl Connector for NodeConnector {
+    type Error = NodeConnectError;
+
+    async fn connect(&self, client: ClientInfo) -> Result<NodeClient, NodeConnectError> {
+        match self {
+            Self::Ws(connector) => connector
+                .connect(client)
+                .await
+                .map_err(NodeConnectError::Ws),
+        }
+    }
+
+    fn is_transient(&self, error: &NodeConnectError) -> bool {
+        match (self, error) {
+            (Self::Ws(connector), NodeConnectError::Ws(error)) => connector.is_transient(error),
+        }
+    }
+}
+
+impl From<NodeConnectError> for CliError {
+    fn from(error: NodeConnectError) -> Self {
+        match error {
+            NodeConnectError::Ws(PinnedError::Connect(error)) => Self::Connect(error),
+            NodeConnectError::Ws(changed) => Self::Changed(changed),
+        }
+    }
+}
+
+/// Resolve the node and connect to it.
+pub(crate) async fn connect(target: &Target) -> Result<Connected, CliError> {
+    let (resolved, book) = nodes::resolve(target)?;
+    connect_to(target, &resolved, &book).await
+}
+
+/// Connect to `resolved`. A book node seen for the first time gets its id
+/// recorded in the book at `book`.
+pub(crate) async fn connect_to(
+    target: &Target,
+    resolved: &Resolved,
+    book: &std::path::Path,
+) -> Result<Connected, CliError> {
+    let connector = match &resolved.address {
+        NodeAddress::Ws(url) => {
+            let token = token(target, resolved, url).await?;
+            NodeConnector::Ws(Pinned::new(
+                WsConnector::new(url.clone(), token),
+                resolved.pinned,
+            ))
+        }
+        NodeAddress::Ssh(_) => return Err(CliError::SshNotYet(nodes::label(resolved))),
+    };
+    let client = connector.connect(client_info()).await?;
+    if let Some(name) = &resolved.name
+        && resolved.pinned.is_none()
+    {
+        nodes::pin(book, name, client.node().id).await;
+    }
+    Ok(Connected {
+        client,
+        connector: Arc::new(connector),
+    })
+}
+
+/// Whether `resolved` is the node on this machine: a loopback websocket
+/// address, decided from the text (see `NodeUrl::is_loopback`).
+pub(crate) fn is_here(resolved: &Resolved) -> bool {
+    matches!(&resolved.address, NodeAddress::Ws(url) if url.is_loopback())
+}
+
+/// The token for a websocket node: `--token`/`VESSEL_TOKEN`, else the book
+/// entry's token file, else, for a node on this machine, the local token
+/// file.
 ///
 /// [Decision Log]
 /// - Purpose: `vessel` on the node's own machine should just work, reading
@@ -27,22 +139,43 @@ pub(crate) fn data_dir(target: &Target) -> Result<DataDir, CliError> {
 ///   remote `ws://` node crosses the network in clear text. The local token
 ///   file is this machine's node's secret; sending it to whatever host
 ///   `--node` names would hand it to that host and to the network.
-/// - Choice: the token file is used only when `--node` is a loopback
-///   address or `localhost` (decided from the text, no DNS). For any other
-///   node the token must be given explicitly, and the error says so.
+/// - Choice: the local token file is used only when the node's address is
+///   a loopback address or `localhost` (decided from the text, no DNS). A
+///   book entry may name a token file of its own (the user wrote it there
+///   for that node). For any other node the token must be given
+///   explicitly, and the error says so.
 /// - Cost: reaching a local node through a non-loopback address of this
 ///   machine (its LAN IP) needs `--token` too.
-pub(crate) async fn connect(target: &Target) -> Result<NodeClient, CliError> {
-    let token = match &target.token {
-        Some(token) => token.clone(),
-        None if target.node.is_loopback() => local_token(data_dir(target)?).await?,
-        None => return Err(CliError::TokenRequired(target.node.clone())),
+async fn token(
+    target: &Target,
+    resolved: &Resolved,
+    url: &NodeUrl,
+) -> Result<BearerToken, CliError> {
+    if let Some(token) = &target.token {
+        return Ok(token.clone());
+    }
+    if let Some(source) = &resolved.token {
+        return token_file(source).await;
+    }
+    if url.is_loopback() {
+        return local_token(data_dir(target)?).await;
+    }
+    Err(CliError::TokenRequired(url.clone()))
+}
+
+async fn token_file(source: &TokenSource) -> Result<BearerToken, CliError> {
+    let path = source.path(dirs::home_dir().as_deref());
+    let read = {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || std::fs::read_to_string(path)).await?
     };
-    let client = ClientInfo {
-        name: "vessel-cli".to_owned(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-    };
-    Ok(NodeClient::connect(&target.node, &token, client).await?)
+    let text = read.map_err(|source| CliError::TokenFile {
+        path: path.clone(),
+        source,
+    })?;
+    text.trim()
+        .parse()
+        .map_err(|_invalid| CliError::UnusableToken(path))
 }
 
 async fn local_token(dir: DataDir) -> Result<BearerToken, CliError> {

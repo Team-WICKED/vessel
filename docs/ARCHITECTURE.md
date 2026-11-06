@@ -218,6 +218,19 @@ depend on the node, so there is no cycle).
     record order across stdout and stderr. The local token file is sent
     only to a loopback `--node`, and a relative `--cwd` is resolved only
     for one. Tested through the binary (`tests/cli.rs`).
+    Milestone 2 (Track C, in progress): `--node` is resolved through the
+    node book (a name, then `ssh://`/`user@host`, then a websocket
+    address; else the project's or the book's `default_node`, else this
+    machine's node), and `vessel nodes add|list|show|remove|default` edits
+    the book. A book node's id is pinned on first contact and a different
+    node is refused. Attach (both modes) follows through a
+    `ResumingStream`: a lost connection shows `[vessel] connection lost;
+    reconnecting…`, then `[vessel] reconnected`, and the attach goes on
+    without repeats or gaps; input lost with the connection is reported,
+    not resent (tested through a TCP proxy the test cuts). `vessel node
+    install` uploads a local build or this version's release to an SSH
+    node. Connecting to SSH nodes, `node status` and `node update` come
+    with the SSH connector.
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.
