@@ -53,13 +53,18 @@ file references.
   - Track R's review of Track P (items 1 to 10) is addressed, including
     the 64 KiB frame limit until the preamble is answered
     (`SecureChannel::set_max_frame`, 00caafa).
-- **Decided, waiting for `vessel-relay`:** direct `/secure` connections
-  should be kept alive like relayed ones: the node pings every 10 s and
-  drops a connection silent for 30 s, and the client's direct carrier
-  fails after 30 s of silence, so a half-open connection (a laptop that
-  slept, a NAT mapping that expired) is noticed and the attach resumes,
-  instead of hanging until TCP gives up. It needs `AxumCarrier` to send
-  pings and `vessel_relay::connect` to set the idle limit.
+- **Keepalive on direct routes (`backend/m3-ping`):** a node pings its own
+  `/secure` connections every 10 s and drops one silent for 30 s, and a
+  client's direct carrier gives up after 30 s of silence, as relays and
+  relayed carriers already did: a half-open direct connection (a laptop
+  that slept, a NAT mapping that expired) ends on both sides, and the
+  reconnecting stream resumes. One `vessel_relay::Keepalive` (10 s, 30 s)
+  sets the relay's limits, `dial`, `connect` and the node's `/secure`;
+  `Config::keepalive` and `WsDialer::with_keepalive` change it. Tested on
+  paused time (a client that stops answering is dropped at 30 s after two
+  pings; one that answers stays up; a silent node is dropped by the
+  client at 30 s) and end to end on a frozen path (the attach resumes, the
+  node closes its end).
 
 ## Goal
 
@@ -343,14 +348,16 @@ impl NodeLink {
     pub async fn run(self, accept: impl Fn(WsCarrier) + Send + Sync + 'static, shutdown: CancellationToken);
 }
 
-/// The client side: a carrier to the node with `routing_id` through `relay`
-/// (fails after 30 s of silence), or to a node's own `/secure` (no limit).
+/// The client side: a carrier to the node with `routing_id` through `relay`,
+/// or to a node's own `/secure`; either fails after 30 s of silence (the
+/// relay, or the node, pings every 10 s). `_with` variants take a Keepalive.
 pub async fn dial(relay: &RouteUrl, node: &RoutingId, tls: &TlsConfig) -> Result<WsCarrier, DialError>;
 pub async fn connect(url: &str, tls: &TlsConfig) -> Result<WsCarrier, DialError>;
+pub struct Keepalive { pub ping: Duration, pub silence: Duration }   // DEFAULT: 10 s, 30 s
 
 /// Websocket carriers: opened (tungstenite) and accepted on `/secure` (axum).
 pub struct WsCarrier;
-pub struct AxumCarrier;   // AxumCarrier::new(socket, idle: Option<Duration>)
+pub struct AxumCarrier;   // AxumCarrier::new(socket, keepalive: Option<Keepalive>): pings, silence limit
 /// The node's handshake on a websocket: closes with 4401 when it fails.
 pub async fn respond<C: NodeCarrier>(carrier: C, keypair: &NodeKeypair, config: &Config) -> Result<SecureChannel<C>, SecureError>;
 /// The close code inside `SecureError::Carrier(io)`.

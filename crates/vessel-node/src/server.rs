@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use tokio_util::task::TaskTracker;
-use vessel_relay::AxumCarrier;
+use vessel_relay::{AxumCarrier, Keepalive};
 use vessel_rpc::Server;
 use vessel_store::NodeToken;
 
@@ -39,6 +39,8 @@ pub(crate) struct Gateway {
     pub(crate) rpc: Arc<Server<Guarded>>,
     pub(crate) token: Arc<NodeToken>,
     pub(crate) secure: SecureGateway,
+    /// Pings and the silence limit for `/secure` connections.
+    pub(crate) keepalive: Keepalive,
     pub(crate) connections: TaskTracker,
 }
 
@@ -89,7 +91,10 @@ pub(crate) const SECURE_PATH: &str = "/secure";
 
 /// A secure channel straight to the node. Messages and frames are capped
 /// at one record ([`vessel_secure::MAX_RECORD`]), so an oversized message
-/// is refused from its header, before the node buffers it.
+/// is refused from its header, before the node buffers it. Nobody else
+/// pings a direct connection, so the node does: a half-open one (a client
+/// that slept, a NAT mapping that expired) is dropped after the silence
+/// limit, as a relay drops relayed ones.
 async fn secure(State(gateway): State<Gateway>, upgrade: WebSocketUpgrade) -> Response {
     let connection = gateway.connections.token();
     upgrade
@@ -99,7 +104,7 @@ async fn secure(State(gateway): State<Gateway>, upgrade: WebSocketUpgrade) -> Re
             let _tracked = connection;
             gateway
                 .secure
-                .accept_logged(AxumCarrier::new(socket, None), "direct")
+                .accept_logged(AxumCarrier::new(socket, Some(gateway.keepalive)), "direct")
                 .await;
         })
 }
