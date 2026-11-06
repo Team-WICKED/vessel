@@ -15,6 +15,7 @@ mod device;
 mod error;
 mod event;
 mod fleet;
+mod forward;
 mod harness;
 mod id;
 mod key;
@@ -26,8 +27,10 @@ mod proxy;
 mod raw;
 mod relay;
 mod rpc;
+mod secret;
 mod session;
 mod terminal;
+mod transfer;
 
 pub use agent::{
     AgentEvent, ContentBlock, PermissionOption, PermissionOptionKind, PermissionOutcome,
@@ -46,10 +49,14 @@ pub use fleet::{
     McpDefinitions, McpServers, McpTransport, ReadBlob, ReportApplied, ResolvedMcpServers,
     ResolvedValue, WatchFleet,
 };
+pub use forward::{
+    Deliver, FleetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers, Origin, OriginBy,
+    RelayCall,
+};
 pub use harness::{Harness, HarnessKind, StructuredSupport, UnknownHarness};
 pub use id::{
     DeviceId, EventSeq, HarnessSessionId, ModelId, NodeId, PermissionId, PermissionOptionId,
-    RequestId, SessionId, SubscriptionId, ToolCallId,
+    RequestId, SessionId, SubscriptionId, ToolCallId, TransferId,
 };
 pub use key::{KeyTextError, NodePublicKey, RoutingId};
 pub use name::{
@@ -74,8 +81,17 @@ pub use rpc::{
     SendInput, ServerFrame, StopNode, StopWhen, Subscribe, Subscribed, SubscriptionEnd,
     UnexpectedReply, Unsubscribe, Welcome, dispatch,
 };
-pub use session::{SessionInfo, SessionInput, SessionMode, SessionSpec, SessionStatus};
+pub use secret::{CopySecret, DeleteSecret, ListSecrets, SecretValue, SetSecret};
+pub use session::{
+    RemoteCreator, SessionInfo, SessionInput, SessionMode, SessionOrigin, SessionSpec,
+    SessionStatus,
+};
 pub use terminal::{TerminalBytes, TerminalInput, TerminalOutput, TerminalSize};
+pub use transfer::{
+    CloseTransfer, ExportMemory, ExportSession, ImportMemory, ImportSession, MAX_TRANSFER_FILE,
+    MAX_TRANSFER_TOTAL, MemoryImported, MemoryRef, ReadTransfer, SessionImported, SessionRef,
+    TransferDetail, TransferManifest,
+};
 
 /// Default TCP port a node listens on.
 pub const DEFAULT_PORT: u16 = 7077;

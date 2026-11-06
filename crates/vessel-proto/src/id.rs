@@ -151,6 +151,13 @@ uuid_id! {
     DeviceId
 }
 
+uuid_id! {
+    /// An open transfer: a snapshot of files a node holds for whoever opened
+    /// it (protocol 6). Random, but not a secret: the node also checks that
+    /// the caller reading or closing it is the one that opened it.
+    TransferId
+}
+
 opaque_id! {
     /// The harness's own session id (an ACP `sessionId`). Kept so a
     /// structured session can be resumed by the harness after a node restart.

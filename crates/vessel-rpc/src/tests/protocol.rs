@@ -95,6 +95,7 @@ async fn an_older_connection_reads_a_stand_in_for_a_newer_event() {
             session: moved(),
             from: EventSeq::new(2),
             limit: 10,
+            wait: None,
         };
         let text = call_raw(&mut client, 1, read.into_call()).await;
         assert!(text.contains(present), "protocol {version}: {text}");

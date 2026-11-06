@@ -29,15 +29,26 @@ pub enum Scope {
     /// 0012): what a member node holds on its fleet's home. Independent of
     /// the others: a member needs no access to the home's sessions.
     Sync,
+    /// Pass calls on to the fleet's other nodes (`fleet.relay`, protocol
+    /// 6, ADR 0013): what a home grants a member whose agents and devices
+    /// may act on other nodes. Independent of `Sync`, and granted only when
+    /// the home's owner asks (`vessel fleet invite --relay`).
+    Relay,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Self; 4] = [Self::Read, Self::Operate, Self::Admin, Self::Sync];
+    pub const ALL: [Self; 5] = [
+        Self::Read,
+        Self::Operate,
+        Self::Admin,
+        Self::Sync,
+        Self::Relay,
+    ];
 
     /// What an invitation grants unless it names scopes: everything a person
-    /// at another machine needs, but not `Sync`, which only fleet members
-    /// use.
+    /// at another machine needs, but not `Sync` or `Relay`, which only fleet
+    /// members use.
     pub const DEVICE_DEFAULT: [Self; 3] = [Self::Read, Self::Operate, Self::Admin];
 
     /// The scope's wire name.
@@ -48,6 +59,7 @@ impl Scope {
             Self::Operate => "operate",
             Self::Admin => "admin",
             Self::Sync => "sync",
+            Self::Relay => "relay",
         }
     }
 
@@ -58,6 +70,7 @@ impl Scope {
         match self {
             Self::Read | Self::Operate | Self::Admin => crate::node::ProtocolVersion::new(4),
             Self::Sync => crate::node::ProtocolVersion::new(5),
+            Self::Relay => crate::node::ProtocolVersion::new(6),
         }
     }
 }

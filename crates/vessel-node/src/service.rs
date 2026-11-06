@@ -231,6 +231,14 @@ impl NodeService {
         _: &Connection,
         request: ReadEvents,
     ) -> Result<EventPage, WireError> {
+        // Answering at once would look like a wait that ended empty, and a
+        // caller looping on it would spin; refuse until it is built.
+        if request.wait.is_some() {
+            return Err(crate::unbuilt::unbuilt(
+                vessel_proto::Method::ReadEvents,
+                "Track X: `wait`",
+            ));
+        }
         self.sessions
             .read(request.session, request.from, request.limit)
             .await

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::{ContentBlock, PermissionOutcome};
 use crate::harness::HarnessKind;
-use crate::id::{EventSeq, HarnessSessionId, ModelId, PermissionId, SessionId};
+use crate::id::{DeviceId, EventSeq, HarnessSessionId, ModelId, NodeId, PermissionId, SessionId};
 use crate::name::ProfileName;
 use crate::profile::Creator;
 use crate::terminal::{TerminalInput, TerminalSize};
@@ -165,6 +165,49 @@ pub struct SessionInfo {
     /// The harness's own session id, once a structured session has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_session: Option<HarnessSessionId>,
+    /// The home a call creating it came through, when another node asked
+    /// for it (protocol 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<NodeId>,
+    /// Where it came from, when not from this node (protocol 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
+}
+
+/// Where a session came from, when another node of the fleet had a hand in
+/// it (protocol 6). `created_by` says who created it on this node; an
+/// agent's own node is in `created_by` already, so `remote` names only the
+/// owner or a device of the other node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionOrigin {
+    /// Created by a call forwarded from another node.
+    Remote {
+        /// The node the call started on.
+        node: NodeId,
+        /// Who started it there.
+        by: RemoteCreator,
+    },
+    /// Imported from a session on another node (`session.import`).
+    Imported {
+        /// The node it was copied from.
+        node: NodeId,
+        /// The session there.
+        session: SessionId,
+    },
+}
+
+/// The owner or a device of another node, for [`SessionOrigin::Remote`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RemoteCreator {
+    /// That node's owner.
+    Owner,
+    /// A device paired with that node.
+    Device {
+        /// Its id on that node.
+        id: DeviceId,
+    },
 }
 
 impl SessionInfo {
@@ -182,6 +225,8 @@ impl SessionInfo {
             ended_at: None,
             next_seq: EventSeq::ZERO,
             harness_session: None,
+            via: None,
+            origin: None,
         }
     }
 

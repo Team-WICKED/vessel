@@ -6,8 +6,8 @@ use super::*;
 async fn protocol_mismatch_is_rejected() {
     let (mut client_end, server_end) = pair();
     let served = serve(server_end).task;
-    let hello =
-        r#"{"type":"hello","protocol":{"min":6,"max":7},"client":{"name":"future","version":"9"}}"#;
+    // Far ahead of this build, so a version bump never makes it overlap.
+    let hello = r#"{"type":"hello","protocol":{"min":1000,"max":1001},"client":{"name":"future","version":"9"}}"#;
     client_end.send(hello.to_owned()).await.unwrap();
     let answer = client_end.next().await.unwrap().unwrap();
     let ServerFrame::Rejected { error } = serde_json::from_str(&answer).unwrap() else {

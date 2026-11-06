@@ -11,10 +11,10 @@ use vessel_client::pairing::{self, PreambleError};
 use vessel_client::secure;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, HarnessKind,
-    InviteDevice, ListDevices, ListSessions, NodeClose, NodePublicKey, PairingOffer, Preamble,
-    PreambleReply, RefusalReason, RevokeDevice, Scope, SessionId, SessionInput, SessionMode,
-    SessionSpec, TerminalSize,
+    ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, GetNode, HarnessKind,
+    InviteDevice, ListDevices, ListSessions, NodeClose, NodeId, NodePublicKey, Origin, OriginBy,
+    PairingOffer, Preamble, PreambleReply, ReadEvents, RefusalReason, RelayCall, Request,
+    RevokeDevice, Scope, SessionId, SessionInput, SessionMode, SessionSpec, TerminalSize,
 };
 use vessel_relay::NodeCarrier;
 use vessel_rpc::memory::{self, MemoryTransport};
@@ -440,6 +440,64 @@ async fn a_device_without_a_scope_is_forbidden_that_method() {
     ] {
         assert_eq!(refused.code(), Some(ErrorCode::Forbidden));
     }
+    node.stop().await.unwrap();
+}
+
+/// Protocol 6: passing calls on needs `relay`, which `sync` does not
+/// include; past the check, a method not built yet says so.
+#[tokio::test]
+async fn relaying_needs_its_own_scope_and_unbuilt_methods_say_so() {
+    let (_temp, node) = node().await;
+    let mut members = Vec::new();
+    for scopes in [
+        vec![Scope::Sync],
+        vec![Scope::Read, Scope::Sync, Scope::Relay],
+    ] {
+        let member = DeviceInfo {
+            id: DeviceId::random(),
+            label: "member".to_owned(),
+            created_at: Utc::now(),
+            last_seen: None,
+            scopes,
+            revoked_at: None,
+        };
+        let secret = DeviceSecret::from_bytes([7; 32]);
+        node.secure
+            .devices
+            .store
+            .add_device(member.clone(), CredentialHash::of(&secret))
+            .await
+            .unwrap();
+        members.push(authenticate(&node, member.id, &secret).await.unwrap());
+    }
+    let relay = || RelayCall {
+        node: NodeId::random(),
+        call: Box::new(Request::into_call(GetNode)),
+        origin: Origin {
+            node: NodeId::random(),
+            by: OriginBy::Owner,
+            scopes: vec![Scope::Read],
+        },
+    };
+    let refused = members[0].call(relay()).await.unwrap_err();
+    assert_eq!(refused.code(), Some(ErrorCode::Forbidden));
+    assert!(refused.to_string().contains("`relay`"), "{refused}");
+    let unbuilt = members[1].call(relay()).await.unwrap_err();
+    assert_eq!(unbuilt.code(), Some(ErrorCode::Unsupported));
+    assert!(unbuilt.to_string().contains("fleet.relay"), "{unbuilt}");
+
+    // `wait` is refused rather than answered at once, which would look like
+    // a wait that ended empty.
+    let waiting = members[1]
+        .call(ReadEvents {
+            session: SessionId::random(),
+            from: vessel_proto::EventSeq::ZERO,
+            limit: 10,
+            wait: Some(5),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(waiting.code(), Some(ErrorCode::Unsupported));
     node.stop().await.unwrap();
 }
 

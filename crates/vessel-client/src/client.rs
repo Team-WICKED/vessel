@@ -170,6 +170,7 @@ impl NodeClient {
                 session,
                 from,
                 limit,
+                wait: None,
             })
             .await
     }
