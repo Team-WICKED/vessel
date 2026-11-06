@@ -11,6 +11,9 @@
 //! - `fake-acp`: a scripted ACP v1 agent on stdio (message, thought, tool
 //!   call, plan, permission request, cancel, `session/load`, a model config
 //!   option). See `src/bin/fake_acp.rs`.
+//! - `fake-ssh`: the OpenSSH client's command line, running the "remote"
+//!   command on this machine under a fake home, with an injectable
+//!   connection drop (ADR 0007 tests). See `src/bin/fake_ssh.rs`.
 //!
 //! This crate is a dev-dependency only; nothing in `vesseld` links it.
 //!
@@ -69,6 +72,10 @@ pub enum Fake {
     /// `fake-acp`: a scripted ACP agent; its prompt text picks a scenario
     /// (`plain`, `wait`, or the full tool-call-and-permission turn).
     Acp,
+    /// `fake-ssh`: runs the "remote" command locally under
+    /// `$FAKE_SSH_HOME`, and can drop the connection
+    /// (`FAKE_SSH_DROP_AFTER`). Unix only. See `src/bin/fake_ssh.rs`.
+    Ssh,
 }
 
 impl Fake {
@@ -78,6 +85,7 @@ impl Fake {
         match self {
             Self::Tui => "fake-tui",
             Self::Acp => "fake-acp",
+            Self::Ssh => "fake-ssh",
         }
     }
 

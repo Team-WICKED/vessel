@@ -1,6 +1,6 @@
 [package]
 name = "vessel-testkit"
-description = "Fake harness binaries (fake-tui, fake-acp) for Vessel's process-level tests; never shipped"
+description = "Fake harness binaries (fake-tui, fake-acp, fake-ssh) for Vessel's process-level tests; never shipped"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,10 @@ path = "src/bin/fake_tui.rs"
 [[bin]]
 name = "fake-acp"
 path = "src/bin/fake_acp.rs"
+
+[[bin]]
+name = "fake-ssh"
+path = "src/bin/fake_ssh.rs"
 
 [dependencies]
 agent-client-protocol.workspace = true
