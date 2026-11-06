@@ -593,3 +593,38 @@ async fn a_broken_transport_still_settles_the_turn_and_its_requests() {
     })
     .await;
 }
+
+/// A cancel can overtake a permission request the agent sent just before
+/// it saw the cancel: the request still arrives, and must be answered
+/// `cancelled` or the agent never ends the turn.
+#[tokio::test]
+async fn a_permission_request_arriving_after_a_cancel_is_answered_cancelled() {
+    within(async {
+        let mut agent = Agent::start(setup(None));
+        drop(agent.until(ready).await);
+        agent.input.prompt(text("hello")).await.unwrap();
+        // The first chunk; the permission request follows right behind it.
+        drop(
+            agent
+                .until(|event| matches!(event, AgentEvent::MessageChunk { .. }))
+                .await,
+        );
+        agent.input.cancel_turn().await.unwrap();
+        assert_eq!(
+            agent.until(turn_over).await,
+            AgentEvent::TurnEnded {
+                reason: StopReason::Cancelled
+            }
+        );
+        for event in &agent.events {
+            if let AgentEvent::PermissionRequested(request) = event {
+                let withdrawn = AgentEvent::PermissionResolved {
+                    id: request.id,
+                    outcome: PermissionOutcome::Cancelled,
+                };
+                assert!(agent.events.contains(&withdrawn), "{:?}", agent.events);
+            }
+        }
+    })
+    .await;
+}

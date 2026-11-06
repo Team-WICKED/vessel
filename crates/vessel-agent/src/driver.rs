@@ -90,6 +90,7 @@ pub(crate) async fn run(
         outputs: outputs.clone(),
         session: None,
         turn: false,
+        cancelling: false,
         permissions: Permissions::default(),
         tool_calls: HashSet::new(),
         gate,
@@ -151,6 +152,9 @@ struct Driver {
     session: Option<acp::SessionId>,
     /// Whether a prompt is in flight.
     turn: bool,
+    /// The turn in flight was cancelled: permission requests still on
+    /// their way are answered `cancelled` as they arrive.
+    cancelling: bool,
     permissions: Permissions,
     /// Tool calls already announced on the timeline.
     tool_calls: HashSet<ToolCallId>,
@@ -234,6 +238,7 @@ impl Driver {
             }
             Inbound::TurnDone(result) => {
                 self.turn = false;
+                self.cancelling = false;
                 self.withdraw_permissions().await;
                 let event = match result {
                     Ok(response) => AgentEvent::TurnEnded {
@@ -280,6 +285,14 @@ impl Driver {
             options,
         }))
         .await;
+        if self.cancelling {
+            // Sent before the agent saw the cancel. ACP has the client
+            // answer every permission request of a cancelled turn with
+            // `cancelled`, and the agent cannot end the turn until it has
+            // that answer. The timeline shows the request and its
+            // withdrawal, as for one that was pending at the cancel.
+            self.withdraw_permissions().await;
+        }
     }
 
     async fn command(&mut self, cx: &ConnectionTo<Agent>, command: Command) {
@@ -331,6 +344,7 @@ impl Driver {
             return Err(InputError::Closed);
         }
         self.turn = true;
+        self.cancelling = false;
         self.emit(AgentEvent::TurnStarted { content }).await;
         Ok(())
     }
@@ -349,8 +363,10 @@ impl Driver {
             return Err(InputError::Closed);
         }
         // ACP: after `session/cancel` the client answers every pending
-        // permission request with `cancelled`; the agent then ends the
-        // turn with the `cancelled` stop reason.
+        // permission request with `cancelled` (also those still on their
+        // way, see `permission`); the agent then ends the turn with the
+        // `cancelled` stop reason.
+        self.cancelling = true;
         self.withdraw_permissions().await;
         Ok(())
     }
@@ -388,6 +404,7 @@ impl Driver {
     /// The connection ended: settle what is still open.
     async fn abandon_turn(&mut self) {
         self.withdraw_permissions().await;
+        self.cancelling = false;
         if self.turn {
             self.turn = false;
             self.emit(AgentEvent::TurnFailed {
