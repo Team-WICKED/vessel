@@ -1,8 +1,9 @@
 //! Protocol 2 frames over any transport.
 //!
 //! This crate moves `vessel-proto`'s `ClientFrame`/`ServerFrame` over a
-//! [`FrameTransport`] (a websocket today, SSH stdio and the relay later, an
-//! in-memory pair in tests). It owns the mechanics every transport shares:
+//! [`FrameTransport`]: a websocket, any byte stream through [`Framed`] (SSH
+//! stdio, the node's local socket), an in-memory pair in tests, and the
+//! relay later. It owns the mechanics every transport shares:
 //! the `Hello`/`Welcome` handshake, request/response correlation,
 //! cancellation, a bound on concurrent calls, one bounded outbound queue per
 //! connection, and the lifecycle of event subscriptions.
@@ -39,6 +40,7 @@
 
 mod client;
 mod error;
+mod framed;
 pub mod memory;
 mod server;
 #[cfg(test)]
@@ -47,5 +49,6 @@ mod transport;
 
 pub use client::{ClientConfig, Connection, Subscription, SubscriptionItem, Unary};
 pub use error::{CallError, ConnectError, OutboundError, ProtocolViolation, ServeError};
+pub use framed::{Framed, FramedError, MAX_FRAME};
 pub use server::{Outbound, Peer, Server, ServerConfig, SubscriptionClosed, SubscriptionSink};
 pub use transport::FrameTransport;

@@ -2,11 +2,12 @@
 //! outgoing ones, each frame one JSON text.
 //!
 //! Frames are `String`s rather than a transport's own message type so the
-//! same server and client code runs over a websocket, an in-memory pair, and
-//! later SSH stdio (newline-delimited) or the relay. Adapters for a specific
-//! library live next to the code that owns that library (`vessel-client`
-//! for `tokio-tungstenite`, `vessel-node` for axum), so this crate depends on
-//! no network stack.
+//! same server and client code runs over a websocket, an in-memory pair, a
+//! length-delimited byte stream (`Framed`: SSH stdio, the node's local
+//! socket), and later the relay. Adapters for a specific library live next
+//! to the code that owns that library (`vessel-client` for
+//! `tokio-tungstenite`, `vessel-node` for axum), so this crate depends on no
+//! network stack.
 
 use futures_util::{Sink, Stream};
 
