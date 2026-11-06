@@ -2,7 +2,8 @@
 
 Status: accepted, 2026-11-06, with the coordinator decisions in
 `docs/plans/backend-m3.md`; built in milestone 3; amended 2026-11-06
-(resource limits, below).
+(resource limits, registration tickets, and connections holding places,
+below).
 
 ## Context
 
@@ -306,3 +307,32 @@ no new state or configuration; rotating its token voids every ticket.
 Whoever holds the token mints tickets: the operator, and a fleet's home
 that registers with the relay, which gives them only to its members'
 devices for their own keys (`docs/plans/backend-m4.md`, review round 6).
+
+## Amendment (2026-11-06): connections that hold places doing nothing
+
+The review's round 7 held a relay's places without doing anything. 300
+connections that each sent half a request stayed open past a minute
+(`axum::serve` reads headers with no deadline, and the per-address limit
+applied only once a request reached a handler) and kept the relay from
+stopping. A few addresses filled every registering place with upgraded
+connections that said nothing, keeping a node with the right token out,
+and could fill one node's client places through `/v1/connect` the same
+way. Now:
+
+- The relay runs its own accept loop over `hyper`'s HTTP/1 with a 10 s
+  deadline on a request's headers. Every socket takes a place from
+  `accept`, before any HTTP: in all (`max_connections`, 1000) and for its
+  address (`max_connections_per_address`, 128; an IPv4 address or an IPv6
+  `/64`; not applied behind a proxy, whose own limits stand in). Without a
+  place it is answered `503` and closed. A stopping relay waits 5 s for
+  connections to finish, then drops them.
+- Registering places and client places are counted per address too (8 and
+  32; behind a proxy, by its header). A registering node has 2 s for its
+  first message and a client 2 s for its first record once spliced, so a
+  silent connection gives its place back quickly.
+- Part of the registering places (16 of 64, at most half) is kept for nodes
+  that registered at this relay before (remembered in memory, the most
+  recent four times `max_nodes`): a connection may take one, and keeps it
+  only if its first message names such a node (`full` otherwise).
+- `hyper`, `hyper-util` and `tower` are used directly for the loop; all
+  three were in the tree through `axum` already.

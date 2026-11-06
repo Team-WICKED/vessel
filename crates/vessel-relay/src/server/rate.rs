@@ -87,7 +87,7 @@ fn earned(bucket: &Bucket, now: Instant, refill: Duration) -> u32 {
 }
 
 /// IPv4 (and IPv4-mapped IPv6) by address, IPv6 by its `/64`.
-fn bucket_key(address: IpAddr) -> IpAddr {
+pub(super) fn bucket_key(address: IpAddr) -> IpAddr {
     match address {
         IpAddr::V4(_) => address,
         IpAddr::V6(v6) => {

@@ -168,7 +168,14 @@ every method.)
     registered with a ticket holds a place like any other and frees it
     when the ticket expires. It closes a client or a still-registering
     control connection past its connection limits with `4503` (full,
-    transient).
+    transient), and answers a socket past its limits at accept `503`
+    before closing it.
+  - Deadlines a peer must keep: a request's headers within 10 s; a
+    node's first control message within 2 s of the upgrade; a client's
+    first record (its handshake message) within 2 s of the relay pairing
+    it with the node. A node that names a key not registered at that
+    relay before may be refused `full` at once, when it holds one of the
+    places the relay keeps for known nodes.
   - A node that does not know `full` or `ticket` reads the message as
     malformed and retries; a client that does not know `4503` sees a
     plain close; a relay from before tickets refuses a ticket as

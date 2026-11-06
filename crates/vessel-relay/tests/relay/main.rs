@@ -12,6 +12,8 @@ mod caps;
 #[cfg(test)]
 mod direct;
 #[cfg(test)]
+mod flood;
+#[cfg(test)]
 mod keepalive;
 #[cfg(test)]
 mod support;
