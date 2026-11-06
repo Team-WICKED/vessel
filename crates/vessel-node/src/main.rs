@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use vessel_node::{Config, DataDir, Node};
+use vessel_proto::RouteUrl;
 
 /// Vessel node daemon.
 #[derive(Debug, Parser)]
@@ -57,6 +58,20 @@ struct Run {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     agent_handshake_timeout: u64,
+    /// A relay to register with, as a `ws://` or `wss://` URL (repeatable,
+    /// tried in order). Pairing links name it, so devices reach this node
+    /// through it without SSH or an open port.
+    #[arg(long = "relay", value_name = "URL")]
+    relays: Vec<RouteUrl>,
+    /// File holding the relays' registration token (needed with
+    /// `--relay`).
+    #[arg(long, value_name = "PATH", env = "VESSEL_RELAY_TOKEN_FILE")]
+    relay_token_file: Option<PathBuf>,
+    /// An address devices may dial directly, advertised in pairing links
+    /// (repeatable): `ws://HOST:PORT`, `wss://...`, or just `HOST:PORT`.
+    /// Nothing is guessed: without it, devices go through a relay.
+    #[arg(long = "public", value_name = "ADDR", value_parser = public_route)]
+    public: Vec<RouteUrl>,
     /// Started in the background by `vesseld attach`: announce readiness
     /// on stdout and keep running when the SSH session hangs up.
     #[arg(long, hide = true)]
@@ -97,6 +112,18 @@ impl FromStr for Bind {
     }
 }
 
+/// `--public`: a websocket URL, or `HOST:PORT` taken as `ws://HOST:PORT`.
+fn public_route(text: &str) -> Result<RouteUrl, String> {
+    let text = text.trim();
+    let url = if text.contains("://") {
+        text.to_owned()
+    } else {
+        format!("ws://{text}")
+    };
+    url.parse()
+        .map_err(|error: vessel_proto::InvalidRoute| error.to_string())
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
@@ -131,6 +158,9 @@ async fn run(dir: DataDir, args: Run) -> ExitCode {
     };
     config.name = args.name;
     config.agent_handshake_timeout = Duration::from_secs(args.agent_handshake_timeout);
+    config.relays = args.relays;
+    config.relay_token_file = args.relay_token_file;
+    config.public = args.public;
 
     // Before the node starts, so a hang-up during start-up cannot kill it.
     #[cfg(unix)]

@@ -223,6 +223,21 @@ they started.
     `--agent-handshake-timeout` (seconds, default 60). Tested
     in process (`tests/e2e/local.rs`) and with real processes through
     `fake-ssh` (`tests/e2e/remote.rs`, Unix).
+    Milestone 3 (Track P, in progress; ADR 0010): every connection has a
+    principal (`Owner` for the token and the local socket, `Device` for a
+    paired device), and every call is checked against its method's scope
+    by `guard::Guarded`, generated from one row per method with the method
+    taken from the request type. `device.invite` (single-use invitations
+    in memory, by hash, at most a day, at most 64 waiting), `device.list`,
+    `device.revoke` (closes the device's open connections: each device
+    connection has its own RPC server whose shutdown token is registered
+    under the device). The device preamble (`devices::preamble`) and the
+    `SecureGateway` that serves a device after it run over any frame
+    transport; `/secure` and relay links reach them once `vessel-secure`
+    lands. `node.key` is created on start; until `vessel-secure` derives
+    its public half, `NodeInfo.public_key` is absent and `device.invite`
+    answers `unavailable`. `--relay`, `--relay-token-file` (checked at
+    start) and `--public` feed pairing links.
   - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
     `sessions`, `run`, `attach`, `send`, `log`, `kill`; sessions named by
     id prefix; terminal attach in raw mode with `Ctrl-]` to detach, also

@@ -22,6 +22,10 @@ pub enum NodeError {
     /// Another node already uses this data directory.
     #[error("another node already uses this data directory")]
     AlreadyRunning(#[source] StoreError),
+    /// Relays are configured but their registration token is missing or
+    /// unreadable.
+    #[error("{0}")]
+    RelayToken(String),
     /// The local socket (or named pipe) could not be bound.
     #[error("cannot listen on the local socket {}", path.display())]
     LocalSocket {
@@ -88,6 +92,21 @@ pub(crate) enum ServiceError {
     /// A task the call depended on failed.
     #[error("a node task failed")]
     Task(#[source] tokio::task::JoinError),
+    /// The node has no public key yet, so it cannot make a pairing link.
+    #[error("this node has no key for secure channels yet, so it cannot pair devices")]
+    NoNodeKey,
+    /// `device.invite` with a lifetime of zero.
+    #[error("an invitation must be valid for at least one second")]
+    InvalidTtl,
+    /// Too many invitations are waiting (`devices::invitations`).
+    #[error("too many pairing invitations are waiting; let some be used or expire")]
+    TooManyInvitations,
+    /// The operating system's random source failed.
+    #[error("no randomness available")]
+    Random(#[source] getrandom::Error),
+    /// The pairing link could not be encoded.
+    #[error("could not encode the pairing link")]
+    Link(#[source] serde_json::Error),
 }
 
 impl ServiceError {
@@ -97,12 +116,14 @@ impl ServiceError {
         let code = match self {
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Ended(_) => ErrorCode::Conflict,
-            Self::Draining => ErrorCode::Unavailable,
-            Self::Ahead { .. } => ErrorCode::InvalidRequest,
+            Self::Draining | Self::NoNodeKey | Self::TooManyInvitations => ErrorCode::Unavailable,
+            Self::Ahead { .. } | Self::InvalidTtl => ErrorCode::InvalidRequest,
             Self::Session(error) => error.code(),
             Self::Store(error) => error.code(),
             Self::Outbound(error) => error.code(),
-            Self::Unpersisted(_) | Self::Task(_) => ErrorCode::Internal,
+            Self::Unpersisted(_) | Self::Task(_) | Self::Random(_) | Self::Link(_) => {
+                ErrorCode::Internal
+            }
         };
         let mut message = self.to_string();
         let mut source = std::error::Error::source(self);
