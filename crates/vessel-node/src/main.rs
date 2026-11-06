@@ -185,8 +185,8 @@ struct RelayArgs {
     max_clients_per_address: usize,
     /// Relayed client connections to one node at once from one address
     /// while the node admits them (their first seconds); a /48 four times
-    /// this, which must be less than half of the relayed channels a node
-    /// admits at once (`vessel_relay::RELAYED_UNADMITTED`).
+    /// this, which must be less than half of what a node admits at once
+    /// through one relay (`vessel_relay::RELAYED_UNADMITTED`).
     #[arg(long, env = "VESSEL_RELAY_MAX_NODE_CLIENTS_PER_ADDRESS", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_node_clients_per_address)]
     max_node_clients_per_address: usize,

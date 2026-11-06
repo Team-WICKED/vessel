@@ -61,6 +61,9 @@ vessel-harness = { workspace = true, features = ["fakes"] }
 # An agent's `vessel` tools driven across a fleet (e2e `across`). Not a
 # cycle: vessel-mcp itself needs only vessel-client and vessel-proto.
 vessel-mcp.workspace = true
+# A relay client that says, through a trusted proxy's header, which
+# address it comes from (e2e `crowd`); already built for vessel-relay.
+tokio-tungstenite.workspace = true
 # The misbehaving relay (feature `relay`) for the secure e2e tests.
 vessel-testkit = { workspace = true, features = ["relay"] }
 

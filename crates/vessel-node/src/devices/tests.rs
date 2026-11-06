@@ -2,8 +2,10 @@
 //! channel (an in-memory pair standing in for a secure channel), the scope
 //! check, and revocation closing connections.
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU16;
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -25,7 +27,9 @@ use vessel_secure::{MemoryCarrier, NodeKeypair, SecureChannel, SecureError, memo
 use vessel_store::{CredentialHash, DataDir};
 
 use super::*;
-use crate::secure::{MAX_UNADMITTED, NotServed, Route};
+use crate::secure::{
+    Budget, MAX_UNADMITTED, MAX_UNADMITTED_PER_ADDRESS, NotServed, Route, relay_budget,
+};
 use crate::{Config, Node};
 
 async fn node() -> (TempDir, Node) {
@@ -55,22 +59,41 @@ fn client() -> ClientInfo {
     }
 }
 
-/// A channel to the node's device gateway, as a secure channel would be.
+/// A channel to the node's device gateway, as a secure channel would be,
+/// from an address no other test channel uses (each in a /48 of its own,
+/// so the per-address budget never gets in a test's way).
 fn channel(node: &Node) -> MemoryTransport {
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    channel_from(
+        node,
+        IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, n, 0, 0, 0, 0, 1)),
+    )
+}
+
+/// [`channel`], from `peer` over the direct route.
+fn channel_from(node: &Node, peer: IpAddr) -> MemoryTransport {
+    served(node, Route::Direct(peer))
+}
+
+/// [`channel`], as a client a relay spliced through the link of `budget`.
+fn relayed(node: &Node, budget: &Budget) -> MemoryTransport {
+    served(node, Route::Relayed(Arc::clone(budget)))
+}
+
+fn served(node: &Node, route: Route) -> MemoryTransport {
     let (client_end, node_end) = memory::pair(NonZeroUsize::new(16).unwrap());
     let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.serve(node_end).await }));
+    drop(tokio::spawn(
+        async move { gateway.serve(node_end, route).await },
+    ));
     client_end
 }
 
-/// [`channel`], as a relay's spliced client.
-fn relayed(node: &Node) -> MemoryTransport {
-    let (client_end, node_end) = memory::pair(NonZeroUsize::new(16).unwrap());
-    let gateway = node.secure.clone();
-    drop(tokio::spawn(async move {
-        gateway.serve_relayed(node_end).await;
-    }));
-    client_end
+/// Whether `channel` was dropped at once, unanswered.
+async fn dropped_at_once(channel: &mut MemoryTransport) -> bool {
+    let next = tokio::time::timeout(Duration::from_secs(1), channel.next()).await;
+    matches!(next, Ok(None))
 }
 
 /// Send `preamble` and read the node's answer.
@@ -254,7 +277,9 @@ fn carrier(node: &Node) -> (MemoryCarrier, Arc<Mutex<Option<NodeClose>>>) {
     };
     let gateway = node.secure.clone();
     drop(tokio::spawn(async move {
-        gateway.accept(node_end, Route::Direct).await
+        gateway
+            .accept(node_end, Route::Direct(Ipv4Addr::LOCALHOST.into()))
+            .await
     }));
     (client_end, closed)
 }
@@ -276,7 +301,11 @@ async fn secure(
         closed: Arc::clone(&closed),
     };
     let gateway = node.secure.clone();
-    let accepted = tokio::spawn(async move { gateway.accept(node_end, Route::Direct).await });
+    let accepted = tokio::spawn(async move {
+        gateway
+            .accept(node_end, Route::Direct(Ipv4Addr::LOCALHOST.into()))
+            .await
+    });
     (
         vessel_secure::initiate(client_end, key).await,
         accepted,
@@ -668,40 +697,94 @@ async fn channels_waiting_for_their_preamble_are_capped() {
     node.stop().await.unwrap();
 }
 
-/// The security review's round 9: relayed channels waiting for their
-/// preamble have a budget of their own (`RELAYED_UNADMITTED`), so a crowd
-/// through a relay leaves the direct route all of its room.
+/// The security review's rounds 9 and 10: each relay link's channels
+/// waiting for their preamble have a budget of their own
+/// (`RELAYED_UNADMITTED`), so a crowd through one relay leaves the other
+/// links and the direct route all of their room.
 #[tokio::test]
-async fn relayed_channels_wait_in_a_budget_of_their_own() {
+async fn each_relay_link_waits_in_a_budget_of_its_own() {
     let (_temp, node) = node().await;
-    let direct = || node.secure.unadmitted.available_permits();
-    let relayed_left = || node.secure.unadmitted_relayed.available_permits();
+    let (crowded, other) = (relay_budget(), relay_budget());
     let mut waiting: Vec<MemoryTransport> = (0..vessel_relay::RELAYED_UNADMITTED)
-        .map(|_| relayed(&node))
+        .map(|_| relayed(&node, &crowded))
         .collect();
     let filled = tokio::time::timeout(Duration::from_secs(1), async {
-        while relayed_left() > 0 {
+        while crowded.available_permits() > 0 {
             tokio::task::yield_now().await;
         }
     })
     .await;
-    assert!(filled.is_ok(), "the relayed budget is not used");
+    assert!(filled.is_ok(), "the link's budget is not used");
     assert_eq!(
-        direct(),
+        node.secure.unadmitted.available_permits(),
         MAX_UNADMITTED,
         "relayed channels took direct room"
     );
-    let mut extra = relayed(&node);
-    let dropped = tokio::time::timeout(Duration::from_secs(1), extra.next()).await;
-    assert!(
-        matches!(dropped, Ok(None)),
-        "not dropped at once: {dropped:?}"
-    );
+    let mut extra = relayed(&node, &crowded);
+    assert!(dropped_at_once(&mut extra).await, "past the link's budget");
+    // Another link's client waits as usual (no answer until its preamble).
+    let mut elsewhere = relayed(&node, &other);
+    assert!(!dropped_at_once(&mut elsewhere).await, "another link");
     // The direct route is served all the while.
     let (_device, _secret, connection) = pair(&node, invite(&node, None)).await;
     assert_eq!(connection.call(ListDevices).await.unwrap().len(), 1);
     waiting.clear();
     node.stop().await.unwrap();
+}
+
+/// The security review's round 10: one address holds only a few of the
+/// direct route's places for channels waiting for their preamble, counted
+/// as a relay counts (an IPv4 address or an IPv6 `/64`; a `/56` twice, a
+/// `/48` four times), so one host cannot hold them all.
+#[tokio::test]
+async fn one_address_holds_few_of_the_direct_routes_places() {
+    let (_temp, node) = node().await;
+    let host: IpAddr = "192.0.2.7".parse().unwrap();
+    let mut waiting: Vec<MemoryTransport> = (0..MAX_UNADMITTED_PER_ADDRESS)
+        .map(|_| channel_from(&node, host))
+        .collect();
+    let mut extra = channel_from(&node, host);
+    assert!(
+        dropped_at_once(&mut extra).await,
+        "past the address's share"
+    );
+    let mut neighbour = channel_from(&node, "192.0.2.8".parse().unwrap());
+    assert!(!dropped_at_once(&mut neighbour).await, "another address");
+    // A /48: its /64s in two /56s, then no more from any of it.
+    for from in [
+        "2001:db8:9:1::1",
+        "2001:db8:9:2::1",
+        "2001:db8:9:101::1",
+        "2001:db8:9:102::1",
+    ] {
+        let from: IpAddr = from.parse().unwrap();
+        waiting.extend((0..MAX_UNADMITTED_PER_ADDRESS).map(|_| channel_from(&node, from)));
+    }
+    let mut more = channel_from(&node, "2001:db8:9:201::1".parse().unwrap());
+    assert!(dropped_at_once(&mut more).await, "past the /48's share");
+    // Gone, their places come back.
+    waiting.clear();
+    drop((extra, neighbour, more));
+    let back = tokio::time::timeout(Duration::from_secs(5), async {
+        while !lock_counts(&node).is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(back.is_ok(), "the places were not given back");
+    node.stop().await.unwrap();
+}
+
+fn lock_counts(node: &Node) -> std::sync::MutexGuard<'_, vessel_relay::address::BlockCounts> {
+    node.secure.unadmitted_per_address.lock().unwrap()
+}
+
+/// One `/48`'s share of the direct places stays under half of them, as a
+/// relay's startup check keeps its own limits (`Limits::check`).
+#[test]
+fn one_48_holds_less_than_half_of_the_direct_places() {
+    let scale = usize::try_from(vessel_relay::address::WIDEST).unwrap();
+    assert!(MAX_UNADMITTED_PER_ADDRESS * scale * 2 < MAX_UNADMITTED);
 }
 
 /// A relayed channel has `RELAYED_ADMISSION` to be admitted, handshake
@@ -710,7 +793,7 @@ async fn relayed_channels_wait_in_a_budget_of_their_own() {
 #[tokio::test]
 async fn a_relayed_channel_has_seconds_to_be_admitted() {
     let (_temp, node) = node().await;
-    let mut silent = relayed(&node);
+    let mut silent = relayed(&node, &relay_budget());
     let started = std::time::Instant::now();
     let ended = tokio::time::timeout(
         vessel_relay::RELAYED_ADMISSION + Duration::from_secs(2),

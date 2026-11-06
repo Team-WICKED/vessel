@@ -45,6 +45,18 @@
 //!   per relay (one relay's crowd would still fill it). Cost: a device
 //!   behind a relay over a link slower than a few seconds a round trip
 //!   cannot connect through it.
+//! - Round 10: the relayed budget is each relay link's own (made with the
+//!   link, gone with it), not one for every relay: with three relays one
+//!   `/48` held all 40 places through them (16, 16 and 8), and a member
+//!   whose only routes are its home's relays (up to 8 of them) could not
+//!   be reached at all. Links are few (the configured relays and at most
+//!   8 a home names), so the total stays bounded, and each relay's own
+//!   startup check (a `/48`'s share under half of 40) holds per link. The
+//!   direct budget is held per address too, [`MAX_UNADMITTED_PER_ADDRESS`]
+//!   for an IPv4 address or an IPv6 `/64`, scaled for `/56` and `/48` as a
+//!   relay counts (`vessel_relay::address`, shared): one host held all 64
+//!   direct places for 20 s at a time. The address is the socket's peer;
+//!   the node has no proxy mode, so there is no header to believe.
 //! - Until the preamble is answered, frames are limited to
 //!   [`PREAMBLE_MAX_FRAME`] (64 KiB) both ways: a preamble is a few hundred
 //!   bytes, and a stranger must not make the node buffer 16 MiB per
@@ -52,7 +64,8 @@
 //!   (`SecureChannel::set_max_frame`); a frame the client pipelined behind
 //!   its preamble is judged when it is read, under the raised limit.
 
-use std::sync::Arc;
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -60,6 +73,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_relay::NodeCarrier;
+use vessel_relay::address::{Block, BlockCounts, blocks};
 use vessel_rpc::{FrameTransport, Server, ServerConfig};
 use vessel_secure::{Carrier, NodeKeypair, SecureChannel, SecureError};
 
@@ -71,36 +85,75 @@ use crate::lifecycle::Lifecycle;
 use crate::service::Connection;
 
 /// How many secure channels from the direct route may be in their
-/// handshake or preamble at once (relayed ones have their own budget,
+/// handshake or preamble at once (each relay link has a budget of its own,
 /// [`vessel_relay::RELAYED_UNADMITTED`]).
 pub(crate) const MAX_UNADMITTED: usize = 64;
 
-/// Which route a carrier came by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Of [`MAX_UNADMITTED`], how many one address may hold: an IPv4 address
+/// or an IPv6 `/64`; a `/56` twice this and a `/48` four times
+/// (`vessel_relay::address::WIDEST`), under half of [`MAX_UNADMITTED`] (a
+/// test holds it to that, as a relay's startup check holds its limits).
+pub(crate) const MAX_UNADMITTED_PER_ADDRESS: usize = 7;
+
+/// The places of channels waiting for admission through one relay link.
+pub(crate) type Budget = Arc<Semaphore>;
+
+/// A new budget for one relay link ([`vessel_relay::RELAYED_UNADMITTED`]).
+pub(crate) fn relay_budget() -> Budget {
+    Arc::new(Semaphore::new(vessel_relay::RELAYED_UNADMITTED))
+}
+
+/// Which route a carrier came by, and where it waits for admission.
+#[derive(Debug, Clone)]
 pub(crate) enum Route {
-    /// `/secure` on the node's own listener.
-    Direct,
-    /// A relay's data connection.
-    Relayed,
+    /// `/secure` on the node's own listener, from this peer.
+    Direct(IpAddr),
+    /// A relay's data connection, waiting in its link's own budget.
+    Relayed(Budget),
 }
 
 impl Route {
     /// The route's name in the log.
-    const fn label(self) -> &'static str {
+    const fn label(&self) -> &'static str {
         match self {
-            Self::Direct => "direct",
-            Self::Relayed => "relay",
+            Self::Direct(_) => "direct",
+            Self::Relayed(_) => "relay",
         }
     }
 
     /// How long a channel by this route has for its preamble, once its
     /// handshake took `handshake`.
-    fn preamble_within(self, handshake: Duration) -> Duration {
+    fn preamble_within(&self, handshake: Duration) -> Duration {
         match self {
-            Self::Direct => PREAMBLE_TIMEOUT,
-            Self::Relayed => vessel_relay::RELAYED_ADMISSION.saturating_sub(handshake),
+            Self::Direct(_) => PREAMBLE_TIMEOUT,
+            Self::Relayed(_) => vessel_relay::RELAYED_ADMISSION.saturating_sub(handshake),
         }
     }
+}
+
+/// A channel's places while it waits for admission, given back when it is
+/// admitted or gone.
+struct Waiting {
+    _permit: OwnedSemaphorePermit,
+    _address: Option<AddressPlace>,
+}
+
+/// A direct channel's place for its address, given back on drop.
+struct AddressPlace {
+    counts: Arc<Mutex<BlockCounts>>,
+    blocks: Vec<Block>,
+}
+
+impl Drop for AddressPlace {
+    fn drop(&mut self) {
+        lock(&self.counts).remove(&self.blocks);
+    }
+}
+
+fn lock(counts: &Mutex<BlockCounts>) -> MutexGuard<'_, BlockCounts> {
+    // A few map operations that cannot panic halfway: a poisoned lock
+    // still holds consistent counts.
+    counts.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The largest frame either side may send before the client is admitted.
@@ -153,9 +206,9 @@ pub(crate) struct SecureGateway {
     pub(crate) connections: TaskTracker,
     /// Permits for direct channels not yet admitted ([`MAX_UNADMITTED`]).
     pub(crate) unadmitted: Arc<Semaphore>,
-    /// Permits for relayed channels not yet admitted
-    /// ([`vessel_relay::RELAYED_UNADMITTED`]).
-    pub(crate) unadmitted_relayed: Arc<Semaphore>,
+    /// Direct channels not yet admitted, per address block
+    /// ([`MAX_UNADMITTED_PER_ADDRESS`]).
+    pub(crate) unadmitted_per_address: Arc<Mutex<BlockCounts>>,
 }
 
 impl SecureGateway {
@@ -171,56 +224,67 @@ impl SecureGateway {
         carrier: C,
         route: Route,
     ) -> Result<(), NotServed> {
-        let permit = self.permit(route).ok_or(NotServed::Busy)?;
+        let waiting = self.waiting(&route).ok_or(NotServed::Busy)?;
         let started = Instant::now();
         let mut unadmitted = self.channel;
         unadmitted.max_frame = PREAMBLE_MAX_FRAME.min(self.channel.max_frame);
-        if route == Route::Relayed {
+        if matches!(route, Route::Relayed(_)) {
             unadmitted.handshake_timeout = unadmitted
                 .handshake_timeout
                 .min(vessel_relay::RELAYED_ADMISSION);
         }
         let channel = vessel_relay::respond(carrier, &self.keypair, &unadmitted).await?;
         let within = route.preamble_within(started.elapsed());
-        self.serve_with(channel, permit, within).await;
+        self.serve_with(channel, waiting, within).await;
         Ok(())
     }
 
-    fn permit(&self, route: Route) -> Option<OwnedSemaphorePermit> {
-        let budget = match route {
-            Route::Direct => &self.unadmitted,
-            Route::Relayed => &self.unadmitted_relayed,
-        };
-        Arc::clone(budget).try_acquire_owned().ok()
+    /// A place to wait for admission by `route`: in the direct budget and
+    /// for the peer's address blocks, or in the relay link's budget.
+    fn waiting(&self, route: &Route) -> Option<Waiting> {
+        match route {
+            Route::Direct(peer) => {
+                let blocks = blocks(*peer);
+                let mut counts = lock(&self.unadmitted_per_address);
+                if !counts.fits(&blocks, MAX_UNADMITTED_PER_ADDRESS) {
+                    return None;
+                }
+                let permit = Arc::clone(&self.unadmitted).try_acquire_owned().ok()?;
+                counts.add(&blocks);
+                drop(counts);
+                Some(Waiting {
+                    _permit: permit,
+                    _address: Some(AddressPlace {
+                        counts: Arc::clone(&self.unadmitted_per_address),
+                        blocks,
+                    }),
+                })
+            }
+            Route::Relayed(budget) => Some(Waiting {
+                _permit: Arc::clone(budget).try_acquire_owned().ok()?,
+                _address: None,
+            }),
+        }
     }
 
     /// [`accept`](Self::accept) for a carrier from a transport task: the
     /// failure is logged, since nobody waits for it.
     pub(crate) async fn accept_logged<C: NodeCarrier>(&self, carrier: C, route: Route) {
+        let via = route.label();
         if let Err(error) = self.accept(carrier, route).await {
-            tracing::info!(via = route.label(), error = %chain(&error), "a secure handshake failed");
+            tracing::info!(via, error = %chain(&error), "a secure handshake failed");
         }
     }
 
     /// Serve one established secure channel until it ends: the preamble,
     /// then the protocol as the admitted device. Dropped at once past
     /// [`MAX_UNADMITTED`].
+    /// It came by `route`.
     #[cfg(test)]
-    pub(crate) async fn serve<T: Admittable>(&self, channel: T) {
-        self.serve_by(channel, Route::Direct).await;
-    }
-
-    /// [`serve`](Self::serve) for a channel a relay spliced.
-    #[cfg(test)]
-    pub(crate) async fn serve_relayed<T: Admittable>(&self, channel: T) {
-        self.serve_by(channel, Route::Relayed).await;
-    }
-
-    #[cfg(test)]
-    async fn serve_by<T: Admittable>(&self, channel: T, route: Route) {
-        if let Some(permit) = self.permit(route) {
+    pub(crate) async fn serve<T: Admittable>(&self, channel: T, route: Route) {
+        if let Some(waiting) = self.waiting(&route) {
             let within = route.preamble_within(Duration::ZERO);
-            self.serve_with(channel, permit, within).await;
+            self.serve_with(channel, waiting, within).await;
         } else {
             tracing::info!(
                 via = route.label(),
@@ -232,7 +296,7 @@ impl SecureGateway {
     async fn serve_with<T: Admittable>(
         &self,
         mut channel: T,
-        permit: OwnedSemaphorePermit,
+        waiting: Waiting,
         preamble_within: Duration,
     ) {
         let _tracked = self.connections.token();
@@ -241,7 +305,7 @@ impl SecureGateway {
             admitted = preamble::admit(&mut channel, &self.devices, &self.lifecycle, &self.closing, preamble_within) => admitted,
             () = self.closing.cancelled() => return,
         };
-        drop(permit);
+        drop(waiting);
         let Admitted {
             principal,
             registration,

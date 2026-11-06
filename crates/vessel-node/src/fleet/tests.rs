@@ -47,7 +47,10 @@ impl Connector for MemoryConnector {
     async fn connect(&self, client: ClientInfo) -> Result<NodeClient, Failed> {
         let (client_end, node_end) = memory::pair(NonZeroUsize::new(16).unwrap());
         let gateway = self.gateway.clone();
-        drop(tokio::spawn(async move { gateway.serve(node_end).await }));
+        let route = crate::secure::Route::Direct(std::net::Ipv4Addr::LOCALHOST.into());
+        drop(tokio::spawn(
+            async move { gateway.serve(node_end, route).await },
+        ));
         let channel = pairing::authenticate(client_end, &self.credential)
             .await
             .map_err(|error: PreambleError| Failed(error.to_string()))?;
@@ -160,7 +163,10 @@ impl Home {
             .unwrap();
         let (client_end, node_end) = memory::pair(NonZeroUsize::new(16).unwrap());
         let gateway = self.node.secure.clone();
-        drop(tokio::spawn(async move { gateway.serve(node_end).await }));
+        let route = crate::secure::Route::Direct(std::net::Ipv4Addr::LOCALHOST.into());
+        drop(tokio::spawn(
+            async move { gateway.serve(node_end, route).await },
+        ));
         let (paired, _channel) = pairing::pair(client_end, &offer, "member").await.unwrap();
         paired.credential
     }

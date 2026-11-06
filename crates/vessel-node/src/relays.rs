@@ -51,7 +51,7 @@ use vessel_relay::{LinkState, NodeLink, Reach, TlsConfig, WsCarrier};
 use vessel_secure::NodeKeypair;
 
 use crate::error::NodeError;
-use crate::secure::{Route, SecureGateway};
+use crate::secure::{Route, SecureGateway, relay_budget};
 
 /// The node's relay links.
 #[derive(Debug)]
@@ -105,14 +105,17 @@ struct Serving {
 impl Serving {
     /// Run `link` until `stop` (a child of the node's stop): each client
     /// the relay splices to the node takes the same path as a direct
-    /// `/secure` connection.
+    /// `/secure` connection, waiting for admission in this link's own
+    /// budget (gone with the link; `secure`'s round-10 Decision Log).
     fn run(&self, link: NodeLink, stop: CancellationToken) {
         let gateway = self.gateway.clone();
         let tracker = self.connections.clone();
+        let budget = relay_budget();
         let accept = move |carrier: WsCarrier| {
             let gateway = gateway.clone();
+            let route = Route::Relayed(Arc::clone(&budget));
             drop(tracker.spawn(async move {
-                gateway.accept_logged(carrier, Route::Relayed).await;
+                gateway.accept_logged(carrier, route).await;
             }));
         };
         drop(self.connections.spawn(link.run(accept, stop)));
