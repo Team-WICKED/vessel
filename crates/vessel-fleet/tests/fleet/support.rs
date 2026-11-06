@@ -84,8 +84,8 @@ impl Member {
     pub(crate) fn claude(&self) -> Target {
         Target {
             root: self.dir.path().join("claude"),
-            instructions: PathBuf::from("CLAUDE.md"),
-            skills: PathBuf::from("skills"),
+            instructions: Some(PathBuf::from("CLAUDE.md")),
+            skills: Some(PathBuf::from("skills")),
         }
     }
 

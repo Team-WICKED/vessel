@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use vessel_proto::{BlobHash, BundleFile, BundlePath, Manifest};
 
 use crate::managed::Managed;
-use crate::target::{Found, Target, inspect};
+use crate::target::{Found, Place, Target, inspect};
 
 /// What applying a manifest would do.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -157,13 +157,17 @@ pub fn plan(
             continue;
         }
         for (bundle, file) in &manifest.files {
-            let Some(path) = target.place(bundle) else {
-                plan.skips.push(Skip {
-                    bundle: bundle.clone(),
-                    path: target.root.clone(),
-                    reason: SkipReason::Unplaced,
-                });
-                continue;
+            let path = match target.placement(bundle) {
+                Place::At(path) => path,
+                Place::Unused => continue,
+                Place::Invalid => {
+                    plan.skips.push(Skip {
+                        bundle: bundle.clone(),
+                        path: target.root.clone(),
+                        reason: SkipReason::Unplaced,
+                    });
+                    continue;
+                }
             };
             let _placed = placed.insert(path.clone(), target);
             plan.add(target, bundle, &path, file, managed, &sources)?;

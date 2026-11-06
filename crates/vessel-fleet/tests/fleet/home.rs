@@ -43,8 +43,8 @@ fn operator_home() -> (Home, Target) {
 
     let claude = Target {
         root: home.dir.path().join("claude"),
-        instructions: PathBuf::from("CLAUDE.md"),
-        skills: PathBuf::from("skills"),
+        instructions: Some(PathBuf::from("CLAUDE.md")),
+        skills: Some(PathBuf::from("skills")),
     };
     fs::create_dir_all(claude.root.join("skills")).unwrap();
     symlink(codex.join("AGENTS.md"), claude.root.join("CLAUDE.md")).unwrap();
@@ -101,8 +101,8 @@ fn on_the_home_linked_homes_and_the_source_itself_are_left_alone() {
     let manifest = home.publish().manifest;
     let codex = Target {
         root: home.codex(),
-        instructions: PathBuf::from("AGENTS.md"),
-        skills: PathBuf::from("skills"),
+        instructions: Some(PathBuf::from("AGENTS.md")),
+        skills: Some(PathBuf::from("skills")),
     };
     // A third home on the same machine with no links: it gets copies.
     let alt = Target {

@@ -6,7 +6,8 @@
 //!   fetch from.
 //! - Skills: each directory under the skills source with a `SKILL.md` is a
 //!   skill, bundled as `skills/<name>/...` with `<name>` from its
-//!   frontmatter. Files at the top of the skills directory are not skills.
+//!   frontmatter. Files at the top of the skills directory are not skills,
+//!   and dot directories there are a harness's own (Codex's `.system`).
 //!   A directory without a usable name, or with a name another directory
 //!   already took (the first in name order wins), is left out and
 //!   reported, never guessed at.
@@ -313,7 +314,8 @@ impl Builder<'_> {
         let _first = self.visited.insert(root.clone());
         let mut names: BTreeMap<String, PathBuf> = BTreeMap::new();
         for (name, path) in sorted_entries(&root)? {
-            if self.skipped(&name) {
+            // Dot directories are a harness's own (Codex's `.system`).
+            if name.starts_with('.') || self.skipped(&name) {
                 continue;
             }
             let Some(dir) = self.follow(&path)? else {

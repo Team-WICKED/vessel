@@ -8,6 +8,8 @@ license-file.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Each harness's home layout (instruction file, skills directory).
+vessel-harness.workspace = true
 vessel-proto.workspace = true
 
 # Random suffixes for temporary files beside the ones being replaced.

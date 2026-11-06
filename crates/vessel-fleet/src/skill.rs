@@ -14,7 +14,9 @@
 //!   value, a second `name:`) is refused, so the name Vessel picks is the
 //!   name every harness picks.
 //! - The name must work as one directory name on every OS (it becomes
-//!   `skills/<name>` in the bundle, under the bundle path rules).
+//!   `skills/<name>` in the bundle, under the bundle path rules), and may
+//!   not start with `.`: dot directories under a harness's skills are its
+//!   own (Codex's `skills/.system`), and no bundle writes there.
 
 use std::str::FromStr as _;
 
@@ -74,7 +76,9 @@ pub fn skill_name(text: &str) -> Result<String, SkillNameError> {
     }
     let value = name.ok_or(SkillNameError::NoName)?;
     let name = unquote(value).ok_or_else(|| SkillNameError::Unclear(value.to_owned()))?;
+    // A dot name is a harness's own (Codex keeps `skills/.system`).
     let usable = !name.is_empty()
+        && !name.starts_with('.')
         && !name.contains(['/', '\\'])
         && BundlePath::from_str(&format!("{}/{name}", crate::SKILLS))
             .is_ok_and(|path| path.segments().count() == 2);
