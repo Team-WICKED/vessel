@@ -65,7 +65,9 @@ async fn waits_leave_room(caller: &Member, target: &Member) {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    let (done, waiting): (Vec<_>, Vec<_>) = waits.into_iter().partition(|wait| wait.is_finished());
+    let (done, waiting): (Vec<_>, Vec<_>) = waits
+        .into_iter()
+        .partition(tokio::task::JoinHandle::is_finished);
     assert!(
         waiting.len() <= PER_ORIGIN,
         "{} still waiting",
