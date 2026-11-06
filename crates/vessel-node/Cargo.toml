@@ -1,6 +1,6 @@
 [package]
 name = "vessel-node"
-description = "Vessel node daemon (vesseld): runs agent harness sessions on one machine and serves them over protocol 2"
+description = "Vessel node daemon (vesseld): runs agent harness sessions on one machine and serves them to clients over the Vessel protocol"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
