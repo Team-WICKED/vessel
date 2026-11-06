@@ -48,7 +48,9 @@
 
 use std::time::Duration;
 
-use vessel_proto::{ClientInfo, NodeClose, NodePublicKey, PairingOffer, RouteUrl, RoutingId};
+use vessel_proto::{
+    ClientInfo, NodeClose, NodeId, NodePublicKey, PairingOffer, RouteUrl, RoutingId,
+};
 use vessel_rpc::ClientConfig;
 use vessel_secure::{SecureChannel, SecureError};
 
@@ -58,7 +60,7 @@ use super::route::{ReachError, Route, RouteError, RouteFailure};
 use crate::address::SecureTarget;
 use crate::client::NodeClient;
 use crate::connector::Connector;
-use crate::credential::DeviceCredential;
+use crate::credential::{CredentialMismatch, DeviceCredential};
 use crate::error::chain;
 use crate::pairing::{self, Paired};
 
@@ -152,12 +154,23 @@ pub struct SecureConnector<D> {
 }
 
 impl<D> SecureConnector<D> {
-    /// Reach the node at `target` through `dialer`, presenting
-    /// `credential`, with default limits.
-    #[must_use]
-    pub fn new(dialer: D, target: SecureTarget, credential: DeviceCredential) -> Self {
+    /// Reach the node `node` at `target` through `dialer`, presenting
+    /// `credential`, with default limits. Wrap it in
+    /// [`Pinned`](crate::Pinned) with `node` so the id that answers is
+    /// checked too.
+    ///
+    /// # Errors
+    /// The credential is another node's (another key or id): a connector
+    /// that would send it to the wrong node is never made.
+    pub fn new(
+        dialer: D,
+        target: SecureTarget,
+        node: NodeId,
+        credential: DeviceCredential,
+    ) -> Result<Self, CredentialMismatch> {
+        credential.check(&target.key, node)?;
         let routing_id = vessel_secure::routing_id(&target.key);
-        Self {
+        Ok(Self {
             dialer,
             target,
             routing_id,
@@ -165,7 +178,7 @@ impl<D> SecureConnector<D> {
             config: ClientConfig::default(),
             secure: vessel_secure::Config::default(),
             timeouts: RouteTimeouts::default(),
-        }
+        })
     }
 
     /// The same, with explicit protocol limits.
@@ -289,7 +302,7 @@ pub async fn pair_over<D: Dialer>(
                 continue;
             }
         };
-        return match pairing::pair(channel, &offer.invite, device_name).await {
+        return match pairing::pair(channel, offer, device_name).await {
             Ok((paired, _channel)) => Ok((paired, route)),
             Err(error) => {
                 let error = RouteError::Open(SecureConnectError::Preamble(error));

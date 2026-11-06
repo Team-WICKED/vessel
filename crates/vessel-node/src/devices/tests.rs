@@ -12,9 +12,8 @@ use vessel_client::secure;
 use vessel_harness::Lookup;
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, HarnessKind,
-    InvitationSecret, InviteDevice, ListDevices, ListSessions, NodeClose, NodePublicKey,
-    PairingOffer, Preamble, PreambleReply, RefusalReason, RevokeDevice, Scope, SessionMode,
-    SessionSpec, TerminalSize,
+    InviteDevice, ListDevices, ListSessions, NodeClose, NodePublicKey, PairingOffer, Preamble,
+    PreambleReply, RefusalReason, RevokeDevice, Scope, SessionMode, SessionSpec, TerminalSize,
 };
 use vessel_relay::NodeCarrier;
 use vessel_rpc::memory::{self, MemoryTransport};
@@ -79,8 +78,8 @@ fn invite(node: &Node, label: Option<&str>) -> PairingOffer {
 /// Pair through a fresh channel with the client's own `pair`; returns the
 /// device, its secret, and the protocol connection that follows on the same
 /// channel.
-async fn pair(node: &Node, invite: InvitationSecret) -> (DeviceId, DeviceSecret, Connection) {
-    let (paired, channel) = pairing::pair(channel(node), &invite, "laptop")
+async fn pair(node: &Node, offer: PairingOffer) -> (DeviceId, DeviceSecret, Connection) {
+    let (paired, channel) = pairing::pair(channel(node), &offer, "laptop")
         .await
         .unwrap();
     assert_eq!(paired.node.id, node.info().id);
@@ -100,7 +99,9 @@ async fn authenticate(
     device: DeviceId,
     secret: &DeviceSecret,
 ) -> Result<Connection, RefusalReason> {
-    let credential = pairing::credential(device, secret.clone());
+    let info = node.info();
+    let key = info.public_key.unwrap();
+    let credential = pairing::credential(info.id, key, device, secret.clone());
     match pairing::authenticate(channel(node), &credential).await {
         Ok(channel) => Ok(
             Connection::connect(channel, client(), &ClientConfig::default())
@@ -274,6 +275,7 @@ async fn devices_pair_and_authenticate_over_the_secure_channel() {
     let connection = secure::open(
         client_end,
         &offer.key,
+        offer.node,
         &paired.credential,
         client(),
         &config,
@@ -311,7 +313,7 @@ async fn a_client_with_another_key_gets_no_channel() {
 async fn pairing_creates_a_device_once_and_its_credential_authenticates_it() {
     let (_temp, node) = node().await;
     let offer = invite(&node, Some("work laptop"));
-    let (device, secret, paired) = pair(&node, offer.invite.clone()).await;
+    let (device, secret, paired) = pair(&node, offer.clone()).await;
 
     // The channel that paired goes on to serve the protocol, with every scope.
     let devices: Vec<DeviceInfo> = paired.call(ListDevices).await.unwrap();
@@ -361,8 +363,8 @@ async fn pairing_creates_a_device_once_and_its_credential_authenticates_it() {
 #[tokio::test]
 async fn revoking_a_device_closes_its_connections_and_refuses_it_after() {
     let (_temp, node) = node().await;
-    let (laptop, laptop_secret, laptop_paired) = pair(&node, invite(&node, None).invite).await;
-    let (_phone, _phone_secret, phone) = pair(&node, invite(&node, None).invite).await;
+    let (laptop, laptop_secret, laptop_paired) = pair(&node, invite(&node, None)).await;
+    let (_phone, _phone_secret, phone) = pair(&node, invite(&node, None)).await;
     let laptop_again = authenticate(&node, laptop, &laptop_secret).await.unwrap();
 
     // The phone revokes the laptop.

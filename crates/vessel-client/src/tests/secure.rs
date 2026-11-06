@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures_util::{Sink, SinkExt as _, Stream, StreamExt as _};
 use tokio::task::JoinHandle;
 use vessel_proto::{
-    DeviceId, DeviceSecret, NodeClose, Preamble, PreambleReply, RefusalReason, RelayClose,
+    DeviceId, DeviceSecret, NodeClose, NodeId, Preamble, PreambleReply, RefusalReason, RelayClose,
     RouteUrl, RoutingId,
 };
 use vessel_rpc::CallError;
@@ -272,8 +272,14 @@ fn connector(
         direct: direct.iter().map(|route| url(route)).collect(),
         relays: relays.iter().map(|route| url(route)).collect(),
     };
-    let credential = pairing::credential(DeviceId::random(), DeviceSecret::from_bytes([7; 32]));
-    SecureConnector::new(Arc::clone(dialer), target, credential)
+    let node = *dialer.node.id.lock().unwrap();
+    let credential = pairing::credential(
+        node,
+        target.key,
+        DeviceId::random(),
+        DeviceSecret::from_bytes([7; 32]),
+    );
+    SecureConnector::new(Arc::clone(dialer), target, node, credential).unwrap()
 }
 
 const D1: &str = "ws://192.0.2.1:7077";
@@ -457,4 +463,57 @@ async fn a_revoked_device_ends_the_stream_with_the_reason() {
     assert!(reason.contains("revoked"), "{reason}");
     assert!(stream.next().await.is_none(), "the stream ended");
     assert_eq!(dialer.dialled(), [D1, D1], "the relay was not asked");
+}
+
+/// A book entry that names someone else's key (and relay) with this
+/// node's credential file: no connector is made and nothing is dialled,
+/// so the secret never leaves.
+#[tokio::test]
+async fn a_credential_is_never_sent_to_another_key_or_node() {
+    let dialer = MemoryDialer::new(Arc::new(FakeNode::new(0)));
+    let node = *dialer.node.id.lock().unwrap();
+    let ours = *dialer.keypair.public();
+    let credential = pairing::credential(
+        node,
+        ours,
+        DeviceId::random(),
+        DeviceSecret::from_bytes([7; 32]),
+    );
+    let attacker = SecureTarget {
+        key: *NodeKeypair::generate().unwrap().public(),
+        direct: Vec::new(),
+        relays: vec![url(R1)],
+    };
+    assert!(SecureConnector::new(Arc::clone(&dialer), attacker, node, credential.clone()).is_err());
+    let elsewhere = SecureTarget {
+        key: ours,
+        direct: Vec::new(),
+        relays: vec![url(R1)],
+    };
+    assert!(
+        SecureConnector::new(
+            Arc::clone(&dialer),
+            elsewhere,
+            NodeId::random(),
+            credential.clone()
+        )
+        .is_err()
+    );
+    assert!(dialer.dialled().is_empty());
+
+    // `open` checks before it touches the carrier.
+    let (client_end, mut far_end) = memory_pair(NonZeroUsize::new(4).unwrap());
+    let other = *NodeKeypair::generate().unwrap().public();
+    let error = crate::secure::open(
+        client_end,
+        &other,
+        node,
+        &credential,
+        client_info(),
+        &ClientConfig::default(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.is_final(), "{error}");
+    assert!(far_end.next().await.is_none(), "nothing was sent");
 }

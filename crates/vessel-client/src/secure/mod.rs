@@ -23,7 +23,7 @@ mod dial;
 mod route;
 mod websocket;
 
-use vessel_proto::{ClientInfo, NodePublicKey, PairingOffer};
+use vessel_proto::{ClientInfo, NodeId, NodePublicKey, PairingOffer};
 use vessel_rpc::ClientConfig;
 use vessel_secure::{Carrier, SecureError};
 
@@ -33,12 +33,16 @@ pub use route::{ReachError, Route, RouteError, RouteFailure};
 pub use websocket::WsDialer;
 
 use crate::client::NodeClient;
-use crate::credential::DeviceCredential;
+use crate::credential::{CredentialMismatch, DeviceCredential};
 use crate::pairing::{self, Paired, PreambleError};
 
 /// Opening a secure connection failed.
 #[derive(Debug, thiserror::Error)]
 pub enum SecureConnectError {
+    /// The credential belongs to another node; it was not sent, and no
+    /// connection was attempted.
+    #[error(transparent)]
+    Credential(#[from] CredentialMismatch),
     /// The secure channel could not be set up: another key answered (the
     /// node was re-keyed, or it is another node), or the network failed.
     #[error("the secure connection failed")]
@@ -65,6 +69,7 @@ impl SecureConnectError {
     #[must_use]
     pub fn is_final(&self) -> bool {
         match self {
+            Self::Credential(_) => true,
             Self::Channel(error) => !error.is_transient(),
             Self::Preamble(error) => error.is_final(),
             Self::Handshake(error) => match error {
@@ -84,7 +89,7 @@ impl SecureConnectError {
     #[must_use]
     pub const fn is_answer(&self) -> bool {
         match self {
-            Self::Channel(_) => false,
+            Self::Credential(_) | Self::Channel(_) => false,
             Self::Preamble(error) => error.is_answer(),
             Self::Handshake(error) => match error {
                 vessel_rpc::ConnectError::Rejected(_) => true,
@@ -99,18 +104,21 @@ impl SecureConnectError {
     }
 }
 
-/// Open a protocol connection to the paired node with `key` over `carrier`,
-/// presenting `credential`.
+/// Open a protocol connection to the paired node `node` with `key` over
+/// `carrier`, presenting `credential`, which must be that node's: it is
+/// checked before the carrier is used.
 ///
 /// # Errors
 /// See [`SecureConnectError`].
 pub async fn open<C: Carrier>(
     carrier: C,
     key: &NodePublicKey,
+    node: NodeId,
     credential: &DeviceCredential,
     client: ClientInfo,
     config: &ClientConfig,
 ) -> Result<NodeClient, SecureConnectError> {
+    credential.check(key, node)?;
     let channel = vessel_secure::initiate(carrier, key)
         .await
         .map_err(SecureConnectError::Channel)?;
@@ -137,7 +145,7 @@ pub async fn pair<C: Carrier>(
     let channel = vessel_secure::initiate(carrier, &offer.key)
         .await
         .map_err(SecureConnectError::Channel)?;
-    let (paired, channel) = pairing::pair(channel, &offer.invite, device_name).await?;
+    let (paired, channel) = pairing::pair(channel, offer, device_name).await?;
     let connection = NodeClient::over(channel, client, config)
         .await
         .map_err(SecureConnectError::Handshake)?;
