@@ -44,8 +44,9 @@ session as created by the owner, and never emit `profile_changed`.
   `mcp`: server name to transport, with `{"secret": "NAME"}` references,
   never values); `fleet.blob { hash, offset }` returns `{data (base64),
   total}`, at most 1 MiB per chunk; `fleet.watch { after }` is a long poll
-  that returns a generation (newer, or `after` when the node's wait limit
-  passes); `fleet.report { generation, conflicts? }` returns `ack`.
+  that returns the home's generation as soon as it differs from `after`
+  (older too, so a member follows a home whose data was reset), or `after`
+  itself when the home's wait limit (50 s) passes; `fleet.report { generation, conflicts? }` returns `ack`.
   `fleet.members` (admin) returns `FleetMember[]`.
 - Bundle paths: `instructions.md` is the home's instructions file, which
   each member writes under its harness's own name (`CLAUDE.md`,
