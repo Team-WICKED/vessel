@@ -47,7 +47,9 @@ use vessel_proto::{
     Scope,
 };
 
-use super::chunks::{self, FetchError};
+use vessel_client::FetchError;
+
+use super::chunks;
 use super::files::{self, FileError, FleetFiles};
 use super::links::Links;
 use super::local::Local;
@@ -409,7 +411,7 @@ async fn fetch(
     .map_err(|error| match error {
         FetchError::Read(error) => PullError::Call(error),
         FetchError::Oversized(size) => PullError::Oversized(size),
-        FetchError::Blob(error) => PullError::Blob(error),
+        FetchError::Sink(error) => PullError::Blob(error),
         FetchError::Task(error) => PullError::Task(error),
     })
 }
