@@ -228,7 +228,7 @@ impl Handler for FakeNode {
 fn server(fake: Arc<FakeNode>) -> Arc<Server<FakeNode>> {
     Arc::new(Server::new(
         fake,
-        node(),
+        tokio::sync::watch::channel(node()).1,
         ServerConfig::default(),
         CancellationToken::new(),
     ))

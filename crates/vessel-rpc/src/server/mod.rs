@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{Sink, SinkExt as _, Stream, StreamExt as _};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     ClientFrame, ClientInfo, ErrorCode, Handler, Hello, NodeInfo, ProtocolRange, ProtocolVersion,
@@ -88,10 +88,12 @@ pub struct Peer {
     pub outbound: Outbound,
 }
 
-/// Serves protocol 2 connections with one [`Handler`].
+/// Serves protocol connections with one [`Handler`].
 pub struct Server<H> {
     handler: Arc<H>,
-    node: NodeInfo,
+    /// The node's current description; read for every `Welcome`, so a
+    /// change (a node starting to drain) reaches new connections.
+    node: watch::Receiver<NodeInfo>,
     config: ServerConfig,
     shutdown: CancellationToken,
 }
@@ -99,7 +101,7 @@ pub struct Server<H> {
 impl<H> fmt::Debug for Server<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Server")
-            .field("node", &self.node.id)
+            .field("node", &self.node.borrow().id)
             .field("config", &self.config)
             .finish_non_exhaustive()
     }
@@ -110,11 +112,12 @@ where
     H: Handler + Send + 'static,
     H::Context: Send + 'static,
 {
-    /// A server for `handler`. `node` is sent in every `Welcome`;
-    /// cancelling `shutdown` closes every connection.
+    /// A server for `handler`. The current value of `node` is sent in every
+    /// `Welcome` (it stays readable after its sender is gone); cancelling
+    /// `shutdown` closes every connection.
     pub const fn new(
         handler: Arc<H>,
-        node: NodeInfo,
+        node: watch::Receiver<NodeInfo>,
         config: ServerConfig,
         shutdown: CancellationToken,
     ) -> Self {
@@ -175,10 +178,8 @@ where
             reject(&mut sink, error.clone()).await?;
             return Err(ServeError::Rejected(error));
         };
-        let welcome = ServerFrame::Welcome(Welcome {
-            protocol,
-            node: self.node.clone(),
-        });
+        let node = self.node.borrow().clone();
+        let welcome = ServerFrame::Welcome(Welcome { protocol, node });
         send_now(&mut sink, &welcome).await?;
         tracing::debug!(
             client = %hello.client.name,
