@@ -1,7 +1,7 @@
 //! Who this node is, as told to clients.
 
 use chrono::Utc;
-use vessel_proto::{NodeId, NodeInfo, ProtocolRange};
+use vessel_proto::{NodeId, NodeInfo, NodeState, ProtocolRange};
 
 /// The node's self-description for this run.
 pub(crate) fn node_info(id: NodeId, name: Option<String>) -> NodeInfo {
@@ -18,5 +18,6 @@ pub(crate) fn node_info(id: NodeId, name: Option<String>) -> NodeInfo {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         protocol: ProtocolRange::CURRENT,
         started_at: Utc::now(),
+        state: NodeState::Serving,
     }
 }

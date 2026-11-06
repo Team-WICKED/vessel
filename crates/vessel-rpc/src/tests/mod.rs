@@ -17,10 +17,11 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     Ack, Call, ClientFrame, ClientInfo, CreateSession, ErrorCode, EventPage, EventRecord, EventSeq,
     GetNode, GetSession, Handler, Harness, HarnessKind, KillSession, ListHarnesses, ListSessions,
-    NodeId, NodeInfo, Outcome, ProtocolRange, ProtocolVersion, ReadEvents, Request, RequestId,
-    SendInput, ServerFrame, SessionEvent, SessionId, SessionInfo, SessionInput, SessionMode,
-    SessionSpec, SessionStatus, StructuredSupport, Subscribe, Subscribed, SubscriptionEnd,
-    TerminalBytes, TerminalInput, TerminalSize, Unsubscribe, WireError,
+    NodeId, NodeInfo, NodeState, Outcome, ProtocolRange, ProtocolVersion, ReadEvents, Request,
+    RequestId, SendInput, ServerFrame, SessionEvent, SessionId, SessionInfo, SessionInput,
+    SessionMode, SessionSpec, SessionStatus, StopNode, StopWhen, StructuredSupport, Subscribe,
+    Subscribed, SubscriptionEnd, TerminalBytes, TerminalInput, TerminalSize, Unsubscribe,
+    WireError,
 };
 
 use crate::memory::{self, Disconnected, MemoryTransport};
@@ -57,6 +58,7 @@ fn node() -> NodeInfo {
         version: "0.0.0".to_owned(),
         protocol: ProtocolRange::CURRENT,
         started_at: DateTime::UNIX_EPOCH,
+        state: NodeState::Serving,
     }
 }
 
@@ -269,6 +271,11 @@ impl Handler for Fake {
             .close_subscription(request.subscription)
             .await
             .map_err(crate::OutboundError::to_wire)?;
+        Ok(Ack)
+    }
+
+    async fn stop_node(&self, _context: &Context, request: StopNode) -> Result<Ack, WireError> {
+        self.saw(request.into_call());
         Ok(Ack)
     }
 }

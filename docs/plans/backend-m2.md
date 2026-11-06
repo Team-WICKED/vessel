@@ -330,7 +330,31 @@ workflow.
 - `PROTOCOL.md` has a version 3 entry. ADRs 0007 and 0008 are accepted.
   `ARCHITECTURE.md` and `README.md` describe remote use.
 
-## Open decisions for the coordinator
+## Decisions (coordinator, 2026-11-06)
+
+1. **Release source:** for M2 there is no remote download. `vessel`
+   fetches the release asset locally through the authenticated GitHub API
+   (the repository is private), or uses a local build, and uploads it over
+   `ssh` stdin. It checks the SHA-256 published with the release, then
+   renames atomically. Downloading directly on the remote, and the minisign
+   key, wait until the owner decides whether releases are public; that is
+   an outward-facing decision the plan does not make.
+2. **Auto-start:** yes. `vesseld attach` starts the node when none answers.
+   This serves ORIGIN item 3, a new machine productive in minutes.
+3. **Update with live sessions:** refuse by default and list them.
+   `--when-idle` and `--now` are explicit.
+4. **Linux binaries:** static musl, as Zed ships its remote server. If
+   allocator speed ever shows up in profiles, revisit with an explicit
+   allocator rather than glibc.
+5. **Nodes under the user's own service manager:** as proposed. `update`
+   sends `node.stop` and starts nothing.
+6. **Windows remotes:** out of M2. Windows clients stay in.
+
+The contract changes listed above are on `backend/m1` (protocol 3, commit
+after a5832cc). Until Track N implements it, the node answers `node.stop`
+with `unsupported`.
+
+### Open decisions as drafted (kept for the record)
 
 1. Release source and signing key. The plan assumes GitHub Releases on
    `Team-WICKED/vessel` and a minisign key, with the public key compiled

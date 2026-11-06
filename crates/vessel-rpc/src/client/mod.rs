@@ -41,7 +41,7 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     Call, ClientFrame, ClientInfo, CreateSession, GetNode, GetSession, Hello, KillSession,
     ListHarnesses, ListSessions, Outcome, ProtocolRange, ReadEvents, Request, RequestId, SendInput,
-    ServerFrame, Subscribe, Unsubscribe, Welcome,
+    ServerFrame, StopNode, Subscribe, Unsubscribe, Welcome,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -64,6 +64,7 @@ impl Unary for SendInput {}
 impl Unary for KillSession {}
 impl Unary for ReadEvents {}
 impl Unary for Unsubscribe {}
+impl Unary for StopNode {}
 
 /// `n` as a `NonZeroUsize` for constants.
 const fn at_least_one(n: usize) -> NonZeroUsize {

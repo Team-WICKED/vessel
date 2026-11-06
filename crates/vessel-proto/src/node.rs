@@ -34,9 +34,10 @@ impl fmt::Display for ProtocolVersion {
 
 /// The protocol this build speaks. Bump on any breaking change to a wire type
 /// and record the change in `docs/PROTOCOL.md`.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(3);
 
-/// The oldest protocol this build still accepts.
+/// The oldest protocol this build still accepts. Version 3 only adds a
+/// method and a defaulted field, so version 2 peers keep working.
 pub const MIN_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
 
 /// An inclusive range of protocol versions a peer can speak.
@@ -74,7 +75,19 @@ impl ProtocolRange {
     }
 }
 
-/// Static facts about a node.
+/// Whether a node is taking new work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeState {
+    /// Accepting new sessions.
+    #[default]
+    Serving,
+    /// Asked to stop once idle (`node.stop` with `when_idle`): live sessions
+    /// continue, new ones are refused with `ErrorCode::Unavailable`.
+    Draining,
+}
+
+/// Facts about a node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeInfo {
     /// Stable id for this node.
@@ -93,6 +106,9 @@ pub struct NodeInfo {
     pub protocol: ProtocolRange,
     /// When the node process started.
     pub started_at: DateTime<Utc>,
+    /// Whether it takes new sessions (protocol 3; absent means serving).
+    #[serde(default)]
+    pub state: NodeState,
 }
 
 #[cfg(test)]

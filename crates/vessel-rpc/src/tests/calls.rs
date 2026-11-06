@@ -6,7 +6,7 @@ use super::*;
 async fn every_unary_method_round_trips() {
     let mut running = start(ClientConfig::default()).await;
     let client = &running.client;
-    assert_eq!(client.welcome().protocol, ProtocolVersion::new(2));
+    assert_eq!(client.welcome().protocol, ProtocolVersion::new(3));
 
     let input = SendInput {
         session: session(1),
@@ -43,6 +43,15 @@ async fn every_unary_method_round_trips() {
         info(session(2), spec())
     );
     assert_eq!(client.call(input.clone()).await.unwrap(), Ack);
+    assert_eq!(
+        client
+            .call(StopNode {
+                when: StopWhen::WhenIdle
+            })
+            .await
+            .unwrap(),
+        Ack
+    );
     let page = client.call(read).await.unwrap();
     assert_eq!(page.records, vec![record(3)]);
     assert_eq!(page.next, EventSeq::new(4));
@@ -73,6 +82,10 @@ async fn every_unary_method_round_trips() {
         .into_call(),
         create.into_call(),
         input.into_call(),
+        StopNode {
+            when: StopWhen::WhenIdle,
+        }
+        .into_call(),
         read.into_call(),
         unknown.into_call(),
         missing.into_call(),

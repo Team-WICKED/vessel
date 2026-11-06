@@ -15,6 +15,7 @@ mod event;
 mod harness;
 mod id;
 mod node;
+mod proxy;
 mod raw;
 mod rpc;
 mod session;
@@ -32,13 +33,16 @@ pub use id::{
     EventSeq, HarnessSessionId, ModelId, NodeId, PermissionId, PermissionOptionId, RequestId,
     SessionId, SubscriptionId, ToolCallId,
 };
-pub use node::{MIN_PROTOCOL_VERSION, NodeInfo, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion};
+pub use node::{
+    MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,
+};
+pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use rpc::{
     Ack, Call, ClientFrame, ClientInfo, CreateSession, EventPage, GetNode, GetSession, Handler,
     Hello, KillSession, ListHarnesses, ListSessions, Method, Outcome, ReadEvents, Reply, Request,
-    SendInput, ServerFrame, Subscribe, Subscribed, SubscriptionEnd, UnexpectedReply, Unsubscribe,
-    Welcome, dispatch,
+    SendInput, ServerFrame, StopNode, StopWhen, Subscribe, Subscribed, SubscriptionEnd,
+    UnexpectedReply, Unsubscribe, Welcome, dispatch,
 };
 pub use session::{SessionInfo, SessionInput, SessionMode, SessionSpec, SessionStatus};
 pub use terminal::{TerminalBytes, TerminalInput, TerminalOutput, TerminalSize};
