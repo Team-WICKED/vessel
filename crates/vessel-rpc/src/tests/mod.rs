@@ -319,7 +319,8 @@ fn serve_with(transport: MemoryTransport, config: ServerConfig) -> Served {
         probe: Arc::clone(&probe),
         seen,
     };
-    let server = Server::new(Arc::new(fake), node(), config, shutdown.clone());
+    let node = tokio::sync::watch::channel(node()).1;
+    let server = Server::new(Arc::new(fake), node, config, shutdown.clone());
     let task = tokio::spawn(async move {
         server
             .serve(transport, |peer| Context {

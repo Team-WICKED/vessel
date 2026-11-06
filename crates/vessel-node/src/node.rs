@@ -82,7 +82,7 @@ impl Node {
         let closing = CancellationToken::new();
         let rpc = Arc::new(Server::new(
             Arc::new(service),
-            info.clone(),
+            tokio::sync::watch::channel(info.clone()).1,
             config.rpc.clone(),
             closing.clone(),
         ));
