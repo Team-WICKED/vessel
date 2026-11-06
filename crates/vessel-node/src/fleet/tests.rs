@@ -20,9 +20,11 @@ use vessel_rpc::memory;
 use vessel_store::DataDir;
 
 use super::local::{Local, TargetSource};
+use super::mcp::FleetMcp;
 use super::member::{self, Pacing};
 use super::state::{ConflictWhy, StateFile};
 use super::{FleetConfig, FleetFiles, FleetInit, FleetTargets};
+use crate::profiles::launch::McpSource as _;
 use crate::secure::SecureGateway;
 use crate::{Config, Node};
 
@@ -110,6 +112,15 @@ impl Home {
             },
         )
         .unwrap();
+        let toml = std::fs::read_to_string(files.sources()).unwrap();
+        std::fs::write(
+            files.sources(),
+            format!(
+                "{toml}\n[mcp.servers.docs]\ntype = \"stdio\"\ncommand = \"docs-mcp\"\n\
+                 env = {{ DOCS_TOKEN = {{ secret = \"DOCS_TOKEN\" }} }}\n"
+            ),
+        )
+        .unwrap();
         let claude = temp.path().join("claude");
         std::fs::create_dir_all(&claude).unwrap();
         let mut config = Config::new(data);
@@ -176,6 +187,7 @@ impl Member {
             files,
             TargetSource::Only(vec![(HarnessKind::Codex, codex)]),
             state,
+            Arc::new(FleetMcp::default()),
         ));
         Self {
             temp,
@@ -232,6 +244,21 @@ async fn a_member_follows_its_home_and_reports_what_it_kept() {
             && member.codex("skills/review/SKILL.md").is_file()
     })
     .await;
+    // With the bundle come the MCP server definitions, values not filled:
+    // this member has no DOCS_TOKEN, so sessions here would start without
+    // the server and say why.
+    assert_eq!(member.local.mcp.defined(), ["docs"]);
+    let spec = vessel_proto::SessionSpec::new(
+        HarnessKind::Codex,
+        vessel_proto::SessionMode::Terminal {
+            args: Vec::new(),
+            size: vessel_proto::TerminalSize::default(),
+        },
+    );
+    let servers = member.local.mcp.servers(&spec);
+    assert!(servers.servers.is_empty());
+    assert_eq!(servers.missing.len(), 1);
+    assert_eq!(servers.missing[0].as_str(), "DOCS_TOKEN");
 
     // An edit on the home reaches the member through `fleet.watch`.
     write(&home.path("codex/AGENTS.md"), "instructions v2, longer\n");

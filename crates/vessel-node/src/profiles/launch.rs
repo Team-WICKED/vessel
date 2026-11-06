@@ -17,8 +17,8 @@
 //!   start, while the fleet's definitions change with each pull).
 //! - Choice: [`McpSource`], a small trait the launcher asks once per launch
 //!   and per move. Fleet sync implements it over its definitions and
-//!   secrets (`vessel_fleet::resolve`) and replaces [`NoMcpServers`] where
-//!   the node is put together (`node.rs`). Secrets it lacks are reported
+//!   secrets (`vessel_fleet::resolve`, `fleet::FleetMcp`), which is what
+//!   the node is put together with (`node.rs`). Secrets it lacks are reported
 //!   back; the session starts without the servers that need them, and says
 //!   so in its log.
 //! - Cost: the source is called on the async runtime, so it must not
@@ -67,10 +67,13 @@ pub(crate) trait McpSource: fmt::Debug + Send + Sync {
     fn servers(&self, spec: &SessionSpec) -> McpServers;
 }
 
-/// No MCP servers: the node until fleet sync plugs in its source.
+/// No MCP servers, for tests of the launcher alone (the node launches with
+/// fleet sync's source).
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct NoMcpServers;
 
+#[cfg(test)]
 impl McpSource for NoMcpServers {
     fn servers(&self, _spec: &SessionSpec) -> McpServers {
         McpServers::default()
