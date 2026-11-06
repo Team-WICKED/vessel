@@ -209,7 +209,7 @@ pub(crate) fn create_parents(root: &Path, place: &Path) -> io::Result<()> {
         io::Error::new(io::ErrorKind::InvalidInput, "a place outside its target")
     })?;
     if !root.exists() {
-        fs::create_dir_all(root)?;
+        files::private_dir(root)?;
     }
     let mut walked = root.to_path_buf();
     for name in relative {
@@ -222,7 +222,9 @@ pub(crate) fn create_parents(root: &Path, place: &Path) -> io::Result<()> {
                     format!("{} is not a plain directory", walked.display()),
                 ));
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(&walked)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                files::private_dir_one(&walked)?;
+            }
             Err(error) => return Err(error),
         }
     }

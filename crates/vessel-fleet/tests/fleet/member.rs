@@ -303,3 +303,61 @@ fn the_record_survives_a_restart() {
         "a record from elsewhere is not guessed at"
     );
 }
+
+#[test]
+fn dot_entries_inside_a_skill_are_left_out_and_reported() {
+    let mut home = Home::new();
+    write(&home.codex().join("skills/review/.env"), "TOKEN=secret\n");
+    write(&home.codex().join("skills/review/.git/config"), "[core]\n");
+    write(&home.codex().join("skills/review/.cache-me"), "skipped\n");
+    home.sources.skip.push(".cache*".parse().unwrap());
+    let bundled = home.publish();
+    assert!(
+        bundled
+            .manifest
+            .files
+            .keys()
+            .all(|path| !path.as_str().contains("/.")),
+        "{:?}",
+        bundled.manifest.files.keys()
+    );
+    let hidden: Vec<String> = bundled
+        .problems
+        .iter()
+        .filter_map(|problem| {
+            if let vessel_fleet::SourceProblem::Hidden(path) = problem {
+                Some(path.file_name().unwrap().to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(hidden, [".env", ".git"], "a skipped name is not reported");
+}
+
+#[cfg(unix)]
+#[test]
+fn fleet_files_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mode = |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let mut home = Home::new();
+    let script = home.codex().join("skills/review/run.sh");
+    write(&script, "#!/bin/sh\n");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let readable = home.codex().join("skills/review/notes/how.md");
+    fs::set_permissions(&readable, fs::Permissions::from_mode(0o644)).unwrap();
+    let manifest = home.publish().manifest;
+    let mut member = Member::new();
+    let _fetched = member.fetch(&manifest, &home.blobs);
+    let claude = member.claude();
+    fs::create_dir_all(&claude.root).unwrap();
+    let applied = member.apply(&manifest, std::slice::from_ref(&claude));
+    assert!(applied.failures.is_empty(), "{:?}", applied.failures);
+    assert_eq!(mode(&claude.root.join("CLAUDE.md")), 0o600);
+    assert_eq!(mode(&claude.root.join("skills/review/notes/how.md")), 0o600);
+    assert_eq!(mode(&claude.root.join("skills/review/run.sh")), 0o700);
+    for dir in ["skills", "skills/review", "skills/review/notes"] {
+        assert_eq!(mode(&claude.root.join(dir)), 0o700, "{dir}");
+    }
+}

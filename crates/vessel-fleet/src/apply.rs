@@ -284,13 +284,13 @@ fn forget(managed: &mut Managed, path: &Path, incoming: bool) {
     }
 }
 
-/// Write blob `file.hash` at `path` (atomically, executable if the bundle
-/// says so), checking its content on the way.
+/// Write blob `file.hash` at `path` (atomically, owner-only, executable if
+/// the bundle says so), checking its content on the way.
 fn write_blob(path: &Path, file: &BundleFile, blobs: &BlobStore) -> io::Result<()> {
     let mode = if file.executable {
         Mode::Executable
     } else {
-        Mode::Ordinary
+        Mode::Private
     };
     let mut source = blobs.open_blob(&file.hash)?;
     files::replace_with(path, mode, |destination| {

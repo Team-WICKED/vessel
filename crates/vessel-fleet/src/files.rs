@@ -54,15 +54,17 @@ pub(crate) fn temporary_beside(path: &Path) -> io::Result<PathBuf> {
     Ok(path.with_file_name(format!(".{name}.{:016x}.tmp", u64::from_le_bytes(suffix))))
 }
 
-/// How a new file is created.
+/// How a new file is created. Everything Vessel writes is owner-only:
+/// its own state, and fleet files in harness homes alike. A source file's
+/// group and other bits are not carried (a manifest has only the
+/// executable bit), so a member can never make a file readable by more
+/// people than the home did; a harness home belongs to one user, who is
+/// the only one who needs to read it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// Vessel's own state: owner-only (0600 on Unix).
+    /// 0600 on Unix.
     Private,
-    /// A file in a harness home: the user's umask decides, like a file the
-    /// user saved.
-    Ordinary,
-    /// The same, executable (a script in a skill).
+    /// 0700 on Unix: a script in a skill.
     Executable,
 }
 
@@ -79,8 +81,7 @@ pub(crate) fn create_new(path: &Path, mode: Mode) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt as _;
         let _same = options.mode(match mode {
             Mode::Private => 0o600,
-            Mode::Ordinary => 0o666,
-            Mode::Executable => 0o777,
+            Mode::Executable => 0o700,
         });
     }
     options.open(path)
@@ -127,6 +128,20 @@ pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     {
         fs::create_dir_all(dir)
+    }
+}
+
+/// Create the one directory `dir` (its parent must exist), owner-only
+/// (0700 on Unix), failing if anything is there already.
+pub(crate) fn private_dir_one(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        fs::DirBuilder::new().mode(0o700).create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(dir)
     }
 }
 
