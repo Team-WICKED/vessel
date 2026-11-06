@@ -135,9 +135,11 @@ pub enum BundlePathRule {
     Character,
     /// A segment ending in `.` or a space, which Windows drops.
     TrailingDotOrSpace,
-    /// A Windows device name (`CON`, `NUL`, `COM1`, …), with or without an
-    /// extension.
+    /// A Windows device name (`CON`, `NUL`, `COM1`, `CONIN$`, …), with or
+    /// without an extension.
     ReservedName,
+    /// A Windows 8.3 short-name alias (`PROGRA~1`).
+    ShortNameAlias,
 }
 
 impl fmt::Display for InvalidBundlePath {
@@ -148,6 +150,9 @@ impl fmt::Display for InvalidBundlePath {
             BundlePathRule::Character => "has a control character or one of \\ : * ? \" < > |",
             BundlePathRule::TrailingDotOrSpace => "has a segment ending in `.` or a space",
             BundlePathRule::ReservedName => "has a Windows device name as a segment",
+            BundlePathRule::ShortNameAlias => {
+                "has a Windows short-name alias (`NAME~1`) as a segment"
+            }
         };
         write!(f, "bundle path `{}` {rule}", self.value)
     }
@@ -155,9 +160,42 @@ impl fmt::Display for InvalidBundlePath {
 
 impl std::error::Error for InvalidBundlePath {}
 
-const RESERVED: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+/// Windows device names, matched without regard to ASCII case. `COM0` and
+/// `LPT0`, and the superscript digits `¹²³`, are devices too on current
+/// Windows; `CONIN$` and `CONOUT$` are the console.
+const RESERVED: [&str; 32] = [
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "CONIN$",
+    "CONOUT$",
+    "COM0",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "COM\u{b9}",
+    "COM\u{b2}",
+    "COM\u{b3}",
+    "LPT0",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+    "LPT\u{b9}",
+    "LPT\u{b2}",
+    "LPT\u{b3}",
 ];
 
 fn check_segment(segment: &str) -> Result<(), BundlePathRule> {
@@ -173,11 +211,29 @@ fn check_segment(segment: &str) -> Result<(), BundlePathRule> {
     if segment.ends_with(['.', ' ']) {
         return Err(BundlePathRule::TrailingDotOrSpace);
     }
-    let stem = segment.split('.').next().unwrap_or(segment);
+    // Windows ignores an extension and spaces before it when it looks for
+    // a device: `NUL .txt` is `NUL`.
+    let stem = segment
+        .split('.')
+        .next()
+        .unwrap_or(segment)
+        .trim_end_matches(' ');
     if RESERVED.iter().any(|name| stem.eq_ignore_ascii_case(name)) {
         return Err(BundlePathRule::ReservedName);
     }
+    if short_name_alias(stem) {
+        return Err(BundlePathRule::ShortNameAlias);
+    }
     Ok(())
+}
+
+/// `PROGRA~1`: a `~` followed by a digit is how Windows spells the 8.3
+/// short name of a longer name, so writing it could land in another
+/// directory or file that already exists under its long name.
+fn short_name_alias(stem: &str) -> bool {
+    stem.split('~')
+        .skip(1)
+        .any(|after| after.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 impl BundlePath {
@@ -310,6 +366,8 @@ pub struct BundleFile {
     /// Its size in bytes.
     pub size: u64,
     /// Whether it is executable (scripts in skills). Ignored on Windows.
+    /// There is no other mode: members always write fleet files owner-only
+    /// (0600, 0700 if executable), so no manifest can widen access.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub executable: bool,
 }
@@ -611,8 +669,24 @@ mod tests {
         }
         assert_eq!(rule("dir./x"), BundlePathRule::TrailingDotOrSpace);
         assert_eq!(rule("x/name "), BundlePathRule::TrailingDotOrSpace);
-        for bad in ["nul", "skills/CON.md", "com1.txt", "Lpt9"] {
+        for bad in [
+            "nul",
+            "skills/CON.md",
+            "com1.txt",
+            "Lpt9",
+            "com0",
+            "LPT\u{b3}.log",
+            "conin$",
+            "CONOUT$.txt",
+            "NUL .txt",
+        ] {
             assert_eq!(rule(bad), BundlePathRule::ReservedName, "{bad:?}");
+        }
+        for bad in ["skills/PROGRA~1/x", "a~0", "x/LONGNA~12.md"] {
+            assert_eq!(rule(bad), BundlePathRule::ShortNameAlias, "{bad:?}");
+        }
+        for good in ["a~b", "~x", "notes~.md", "COM10", "LPT"] {
+            assert!(good.parse::<BundlePath>().is_ok(), "{good:?}");
         }
         assert!("console.md".parse::<BundlePath>().is_ok());
     }
