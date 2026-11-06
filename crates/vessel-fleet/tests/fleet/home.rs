@@ -109,6 +109,7 @@ fn on_the_home_linked_homes_and_the_source_itself_are_left_alone() {
         root: home.dir.path().join("claude-alt"),
         ..claude.clone()
     };
+    fs::create_dir(&alt.root).unwrap();
     let source_paths = home.sources.paths();
     let mut managed = vessel_fleet::Managed::default();
     let plan = vessel_fleet::plan(
@@ -120,13 +121,13 @@ fn on_the_home_linked_homes_and_the_source_itself_are_left_alone() {
     .unwrap();
     // Every place in the linked home and in the source is a skip...
     let sourced = plan
-        .skips
+        .skips()
         .iter()
         .filter(|skip| skip.reason == SkipReason::Source)
         .count();
-    assert_eq!(sourced, 2 * manifest.files.len(), "{:?}", plan.skips);
+    assert_eq!(sourced, 2 * manifest.files.len(), "{:?}", plan.skips());
     // ...and the unlinked home gets every file.
-    let applied = vessel_fleet::apply(&plan, &home.blobs, &mut managed, &source_paths);
+    let applied = vessel_fleet::apply(&plan, &home.blobs, &mut managed);
     assert_eq!(
         applied.written,
         manifest.files.len(),
@@ -184,14 +185,14 @@ fn a_member_never_follows_a_symlink_out_of_its_home() {
     )
     .unwrap();
     assert!(
-        plan.skips
+        plan.skips()
             .iter()
             .all(|skip| matches!(skip.reason, SkipReason::Symlink(_)))
     );
     assert_eq!(
-        plan.skips.len(),
+        plan.skips().len(),
         3,
         "the review skill's files: {:?}",
-        plan.skips
+        plan.skips()
     );
 }

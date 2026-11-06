@@ -31,17 +31,6 @@ pub(crate) fn hash_reader(mut reader: impl Read) -> io::Result<(BlobHash, u64)> 
     }
 }
 
-/// The SHA-256 and size of the file at `path` (following a final symlink,
-/// as reading does).
-pub(crate) fn hash_file(path: &Path) -> io::Result<(BlobHash, u64)> {
-    hash_reader(File::open(path)?)
-}
-
-/// The SHA-256 of `bytes`.
-pub(crate) fn hash_bytes(bytes: &[u8]) -> BlobHash {
-    BlobHash::from_bytes(Sha256::digest(bytes).into())
-}
-
 /// `.<name>.<random>.tmp` beside `path`.
 pub(crate) fn temporary_beside(path: &Path) -> io::Result<PathBuf> {
     let mut suffix = [0_u8; 8];
@@ -128,20 +117,6 @@ pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     {
         fs::create_dir_all(dir)
-    }
-}
-
-/// Create the one directory `dir` (its parent must exist), owner-only
-/// (0700 on Unix), failing if anything is there already.
-pub(crate) fn private_dir_one(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        fs::DirBuilder::new().mode(0o700).create(dir)
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir(dir)
     }
 }
 

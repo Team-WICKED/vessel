@@ -50,6 +50,16 @@
 //! - Symlinks below a target's root are never followed: a link into a
 //!   source means the target already has it (skipped), any other link is
 //!   someone's arrangement (skipped, reported).
+//! - Acting where it checked: each target root is made canonical once,
+//!   records are kept by canonical root ([`Managed`]), and every place is
+//!   reached through directories held open from that root without
+//!   following a symlink (`dir`, `openat` on Unix). Each step looks again
+//!   right before it acts; a removal deletes only a regular file that
+//!   still has the recorded content, is not adopted, and is not the same
+//!   file as a placed one. A [`Plan`] is made only by [`plan()`] and
+//!   carries the protected sources, so [`apply()`] cannot be handed steps
+//!   or sources of anyone's choosing. (The independent review of F1 found
+//!   each of these failing; `tests/fleet/safety.rs` keeps them.)
 //! - Alternatives: symlinks to Vessel's copy (cannot tell an edit from an
 //!   update, and an edit through the link changes every profile); `git`
 //!   as the transport (a remote on every machine, and still no answer for
@@ -62,20 +72,24 @@
 mod apply;
 mod blobs;
 mod bundle;
+mod dir;
 mod files;
 mod managed;
+mod place;
 mod plan;
+mod rel;
 mod resolve;
 mod skill;
 mod target;
 
-pub use apply::{Applied, Conflict, ConflictKind, apply};
+pub use apply::{Applied, ApplyError, Conflict, ConflictKind, apply};
 pub use blobs::{BlobStore, BlobWriter, InvalidBlob};
 pub use bundle::{
     BundleError, Bundled, InvalidSkipGlob, MAX_FILE, SkipGlob, SourceProblem, Sources, bundle,
 };
-pub use managed::{Managed, ManagedError};
-pub use plan::{Plan, Skip, SkipReason, Step, plan};
+pub use managed::{Content, Managed, ManagedError, Record};
+pub use place::MissingSource;
+pub use plan::{Place, Plan, PlanError, Skip, SkipReason, Step, plan};
 pub use resolve::resolve;
 pub use skill::{SkillNameError, skill_name};
 pub use target::Target;

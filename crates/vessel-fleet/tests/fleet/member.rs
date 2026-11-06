@@ -7,7 +7,7 @@ use std::fs;
 
 use vessel_fleet::{ConflictKind, INCOMING_SUFFIX, Managed, Step};
 
-use crate::support::{Home, Member, read, skill_md, write};
+use crate::support::{Home, Member, canonical, read, skill_md, write};
 
 #[test]
 fn a_member_gets_copies_and_a_second_run_changes_nothing() {
@@ -45,8 +45,8 @@ fn a_member_gets_copies_and_a_second_run_changes_nothing() {
     );
 
     let again = vessel_fleet::plan(&bundled.manifest, &[claude], &member.managed, &[]).unwrap();
-    assert!(again.steps.is_empty(), "{:?}", again.steps);
-    assert_eq!(again.unchanged, 3);
+    assert!(again.steps().is_empty(), "{:?}", again.steps());
+    assert_eq!(again.unchanged(), 3);
     assert_eq!(
         member.fetch(&bundled.manifest, &home.blobs),
         0,
@@ -137,7 +137,7 @@ fn files_vessel_did_not_write_are_never_touched() {
     assert!(
         member
             .managed
-            .file(&claude.root.join("CLAUDE.md"))
+            .file(&canonical(&claude.root.join("CLAUDE.md")))
             .is_none()
     );
 }
@@ -151,7 +151,7 @@ fn a_deleted_file_stays_deleted_until_restored() {
     let claude = member.claude();
     let _applied = member.apply(&first, std::slice::from_ref(&claude));
     let deleted = claude.root.join("skills/review/notes/how.md");
-    let recorded = member.managed.file(&deleted).copied();
+    let recorded = member.managed.file(&canonical(&deleted)).copied();
     assert!(recorded.is_some());
     fs::remove_file(&deleted).unwrap();
 
@@ -181,7 +181,7 @@ fn a_deleted_file_stays_deleted_until_restored() {
             "nothing beside it"
         );
         assert_eq!(
-            member.managed.file(&deleted).copied(),
+            member.managed.file(&canonical(&deleted)).copied(),
             recorded,
             "the record is kept"
         );
@@ -189,9 +189,12 @@ fn a_deleted_file_stays_deleted_until_restored() {
 
     // Restoring only settles a recorded file that is missing.
     let present = claude.root.join("CLAUDE.md");
-    assert!(!member.managed.restore(&present), "a file that is there");
-    assert!(!member.managed.restore(&claude.root.join("unrecorded.md")));
-    assert!(member.managed.restore(&deleted));
+    assert_eq!(member.managed.restore(&present), 0, "a file that is there");
+    assert_eq!(
+        member.managed.restore(&claude.root.join("unrecorded.md")),
+        0
+    );
+    assert_eq!(member.managed.restore(&deleted), 1);
     let restored = member.apply(&second, std::slice::from_ref(&claude));
     assert!(restored.conflicts.is_empty(), "{:?}", restored.conflicts);
     assert_eq!(restored.written, 1);
@@ -219,9 +222,9 @@ fn bundle_paths_a_member_does_not_know_are_ignored() {
         &[],
     )
     .unwrap();
-    assert_eq!(plan.steps.len(), known, "{:?}", plan.steps);
-    assert!(plan.skips.is_empty(), "{:?}", plan.skips);
-    let applied = vessel_fleet::apply(&plan, &member.blobs, &mut member.managed, &[]);
+    assert_eq!(plan.steps().len(), known, "{:?}", plan.steps());
+    assert!(plan.skips().is_empty(), "{:?}", plan.skips());
+    let applied = vessel_fleet::apply(&plan, &member.blobs, &mut member.managed);
     assert!(applied.failures.is_empty() && applied.conflicts.is_empty());
     assert!(!claude.root.join("future").exists());
     assert!(!claude.root.join("settings.json").exists());
@@ -250,12 +253,12 @@ fn files_that_leave_the_bundle_go_unless_edited() {
     let plan =
         vessel_fleet::plan(&second, std::slice::from_ref(&claude), &member.managed, &[]).unwrap();
     let removes = plan
-        .steps
+        .steps()
         .iter()
         .filter(|step| matches!(step, Step::Remove { .. }))
         .count();
-    assert_eq!(removes, 2, "{:?}", plan.steps);
-    let applied = vessel_fleet::apply(&plan, &member.blobs, &mut member.managed, &[]);
+    assert_eq!(removes, 2, "{:?}", plan.steps());
+    let applied = vessel_fleet::apply(&plan, &member.blobs, &mut member.managed);
     assert_eq!(applied.removed, 2);
     assert!(
         !claude.root.join("skills/extra").exists(),
@@ -267,7 +270,7 @@ fn files_that_leave_the_bundle_go_unless_edited() {
     );
     assert_eq!(read(&edited), "my notes\n", "an edited file stays");
     assert!(
-        member.managed.file(&edited).is_none(),
+        member.managed.file(&canonical(&edited)).is_none(),
         "and is no longer Vessel's"
     );
 }
