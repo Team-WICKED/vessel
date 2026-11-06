@@ -34,7 +34,8 @@ vessel-pty      -> proc
 vessel-agent    -> proto, proc
 vessel-session  -> proto, harness, pty, agent
 vessel-store    -> proto
-vessel-node     -> proto, rpc, harness, session, store, secure, relay
+vessel-node     -> proto, rpc, harness, session, store, secure, relay,
+                   fleet, client               (milestone 4)
 vessel-client   -> proto, rpc, secure, relay
 vessel-remote   -> proto, rpc, client      (milestone 2)
 vessel-secure   -> proto                   (milestone 3)
@@ -84,6 +85,14 @@ the `rmcp` SDK (plan decision 8). `vessel-cli -> harness` is for `vessel
 init` (F5): which harnesses are installed, their install and login
 commands, and other accounts' homes, all of which only `vessel-harness`
 knows.
+
+Milestone 4 (2026-11-06, Track F2) adds `vessel-node -> fleet` (the
+home bundles, members materialise: `vessel-fleet`'s mechanisms under the
+node's policy of when) and `vessel-node -> client`: a member calls its
+fleet's home (`fleet.manifest`, `fleet.blob`, `fleet.watch`,
+`fleet.report`) and joins it by pairing, as any device does, through
+`vessel-client`'s `SecureConnector` and `pair_over`. `vessel-client` does
+not depend on the node, so there is no cycle.
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.

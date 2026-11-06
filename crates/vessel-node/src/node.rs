@@ -22,6 +22,7 @@ use crate::agents::Agents;
 use crate::config::Config;
 use crate::devices::{Devices, Routes};
 use crate::error::NodeError;
+use crate::fleet::{self, FleetFiles};
 use crate::guard::Guarded;
 use crate::identity;
 use crate::ipc::{self, AgentGateway, Endpoint, LocalGateway, LocalListener};
@@ -318,6 +319,15 @@ fn core(
             direct: config.public.clone(),
         },
     ));
+    // Fleet sync's tasks are session-adjacent work: shutdown waits for an
+    // apply in progress before the data directory is released.
+    let fleet = fleet::start(
+        FleetFiles::new(&config.data_dir),
+        &config.fleet,
+        &setup.profiles,
+        &tasks,
+        &stop,
+    );
     let service = Arc::new(Guarded(NodeService::new(Parts {
         lifecycle: lifecycle.clone(),
         lookup: config.harness_lookup.clone(),
@@ -327,6 +337,7 @@ fn core(
         profiles: setup.profiles,
         launcher: setup.launcher,
         agents: Arc::clone(&agents),
+        fleet,
     })));
     Core {
         runtime,

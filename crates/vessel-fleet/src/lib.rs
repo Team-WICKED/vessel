@@ -94,6 +94,19 @@ pub use resolve::resolve;
 pub use skill::{SkillName, SkillNameError, skill_name};
 pub use target::Target;
 
+/// Write `contents` to `path` atomically and owner-only (0600 on Unix),
+/// creating its directory owner-only (0700) if missing: how Vessel keeps
+/// its own state files (`managed.json`, and the node's fleet files).
+///
+/// # Errors
+/// The directory or the file cannot be written.
+pub fn write_private(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        files::private_dir(dir)?;
+    }
+    files::replace(path, files::Mode::Private, contents)
+}
+
 /// The instructions file's place in a bundle.
 pub const INSTRUCTIONS: &str = "instructions.md";
 
