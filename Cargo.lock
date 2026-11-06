@@ -2763,6 +2763,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vessel-proto",
+ "zeroize",
 ]
 
 [[package]]
