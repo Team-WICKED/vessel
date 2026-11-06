@@ -296,3 +296,34 @@ It is idempotent: running it again fills gaps and changes nothing else.
   `vessel:` log lines right after `starting` (and after a move), and in
   the node's log; the session starts without the servers that need them.
   The agent's own `vessel` server (ADR 0013) joins the same list.
+
+## As built (Track F, materialiser, 2026-11-06)
+
+- **Deleted stays deleted.** A file Vessel wrote that is missing on the
+  node is not written again, even when the bundle changes it: deleting is
+  a local edit. It is listed as a conflict of its own kind ("deleted
+  locally"), `managed.json` keeps its record, and nothing is written beside
+  it. `vessel fleet restore <path>` settles it: the record is dropped and
+  the next apply writes the file again. Settling by removing the record by
+  hand was not chosen, because it asks people to edit `managed.json`.
+- **Unknown bundle paths are ignored.** Only `instructions.md` and
+  `skills/<name>/...` are placed (PROTOCOL.md, version 5); a member skips
+  any other top-level path without a failure, so a newer home does not
+  stop an older member.
+- **Owner-only.** Members write every fleet file 0600 (0700 when
+  executable) and every directory they create 0700, whatever the
+  source's mode: a manifest carries only the executable bit, so a member
+  can never make a file readable by more people than the home did. Dot
+  entries inside a skill (`.env`, `.git/`) are not bundled.
+- **Safety of the materialiser** (after an independent review): records
+  are kept by canonical target root, so a profile linked to another
+  home is written once and never loses files to the other's name; a
+  file is removed only if it is still a regular file with the recorded
+  content, was not adopted (a file that was the user's before Vessel
+  came is released, never removed), and is not the same file as one the
+  bundle places; places are reached through open directories without
+  following a symlink, and every step looks again right before acting;
+  a harness home that does not exist is skipped, not created.
+- **`OpenCode`** also reads `~/.claude/CLAUDE.md` and `~/.claude/skills`,
+  so on a node whose default Claude Code home is a target it would see the
+  fleet's files twice; the node leaves `OpenCode` out there.

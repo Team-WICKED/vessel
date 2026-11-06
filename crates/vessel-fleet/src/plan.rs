@@ -5,13 +5,18 @@
 //!   which files to write, which to leave as somebody's edit, and which to
 //!   leave alone entirely, before anything is written; `vessel fleet
 //!   status` can show a plan without applying it.
-//! - Rules, for each bundle file at its place in each target:
-//!   - nothing there: write it (a deleted file comes back: the home is
-//!     where the fleet's files are changed, and its `skip` globs are where
-//!     one is left out);
-//!   - the incoming content already there: nothing to write; it is
-//!     recorded as Vessel's (adopted), so later updates reach it;
-//!   - Vessel's content (the recorded hash): replace it;
+//! - Rules, for each bundle file at its place in each target (content is
+//!   the hash and the executable bit together):
+//!   - nothing there and nothing recorded: write it;
+//!   - nothing there, but Vessel wrote it before: deleted locally, which
+//!     is a local edit like any other (often a deliberate opt-out). It
+//!     stays deleted and is a conflict of its own kind; the record is
+//!     kept, so status still shows it, and nothing is written beside it.
+//!     `Managed::restore` settles it: the next apply writes it again;
+//!   - the incoming content already there: nothing to write; recorded as
+//!     Vessel's (adopted if Vessel had no record), so later updates reach
+//!     it;
+//!   - Vessel's content (the record): replace it, the mode included;
 //!   - other content: a local edit, or a file Vessel never wrote. It is
 //!     kept, the incoming version goes beside it, and it is a conflict;
 //!   - the place is in a source, or reached through a symlink into one:
@@ -19,54 +24,107 @@
 //!   - a symlink below the root to anywhere else, or a directory where a
 //!     file goes: skipped and reported, never followed or replaced.
 //! - A file Vessel wrote that left the bundle is removed if it is
-//!   unchanged, and forgotten (left as it is) if it was edited.
+//!   unchanged, and forgotten (left as it is) if it was edited or adopted.
+//!   It is never removed when it is the same file as one the bundle places
+//!   (by device and inode; by name without case where that is unknown):
+//!   an alias, a hard link, or a name that changed only in case on a
+//!   filesystem that ignores case.
 //! - Targets are told apart by their canonical root, so two profiles
-//!   sharing a home are written once.
+//!   sharing a home (`~/.claude-alt` linked to `~/.claude`) are written
+//!   once, and records are kept by canonical root. A root that does not
+//!   exist is not created (the harness is not set up there).
+//! - A place that cannot be read is skipped with the error, and the rest
+//!   of its target and every other target carry on: one unreadable
+//!   profile must not stop the others. Only a source that cannot be found
+//!   fails the plan, since what to protect would be unknown.
+//! - Bundle paths a target has no place for (another harness's files, top
+//!   levels reserved for later versions) are ignored, not reported.
+//! - A [`Plan`] can only be made by [`plan`], and it carries what was
+//!   protected and which files were placed, so [`apply`](crate::apply())
+//!   checks every step against them again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use vessel_proto::{BlobHash, BundleFile, BundlePath, Manifest};
+use vessel_proto::{BundleFile, BundlePath, Manifest};
 
-use crate::managed::Managed;
-use crate::target::{Found, Place, Target, inspect};
+use crate::dir::Identity;
+use crate::managed::{Content, Managed, Record};
+use crate::place::{Found, MissingSource, Protected, inspect};
+use crate::rel::Rel;
+use crate::target::{Place as Placement, Target};
 
-/// What applying a manifest would do.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// A place in a target: its canonical root and the path below it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Place {
+    pub(crate) root: PathBuf,
+    pub(crate) rel: Rel,
+}
+
+impl Place {
+    /// The place's path.
+    #[must_use]
+    pub fn path(&self) -> PathBuf {
+        self.rel.under(&self.root)
+    }
+
+    /// The target's canonical root.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+/// What applying a manifest would do. Made only by [`plan`].
+#[derive(Debug, Clone)]
 pub struct Plan {
-    /// Changes, in order.
-    pub steps: Vec<Step>,
-    /// Places left alone, and why.
-    pub skips: Vec<Skip>,
-    /// Places that already hold what the bundle has and are recorded.
-    pub unchanged: usize,
+    steps: Vec<Step>,
+    skips: Vec<Skip>,
+    unchanged: usize,
+    pub(crate) protected: Protected,
+    /// Each planned root, with its skills directory (never removed).
+    pub(crate) roots: BTreeMap<PathBuf, Option<Rel>>,
+    /// The files at placed places, by identity.
+    placed: BTreeSet<Identity>,
+    /// The placed places, by root and folded name ([`Rel::folded`]).
+    placed_names: BTreeSet<(PathBuf, String)>,
 }
 
 /// One change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     /// Write the bundle's file: new, or replacing what Vessel wrote
-    /// (`replaces`, checked again right before writing).
+    /// (`replaces`).
     Write {
         /// Its bundle path.
         bundle: BundlePath,
         /// Where.
-        path: PathBuf,
+        place: Place,
         /// What.
         file: BundleFile,
-        /// The target's root; directories are created below it only.
-        root: PathBuf,
         /// The content it replaces, if any.
-        replaces: Option<BlobHash>,
+        replaces: Option<Content>,
     },
     /// The file already holds the bundle's content: record it as Vessel's.
     Adopt {
+        /// Its bundle path.
+        bundle: BundlePath,
         /// Where.
-        path: PathBuf,
-        /// Its content's hash.
-        hash: BlobHash,
+        place: Place,
+        /// What it holds.
+        file: BundleFile,
+    },
+    /// A file Vessel wrote that was deleted here: it stays deleted, its
+    /// record is kept, and it is a conflict until restored.
+    Deleted {
+        /// Its bundle path.
+        bundle: BundlePath,
+        /// Where it was.
+        place: Place,
+        /// The bundle's version.
+        file: BundleFile,
     },
     /// A local edit, or a file Vessel did not write: kept; the incoming
     /// version goes beside it, and it is a conflict.
@@ -74,44 +132,40 @@ pub enum Step {
         /// Its bundle path.
         bundle: BundlePath,
         /// Where.
-        path: PathBuf,
+        place: Place,
         /// The incoming version.
         file: BundleFile,
-        /// The target's root.
-        root: PathBuf,
         /// The content there now.
-        local: BlobHash,
+        local: Content,
     },
     /// Vessel's file, unchanged, gone from the bundle (or an incoming
-    /// version no longer needed): removed, and empty directories above it
-    /// up to `stop` with it.
+    /// version no longer needed): removed, with the directories it leaves
+    /// empty below the skills directory.
     Remove {
         /// Where.
-        path: PathBuf,
+        place: Place,
         /// The content it must still have.
-        hash: BlobHash,
-        /// A directory never removed (the skills directory).
-        stop: PathBuf,
-        /// Whether it is an incoming version (recorded apart from files).
+        recorded: Content,
+        /// Whether it is an incoming version.
         incoming: bool,
     },
-    /// A file Vessel wrote that was edited and left the bundle (or an
-    /// incoming version that was edited or removed): forgotten, left as it
-    /// is.
+    /// A file Vessel recorded that is no longer its to remove (edited,
+    /// adopted, gone, or the same file as a placed one): forgotten, left
+    /// as it is.
     Release {
         /// Where.
-        path: PathBuf,
+        place: Place,
         /// Whether it is an incoming version.
         incoming: bool,
     },
 }
 
-/// A place left alone.
+/// A place (or a whole target) left alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skip {
-    /// The bundle path.
-    pub bundle: BundlePath,
-    /// The place.
+    /// The bundle path, or `None` for a whole target.
+    pub bundle: Option<BundlePath>,
+    /// The place, or the target's root.
     pub path: PathBuf,
     /// Why.
     pub reason: SkipReason,
@@ -129,6 +183,37 @@ pub enum SkipReason {
     /// The target's names are not plain relative paths, or the path does
     /// not belong in a target.
     Unplaced,
+    /// The path is the same file as another bundle path's on macOS or
+    /// Windows (they differ only in case or Unicode normalisation); the
+    /// first is placed.
+    Collision,
+    /// The target's root does not exist: the harness is not set up there,
+    /// and Vessel does not create its home.
+    NoHome,
+    /// It could not be read.
+    Unreadable {
+        /// The error's kind.
+        kind: io::ErrorKind,
+        /// The error.
+        message: String,
+    },
+}
+
+impl SkipReason {
+    fn unreadable(error: &io::Error) -> Self {
+        Self::Unreadable {
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+}
+
+/// No plan could be made.
+#[derive(Debug, thiserror::Error)]
+pub enum PlanError {
+    /// A source cannot be found, so what to protect is unknown.
+    #[error("a fleet source cannot be found: {0}")]
+    Source(#[from] MissingSource),
 }
 
 /// What applying `manifest` to `targets` would do, given what Vessel
@@ -137,54 +222,147 @@ pub enum SkipReason {
 /// home; nothing on a member).
 ///
 /// # Errors
-/// A place cannot be inspected (a permission error, a failed read).
+/// A source cannot be found ([`PlanError`]). Problems with targets are
+/// [`Plan::skips`].
 pub fn plan(
     manifest: &Manifest,
     targets: &[Target],
     managed: &Managed,
     sources: &[PathBuf],
-) -> io::Result<Plan> {
-    let sources: Vec<PathBuf> = sources
-        .iter()
-        .filter_map(|source| fs::canonicalize(source).ok())
-        .collect();
-    let mut plan = Plan::default();
-    let mut seen_roots = BTreeSet::new();
-    let mut placed = BTreeMap::new();
+) -> Result<Plan, PlanError> {
+    let mut plan = Plan {
+        steps: Vec::new(),
+        skips: Vec::new(),
+        unchanged: 0,
+        protected: Protected::new(sources)?,
+        roots: BTreeMap::new(),
+        placed: BTreeSet::new(),
+        placed_names: BTreeSet::new(),
+    };
+    let mut placed_rels = BTreeSet::new();
     for target in targets {
-        let root = fs::canonicalize(&target.root).unwrap_or_else(|_missing| target.root.clone());
-        if !seen_roots.insert(root) {
+        let root = match fs::canonicalize(target.root()) {
+            Ok(root) => root,
+            Err(error) => {
+                let reason = if error.kind() == io::ErrorKind::NotFound {
+                    SkipReason::NoHome
+                } else {
+                    SkipReason::unreadable(&error)
+                };
+                plan.skip_target(target.root(), reason);
+                continue;
+            }
+        };
+        if plan.roots.contains_key(&root) {
             continue;
         }
+        if let Err(error) = crate::dir::Dir::open_root(&root) {
+            plan.skip_target(&root, SkipReason::unreadable(&error));
+            continue;
+        }
+        let _new = plan.roots.insert(root.clone(), target.skills_rel());
         for (bundle, file) in &manifest.files {
-            let path = match target.placement(bundle) {
-                Place::At(path) => path,
-                Place::Unused => continue,
-                Place::Invalid => {
+            let rel = match target.placement(bundle) {
+                Placement::At(rel) => rel,
+                Placement::Unused => continue,
+                Placement::Invalid => {
                     plan.skips.push(Skip {
-                        bundle: bundle.clone(),
-                        path: target.root.clone(),
+                        bundle: Some(bundle.clone()),
+                        path: target.root().to_path_buf(),
                         reason: SkipReason::Unplaced,
                     });
                     continue;
                 }
             };
-            let _placed = placed.insert(path.clone(), target);
-            plan.add(target, bundle, &path, file, managed, &sources)?;
+            let place = Place {
+                root: root.clone(),
+                rel,
+            };
+            if !plan.placed_names.insert((root.clone(), place.rel.folded())) {
+                // One file with a path already placed on macOS or Windows
+                // (a manifest the home should not have made).
+                plan.skips.push(Skip {
+                    bundle: Some(bundle.clone()),
+                    path: place.path(),
+                    reason: SkipReason::Collision,
+                });
+                continue;
+            }
+            let _new = placed_rels.insert(place.clone());
+            plan.add(bundle, place, file, managed);
         }
     }
-    plan.leftovers(targets, managed, &placed, &sources)?;
+    plan.leftovers(managed, &placed_rels);
     Ok(plan)
 }
 
+/// What to do at a placed place, given what is there now and what Vessel
+/// recorded; decided once when planning and again right before acting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Decision {
+    /// It holds the bundle's content and is recorded as such.
+    Unchanged,
+    /// Write the bundle's file (replacing this content of Vessel's).
+    Write(Option<Content>),
+    /// It holds the bundle's content; record it.
+    Adopt,
+    /// Vessel wrote it and it was deleted.
+    Deleted,
+    /// Somebody's content: keep it.
+    Keep(Content),
+    /// Leave it alone.
+    Skip(SkipReason),
+}
+
+pub(crate) fn decide(found: Found, wanted: &Content, record: Option<&Record>) -> Decision {
+    match found {
+        Found::Source => Decision::Skip(SkipReason::Source),
+        Found::Symlink(link) => Decision::Skip(SkipReason::Symlink(link)),
+        Found::Blocked => Decision::Skip(SkipReason::Blocked),
+        Found::Missing if record.is_some() => Decision::Deleted,
+        Found::Missing => Decision::Write(None),
+        Found::File { content, .. } if content.same(wanted) => {
+            if record.is_some_and(|record| record.content().same(&content)) {
+                Decision::Unchanged
+            } else {
+                Decision::Adopt
+            }
+        }
+        Found::File { content, .. }
+            if record.is_some_and(|record| record.content().same(&content)) =>
+        {
+            Decision::Write(Some(content))
+        }
+        Found::File { content, .. } => Decision::Keep(content),
+    }
+}
+
 impl Plan {
+    /// The changes, in order.
+    #[must_use]
+    pub fn steps(&self) -> &[Step] {
+        &self.steps
+    }
+
+    /// Places (and targets) left alone, and why.
+    #[must_use]
+    pub fn skips(&self) -> &[Skip] {
+        &self.skips
+    }
+
+    /// Places that already hold what the bundle has and are recorded.
+    #[must_use]
+    pub const fn unchanged(&self) -> usize {
+        self.unchanged
+    }
+
     /// The bundle paths that are in conflict somewhere.
     #[must_use]
     pub fn conflicts(&self) -> BTreeSet<&BundlePath> {
         self.steps
             .iter()
             .filter_map(|step| match step {
-                Step::Keep { bundle, .. } => Some(bundle),
+                Step::Keep { bundle, .. } | Step::Deleted { bundle, .. } => Some(bundle),
                 Step::Write { .. }
                 | Step::Adopt { .. }
                 | Step::Remove { .. }
@@ -193,136 +371,154 @@ impl Plan {
             .collect()
     }
 
-    fn add(
-        &mut self,
-        target: &Target,
-        bundle: &BundlePath,
-        path: &Path,
-        file: &BundleFile,
-        managed: &Managed,
-        sources: &[PathBuf],
-    ) -> io::Result<()> {
-        let skip = |reason| Skip {
-            bundle: bundle.clone(),
-            path: path.to_path_buf(),
-            reason,
-        };
-        match inspect(&target.root, path, sources)? {
-            Found::Source => self.skips.push(skip(SkipReason::Source)),
-            Found::Symlink(link) => self.skips.push(skip(SkipReason::Symlink(link))),
-            Found::Blocked => self.skips.push(skip(SkipReason::Blocked)),
-            Found::Missing => self.steps.push(Step::Write {
-                bundle: bundle.clone(),
-                path: path.to_path_buf(),
-                file: file.clone(),
-                root: target.root.clone(),
-                replaces: None,
-            }),
-            Found::File { hash } if hash == file.hash => {
-                if managed.file(path) == Some(&hash) {
-                    self.unchanged = self.unchanged.saturating_add(1);
-                } else {
-                    self.steps.push(Step::Adopt {
-                        path: path.to_path_buf(),
-                        hash,
-                    });
-                }
-            }
-            Found::File { hash } if managed.file(path) == Some(&hash) => {
-                self.steps.push(Step::Write {
-                    bundle: bundle.clone(),
-                    path: path.to_path_buf(),
-                    file: file.clone(),
-                    root: target.root.clone(),
-                    replaces: Some(hash),
-                });
-            }
-            Found::File { hash } => self.steps.push(Step::Keep {
-                bundle: bundle.clone(),
-                path: path.to_path_buf(),
-                file: file.clone(),
-                root: target.root.clone(),
-                local: hash,
-            }),
+    /// Whether the file at `place` (with `identity`) is one the bundle
+    /// places under another name, and so must not be removed.
+    pub(crate) fn aliased(&self, place: &Place, identity: Option<Identity>) -> bool {
+        match identity {
+            Some(identity) => self.placed.contains(&identity),
+            None => self
+                .placed_names
+                .contains(&(place.root.clone(), place.rel.folded())),
         }
-        Ok(())
     }
 
-    /// Files Vessel wrote under these targets that the bundle no longer
-    /// places, and incoming versions no longer needed.
-    fn leftovers(
-        &mut self,
-        targets: &[Target],
-        managed: &Managed,
-        placed: &BTreeMap<PathBuf, &Target>,
-        sources: &[PathBuf],
-    ) -> io::Result<()> {
-        let kept: BTreeSet<PathBuf> = self
+    fn skip_target(&mut self, root: &Path, reason: SkipReason) {
+        self.skips.push(Skip {
+            bundle: None,
+            path: root.to_path_buf(),
+            reason,
+        });
+    }
+
+    fn add(&mut self, bundle: &BundlePath, place: Place, file: &BundleFile, managed: &Managed) {
+        let found = match inspect(&place.root, &place.rel, &self.protected) {
+            Ok(found) => found,
+            Err(error) => {
+                self.skips.push(Skip {
+                    bundle: Some(bundle.clone()),
+                    path: place.path(),
+                    reason: SkipReason::unreadable(&error),
+                });
+                return;
+            }
+        };
+        if let Found::File {
+            identity: Some(identity),
+            ..
+        } = &found
+        {
+            let _new = self.placed.insert(*identity);
+        }
+        let record = managed.file_at(&place.root, &place.rel);
+        let bundle = bundle.clone();
+        let file = file.clone();
+        match decide(found, &Content::of(&file), record) {
+            Decision::Unchanged => self.unchanged = self.unchanged.saturating_add(1),
+            Decision::Write(replaces) => self.steps.push(Step::Write {
+                bundle,
+                place,
+                file,
+                replaces,
+            }),
+            Decision::Adopt => self.steps.push(Step::Adopt {
+                bundle,
+                place,
+                file,
+            }),
+            Decision::Deleted => self.steps.push(Step::Deleted {
+                bundle,
+                place,
+                file,
+            }),
+            Decision::Keep(local) => self.steps.push(Step::Keep {
+                bundle,
+                place,
+                file,
+                local,
+            }),
+            Decision::Skip(reason) => self.skips.push(Skip {
+                bundle: Some(bundle),
+                path: place.path(),
+                reason,
+            }),
+        }
+    }
+
+    /// Files Vessel recorded under the planned roots that the bundle no
+    /// longer places, and incoming versions no longer needed.
+    fn leftovers(&mut self, managed: &Managed, placed: &BTreeSet<Place>) {
+        let kept: BTreeSet<Place> = self
             .steps
             .iter()
             .filter_map(|step| match step {
-                Step::Keep { path, .. } => Some(incoming_path(path)),
+                Step::Keep { place, .. } => incoming_place(place),
                 Step::Write { .. }
+                | Step::Deleted { .. }
                 | Step::Adopt { .. }
                 | Step::Remove { .. }
                 | Step::Release { .. } => None,
             })
             .collect();
-        for (path, recorded) in managed.files() {
-            if placed.contains_key(path) {
-                continue;
+        let roots: Vec<PathBuf> = self.roots.keys().cloned().collect();
+        for root in roots {
+            for (rel, record) in managed.files_under(&root) {
+                let place = Place {
+                    root: root.clone(),
+                    rel,
+                };
+                if !placed.contains(&place) {
+                    self.leftover(place, &record, false);
+                }
             }
-            let Some(target) = targets.iter().find(|target| path.starts_with(&target.root)) else {
-                // A target this node no longer writes: its files stay.
-                continue;
-            };
-            self.leftover(target, path, recorded, false, sources)?;
+            for (rel, record) in managed.incoming_under(&root) {
+                let place = Place {
+                    root: root.clone(),
+                    rel,
+                };
+                if !kept.contains(&place) {
+                    self.leftover(place, &record, true);
+                }
+            }
         }
-        for (path, recorded) in managed.incoming_paths() {
-            if kept.contains(path) {
-                continue;
-            }
-            if let Some(target) = targets.iter().find(|target| path.starts_with(&target.root)) {
-                self.leftover(target, path, recorded, true, sources)?;
-            }
-        }
-        Ok(())
     }
 
-    fn leftover(
-        &mut self,
-        target: &Target,
-        path: &Path,
-        recorded: &BlobHash,
-        incoming: bool,
-        sources: &[PathBuf],
-    ) -> io::Result<()> {
-        let found = inspect(&target.root, path, sources)?;
-        let step = match found {
-            Found::File { hash } if hash == *recorded => Step::Remove {
-                path: path.to_path_buf(),
-                hash,
-                stop: target.skills_dir(),
+    fn leftover(&mut self, place: Place, record: &Record, incoming: bool) {
+        let step = match self.leftover_decision(&place, record) {
+            Ok(true) => Step::Remove {
+                place,
+                recorded: record.content(),
                 incoming,
             },
-            // Edited, gone, or no longer a plain file: no longer ours.
-            Found::File { .. }
-            | Found::Missing
-            | Found::Source
-            | Found::Symlink(_)
-            | Found::Blocked => Step::Release {
-                path: path.to_path_buf(),
-                incoming,
-            },
+            Ok(false) => Step::Release { place, incoming },
+            Err(error) => {
+                // Left as it is, record and all, until it can be read.
+                self.skips.push(Skip {
+                    bundle: None,
+                    path: place.path(),
+                    reason: SkipReason::unreadable(&error),
+                });
+                return;
+            }
         };
         self.steps.push(step);
-        Ok(())
+    }
+
+    /// Whether the recorded file at `place` is Vessel's to remove now.
+    pub(crate) fn leftover_decision(&self, place: &Place, record: &Record) -> io::Result<bool> {
+        Ok(match inspect(&place.root, &place.rel, &self.protected)? {
+            Found::File { content, identity } => {
+                content.same(&record.content()) && !record.adopted && !self.aliased(place, identity)
+            }
+            // Gone, or no longer a plain file: no longer Vessel's.
+            Found::Missing | Found::Source | Found::Symlink(_) | Found::Blocked => false,
+        })
     }
 }
 
-/// Where the incoming version of the file at `path` goes.
-pub(crate) fn incoming_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(crate::INCOMING_SUFFIX);
-    path.with_file_name(name)
+/// Where the incoming version of the file at `place` goes.
+pub(crate) fn incoming_place(place: &Place) -> Option<Place> {
+    Some(Place {
+        root: place.root.clone(),
+        rel: place.rel.with_suffix(crate::INCOMING_SUFFIX)?,
+    })
 }

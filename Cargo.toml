@@ -170,6 +170,11 @@ tokio-util = "0.7"
 toml_edit = { version = "0.25", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# NFC for the key under which two file names collide on macOS and Windows
+# (vessel-fleet): names differing only in case or Unicode normalisation are
+# one file there. The unicode-rs crate (`idna` used it for years); its
+# tables and `tinyvec` are all it brings.
+unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 which = "7"
 # Wipes the node's secret key from memory when it is dropped: the key pair

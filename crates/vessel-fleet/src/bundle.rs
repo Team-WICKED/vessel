@@ -11,6 +11,15 @@
 //!   A directory without a usable name, or with a name another directory
 //!   already took (the first in name order wins), is left out and
 //!   reported, never guessed at.
+//! - Names are compared as macOS and Windows compare them (ignoring case
+//!   and Unicode normalisation, [`fold`]): two skills, or two entries of
+//!   one directory, that would be one file there are a problem, the first
+//!   in name order bundled. Names ending in `.vessel-incoming` are
+//!   refused: members write incoming versions under them.
+//! - Dot entries inside a skill (`.env`, `.git/`, editor swap files) are
+//!   left out and reported: they are rarely meant for every machine and
+//!   easily hold a secret. At the top of the skills directory they are a
+//!   harness's own and left out silently.
 //! - `skip` globs (`*` and `?`, within one name) leave out anything whose
 //!   name matches: a skill directory or its `SKILL.md` name (skills another
 //!   tool manages, such as `paseo*`), or any file or directory inside a
@@ -37,7 +46,8 @@ use vessel_proto::{BundleFile, BundlePath, Generation, Manifest, McpDefinitions}
 
 use crate::blobs::BlobStore;
 use crate::files;
-use crate::skill::{SkillNameError, skill_name};
+use crate::rel::fold;
+use crate::skill::{SkillName, SkillNameError, skill_name};
 
 /// The largest file a bundle carries; larger ones are left out.
 pub const MAX_FILE: u64 = 16 * 1024 * 1024;
@@ -71,7 +81,11 @@ impl Sources {
 /// A name pattern: `*` matches any run of characters, `?` any one, within
 /// one name (no `/`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SkipGlob(String);
+pub struct SkipGlob {
+    text: String,
+    /// The pattern's characters, split once so matching allocates nothing.
+    pattern: Box<[char]>,
+}
 
 /// Text that is not a [`SkipGlob`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -85,13 +99,16 @@ impl FromStr for SkipGlob {
         if text.is_empty() || text.contains(['/', '\\']) {
             return Err(InvalidSkipGlob(text.to_owned()));
         }
-        Ok(Self(text.to_owned()))
+        Ok(Self {
+            text: text.to_owned(),
+            pattern: text.chars().collect(),
+        })
     }
 }
 
 impl fmt::Display for SkipGlob {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.text)
     }
 }
 
@@ -99,32 +116,33 @@ impl SkipGlob {
     /// Whether `name` matches.
     #[must_use]
     pub fn matches(&self, name: &str) -> bool {
-        let pattern: Vec<char> = self.0.chars().collect();
-        let name: Vec<char> = name.chars().collect();
-        // Greedy match with one backtrack point for the last `*`.
+        let char_at = |at: usize| name.get(at..).and_then(|rest| rest.chars().next());
+        // Greedy match with one backtrack point for the last `*`; `n` is a
+        // byte offset into `name`, `p` an index into the pattern.
         let (mut p, mut n) = (0_usize, 0_usize);
         let mut star: Option<(usize, usize)> = None;
-        while n < name.len() {
-            match pattern.get(p) {
+        while let Some(c) = char_at(n) {
+            match self.pattern.get(p) {
                 Some('*') => {
                     star = Some((p, n));
                     p = p.saturating_add(1);
                 }
-                Some(&c) if c == '?' || Some(&c) == name.get(n) => {
+                Some(&wanted) if wanted == '?' || wanted == c => {
                     p = p.saturating_add(1);
-                    n = n.saturating_add(1);
+                    n = n.saturating_add(c.len_utf8());
                 }
                 Some(_) | None => match star {
                     Some((star_p, star_n)) => {
+                        let skipped = char_at(star_n).map_or(1, char::len_utf8);
                         p = star_p.saturating_add(1);
-                        n = star_n.saturating_add(1);
+                        n = star_n.saturating_add(skipped);
                         star = Some((star_p, n));
                     }
                     None => return false,
                 },
             }
         }
-        pattern
+        self.pattern
             .get(p..)
             .is_some_and(|rest| rest.iter().all(|&c| c == '*'))
     }
@@ -149,12 +167,30 @@ pub enum SourceProblem {
     #[error("{}: skill `{name}` is already {}", dir.display(), kept.display())]
     DuplicateSkill {
         /// The name.
-        name: String,
+        name: SkillName,
         /// The directory left out.
         dir: PathBuf,
         /// The directory bundled.
         kept: PathBuf,
     },
+    /// A dot file or directory inside a skill (`.env`, `.git`), left out
+    /// unless a `skip` glob names it (then it is left out silently).
+    #[error("{}: a dot entry inside a skill", .0.display())]
+    Hidden(PathBuf),
+    /// A name that is one file with another on macOS or Windows (they
+    /// differ only in letter case or Unicode normalisation); the first in
+    /// name order is bundled.
+    #[error("{}: the same file as {} on macOS and Windows", path.display(), kept.display())]
+    NameCollision {
+        /// The entry left out.
+        path: PathBuf,
+        /// The entry bundled.
+        kept: PathBuf,
+    },
+    /// A name ending in `.vessel-incoming`, which members use for incoming
+    /// versions.
+    #[error("{}: names ending in `.vessel-incoming` are Vessel's own", .0.display())]
+    ReservedName(PathBuf),
     /// A symlink leading out of the skills directory.
     #[error("{}: a symlink out of the skills directory", .0.display())]
     Symlink(PathBuf),
@@ -199,6 +235,9 @@ pub enum BundleError {
     /// A file could not be put in the blob store.
     #[error("the blob store: {0}")]
     Store(#[source] io::Error),
+    /// A bundle path this version builds is refused (a bug).
+    #[error("bundle path: {0}")]
+    Path(#[source] vessel_proto::InvalidBundlePath),
     /// The generation number ran out.
     #[error("the bundle generation ran out")]
     Generation,
@@ -224,8 +263,9 @@ pub fn bundle(
         visited: BTreeSet::new(),
     };
     if let Some(instructions) = &sources.instructions {
-        let path = bundle_path(crate::INSTRUCTIONS)
-            .ok_or_else(|| read_error(instructions, invalid("no bundle path")))?;
+        let path = crate::INSTRUCTIONS
+            .parse::<BundlePath>()
+            .map_err(BundleError::Path)?;
         builder.add_file(instructions, path, true)?;
     }
     if let Some(skills) = &sources.skills {
@@ -340,10 +380,10 @@ impl Builder<'_> {
                     continue;
                 }
             };
-            if self.skipped(&skill) {
+            if self.skipped(skill.as_str()) {
                 continue;
             }
-            if let Some(kept) = names.get(&skill) {
+            if let Some(kept) = names.get(&fold(skill.as_str())) {
                 self.problems.push(SourceProblem::DuplicateSkill {
                     name: skill,
                     dir: path,
@@ -351,7 +391,7 @@ impl Builder<'_> {
                 });
                 continue;
             }
-            let _new = names.insert(skill.clone(), path);
+            let _new = names.insert(fold(skill.as_str()), path);
             self.add_tree(&dir, &format!("{}/{skill}", crate::SKILLS))?;
         }
         Ok(())
@@ -365,10 +405,32 @@ impl Builder<'_> {
             // once is enough.
             return Ok(());
         }
+        // Names that are one file on macOS or Windows: the first (in name
+        // order) is bundled.
+        let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
         for (name, path) in sorted_entries(dir)? {
             if self.skipped(&name) {
                 continue;
             }
+            // `.env`, `.git/`, an editor's swap file: never meant for
+            // every machine, and too easily a secret.
+            if name.starts_with('.') {
+                self.problems.push(SourceProblem::Hidden(path));
+                continue;
+            }
+            let key = fold(&name);
+            if key.ends_with(crate::INCOMING_SUFFIX) {
+                self.problems.push(SourceProblem::ReservedName(path));
+                continue;
+            }
+            if let Some(kept) = seen.get(&key) {
+                self.problems.push(SourceProblem::NameCollision {
+                    path,
+                    kept: kept.clone(),
+                });
+                continue;
+            }
+            let _new = seen.insert(key, path.clone());
             let joined = format!("{prefix}/{name}");
             let Some(bundle) = bundle_path(&joined) else {
                 self.problems.push(SourceProblem::BadName(path));
@@ -430,10 +492,6 @@ fn read_error(path: &Path, source: io::Error) -> BundleError {
     }
 }
 
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message.to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +513,9 @@ mod tests {
         assert!(glob("*").matches(""));
         assert!(glob("*.md").matches("x.y.md"));
         assert!(!glob("*.md").matches("x.mdx"));
+        assert!(glob("노*").matches("노드-추가"));
+        assert!(glob("?드*").matches("노드"));
+        assert!(!glob("?드").matches("노드-"));
         assert!("a/b".parse::<SkipGlob>().is_err());
         assert!("".parse::<SkipGlob>().is_err());
     }

@@ -17,6 +17,13 @@ pub(crate) fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap()
 }
 
+/// `path` made canonical (temporary directories are behind a symlink on
+/// macOS): what `Managed` files records under.
+pub(crate) fn canonical(path: &Path) -> PathBuf {
+    let parent = fs::canonicalize(path.parent().unwrap()).unwrap();
+    parent.join(path.file_name().unwrap())
+}
+
 pub(crate) fn skill_md(name: &str) -> String {
     format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n")
 }
@@ -81,7 +88,10 @@ impl Member {
         }
     }
 
+    /// Its Claude home, which exists (Vessel does not create a harness's
+    /// home).
     pub(crate) fn claude(&self) -> Target {
+        fs::create_dir_all(self.dir.path().join("claude")).unwrap();
         Target {
             root: self.dir.path().join("claude"),
             instructions: Some(PathBuf::from("CLAUDE.md")),
@@ -124,6 +134,6 @@ impl Member {
         targets: &[Target],
     ) -> vessel_fleet::Applied {
         let plan = vessel_fleet::plan(manifest, targets, &self.managed, &[]).unwrap();
-        vessel_fleet::apply(&plan, &self.blobs, &mut self.managed, &[])
+        vessel_fleet::apply(&plan, &self.blobs, &mut self.managed)
     }
 }
