@@ -140,6 +140,26 @@ impl SessionHandle {
         }
     }
 
+    /// Wait until the session has ended, then return its final info.
+    ///
+    /// Resolves once the actor has published the final status and let go
+    /// of everything it publishes through (ring, durable channel, info), so
+    /// afterwards [`SessionRuntime::remove`](crate::SessionRuntime::remove)
+    /// accepts the session. Returns at once for a session that already
+    /// ended. Never resolves for a session nobody stops; `kill` first if it
+    /// should end.
+    pub async fn ended(&self) -> SessionInfo {
+        let mut info = self.0.info.clone();
+        // `changed` fails only once the actor dropped the sender.
+        while info.changed().await.is_ok() {}
+        info.borrow().clone()
+    }
+
+    /// Whether the session can publish no more records.
+    pub(crate) fn is_ended(&self) -> bool {
+        self.0.ring().is_closed()
+    }
+
     /// Stop the session: ask the process to exit, then kill its process
     /// group after a grace period. Returns immediately; the final status
     /// arrives as the session's last event.

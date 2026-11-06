@@ -1,6 +1,7 @@
 //! [`SessionRuntime`]: starts sessions and keeps their handles.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use chrono::Utc;
@@ -16,7 +17,7 @@ use vessel_proto::{
 use vessel_pty::{PtyProcess, WindowSize};
 
 use crate::config::RuntimeConfig;
-use crate::error::SessionError;
+use crate::error::{RemoveError, SessionError};
 use crate::handle::{Input, SessionHandle, Shared};
 use crate::lifecycle::Lifecycle;
 use crate::publish::Publisher;
@@ -35,10 +36,14 @@ use crate::terminal::TerminalActor;
 ///   one map).
 /// - Choice: a `std` `RwLock` over a map of handles. It is not a shared
 ///   mutable "god object": it only maps ids to handles, entries are added
-///   once and never changed, all session state stays inside each session's
+///   once and removed once, all session state stays inside each session's
 ///   actor, and the lock is never held across `.await`.
-/// - Cost: ended sessions stay in the map (and keep their ring) until the
-///   node restarts; `list` reports them, as the plan requires.
+/// - Lifetime: an ended session stays in the map (and keeps its ring, up to
+///   `ring_capacity` records) until its owner calls [`remove`](Self::remove);
+///   `list` reports it until then, as the plan requires. The node removes a
+///   session once its log is persisted, after which the store serves it.
+///   The runtime does not evict on its own: it cannot know when the store
+///   has everything.
 #[derive(Debug)]
 pub struct SessionRuntime {
     config: RuntimeConfig,
@@ -243,7 +248,7 @@ impl SessionRuntime {
         Created { handle, durable }
     }
 
-    /// A session of this run, live or ended.
+    /// A session of this run, live or ended (until [`remove`](Self::remove)d).
     #[must_use]
     pub fn get(&self, id: SessionId) -> Option<SessionHandle> {
         self.sessions
@@ -253,7 +258,8 @@ impl SessionRuntime {
             .cloned()
     }
 
-    /// Every session of this run, live and ended, newest first.
+    /// Every session of this run, live and ended (until removed), newest
+    /// first.
     #[must_use]
     pub fn list(&self) -> Vec<SessionInfo> {
         let mut infos: Vec<SessionInfo> = self
@@ -265,6 +271,49 @@ impl SessionRuntime {
             .collect();
         infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         infos
+    }
+
+    /// Forget an ended session: the runtime drops its handle, so the
+    /// session's ring, input path and remaining state are freed once the
+    /// last other holder lets go. Returns the session's final info.
+    ///
+    /// Legal only once the session has ended, meaning its actor published
+    /// the final status and closed the ring and the durable channel (no
+    /// record can follow). The node calls it when its persistence task has
+    /// drained the durable channel to its end, which implies that, or after
+    /// [`SessionHandle::ended`] otherwise; from then on the session exists
+    /// only in the store.
+    ///
+    /// Afterwards [`get`](Self::get) returns `None` and [`list`](Self::list)
+    /// leaves the session out. Nothing else changes for anyone already
+    /// holding it:
+    /// - other `SessionHandle` clones stay valid: `info` returns the final
+    ///   info, `send` fails with [`SessionError::Ended`], `kill` does
+    ///   nothing, and `follow` still serves the ring (with a receiver that
+    ///   is already closed);
+    /// - live followers already have every record up to the final status
+    ///   and then see `Closed`, exactly as without the removal.
+    ///
+    /// # Errors
+    /// [`RemoveError::NotFound`] for an unknown or already removed id, and
+    /// [`RemoveError::Running`] while the session can still publish records
+    /// (nothing is removed).
+    pub fn remove(&self, id: SessionId) -> Result<SessionInfo, RemoveError> {
+        // Checked and removed under one write lock, so a concurrent call
+        // cannot remove it in between. Lock order: the map, then the
+        // session's ring (nothing takes them the other way round).
+        let removed = match self
+            .sessions
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(id)
+        {
+            Entry::Occupied(entry) if entry.get().is_ended() => entry.remove(),
+            Entry::Occupied(_) => return Err(RemoveError::Running(id)),
+            Entry::Vacant(_) => return Err(RemoveError::NotFound(id)),
+        };
+        tracing::debug!(session = %id, "session removed from the runtime");
+        Ok(removed.info())
     }
 
     /// Kill everything and wait until every session published its final

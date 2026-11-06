@@ -60,6 +60,12 @@ impl Ring {
         self.live = None;
     }
 
+    /// Whether the session can publish no more records (its actor dropped
+    /// the publisher, after the final status).
+    pub(crate) const fn is_closed(&self) -> bool {
+        self.live.is_none()
+    }
+
     /// Cached records from `from`, plus a receiver for everything after.
     /// After the session ended the receiver is already closed.
     pub(crate) fn follow(&self, from: EventSeq) -> Result<Follow, FollowError> {

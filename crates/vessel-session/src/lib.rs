@@ -50,6 +50,11 @@
 //! - Structured status: `Starting` until the agent's `Ready` event, then
 //!   `Running`; a session that never became ready ends `Failed` with the
 //!   reason.
+//! - Lifetime: an ended session stays in the runtime, ring and all, until
+//!   its owner calls `SessionRuntime::remove` (the node does once the store
+//!   has its whole log). Eviction is the owner's call because only the
+//!   owner knows when the store is complete; a runtime-side timer would
+//!   either drop rings the store still lacks or keep them for nothing.
 
 mod config;
 mod error;
@@ -63,7 +68,7 @@ mod structured;
 mod terminal;
 
 pub use config::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, RuntimeConfig};
-pub use error::{InputKind, ModeKind, SessionError};
+pub use error::{InputKind, ModeKind, RemoveError, SessionError};
 pub use handle::SessionHandle;
 pub use ring::{Follow, FollowError};
 pub use runtime::{Created, SessionRuntime};
