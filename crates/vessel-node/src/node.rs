@@ -18,15 +18,16 @@ use vessel_secure::NodeKeypair;
 use vessel_session::{RuntimeConfig, SessionRuntime};
 use vessel_store::{DataDir, NodeLock, NodeOwner, NodeToken, Opened, Store};
 
+use crate::agents::Agents;
 use crate::config::Config;
 use crate::devices::{Devices, Routes};
 use crate::error::NodeError;
 use crate::guard::Guarded;
 use crate::identity;
-use crate::ipc::{self, Endpoint, LocalGateway, LocalListener};
+use crate::ipc::{self, AgentGateway, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
 use crate::profiles::NodeProfiles;
-use crate::profiles::launch::{Launcher, NoMcpServers};
+use crate::profiles::launch::{AgentTools, Launcher, NoMcpServers};
 use crate::secure::{MAX_UNADMITTED, SecureGateway};
 use crate::server::{self, Gateway};
 use crate::service::{NodeService, Parts};
@@ -88,11 +89,7 @@ impl Node {
             .await
             .map_err(NodeError::Task)??;
         let store = open_store(&config).await?;
-        let session_setup = SessionSetup {
-            profiles: Arc::new(profiles),
-            // Fleet sync's source replaces `NoMcpServers` (ADR 0012).
-            launcher: Launcher::new(mcp_dir, Arc::new(NoMcpServers)),
-        };
+        let session_setup = SessionSetup::new(&config, id, profiles, mcp_dir);
 
         let Core {
             runtime,
@@ -101,6 +98,7 @@ impl Node {
             tasks,
             forwarders,
             devices,
+            agents,
             service,
         } = core(&config, id, &store, keypair.public(), session_setup);
         let closing = CancellationToken::new();
@@ -153,6 +151,7 @@ impl Node {
             rpc,
             token,
             connections,
+            agents: AgentGateway::new(agents, &secure, config.rpc.clone()),
         };
         let task = tokio::spawn(serve(
             router,
@@ -251,6 +250,8 @@ struct Core {
     /// Subscription forwarders.
     forwarders: TaskTracker,
     devices: Arc<Devices>,
+    /// Sessions' agents (ADR 0013), admitted on the local socket.
+    agents: Arc<Agents>,
     /// The service every transport serves, behind the scope check.
     service: Arc<Guarded>,
 }
@@ -259,6 +260,21 @@ struct Core {
 struct SessionSetup {
     profiles: Arc<NodeProfiles>,
     launcher: Launcher,
+}
+
+impl SessionSetup {
+    fn new(config: &Config, id: NodeId, profiles: NodeProfiles, mcp_dir: PathBuf) -> Self {
+        let tools = config.vessel_mcp.clone().map(|mcp| AgentTools {
+            program: mcp.program,
+            args: mcp.args,
+            socket: Endpoint::of(&config.data_dir, id).path().to_owned(),
+        });
+        Self {
+            profiles: Arc::new(profiles),
+            // Fleet sync's source replaces `NoMcpServers` (ADR 0012).
+            launcher: Launcher::new(mcp_dir, Arc::new(NoMcpServers), tools),
+        }
+    }
 }
 
 /// Build the session runtime, the lifecycle, the devices and the service.
@@ -285,10 +301,12 @@ fn core(
         Arc::clone(&runtime),
     );
     let tasks = TaskTracker::new();
+    let agents = Arc::new(Agents::new(id));
     let sessions = Arc::new(Sessions::new(
         Arc::clone(&runtime),
         store.clone(),
         tasks.clone(),
+        Arc::clone(&agents),
     ));
     let forwarders = TaskTracker::new();
     let devices = Arc::new(Devices::new(
@@ -308,6 +326,7 @@ fn core(
         forwarders: forwarders.clone(),
         profiles: setup.profiles,
         launcher: setup.launcher,
+        agents: Arc::clone(&agents),
     })));
     Core {
         runtime,
@@ -316,6 +335,7 @@ fn core(
         tasks,
         forwarders,
         devices,
+        agents,
         service,
     }
 }

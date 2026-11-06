@@ -45,6 +45,10 @@ pub enum SessionError {
     /// No live session with this id in the runtime.
     #[error("no live session {0}")]
     NotFound(SessionId),
+    /// `LaunchOptions::id` names a session the runtime already has (the
+    /// caller's bug: ids are random).
+    #[error("session {0} exists already")]
+    DuplicateId(SessionId),
     /// The session is moving to another profile; input waits for that.
     #[error("the session is moving to another profile; send it again once it has moved")]
     Moving,
@@ -108,6 +112,7 @@ impl SessionError {
             Self::Move(error) => move_code(error),
             // The node resolves `spec.profile`; another profile is its bug.
             Self::Internal(_)
+            | Self::DuplicateId(_)
             | Self::Launch(
                 HarnessError::McpFile(_)
                 | HarnessError::ProfileNotRequested { .. }

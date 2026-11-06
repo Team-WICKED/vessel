@@ -7,17 +7,14 @@
 
 use std::path::Path;
 
-use vessel_client::{NodeClient, SessionStream};
+use vessel_client::NodeClient;
 use vessel_harness::fakes::claude_project;
 use vessel_proto::{
-    AgentEvent, ContentBlock, ErrorCode, EventRecord, EventSeq, HarnessKind, ProfileName,
-    SessionEvent, SessionId, SessionStatus,
+    ErrorCode, EventSeq, HarnessKind, ProfileName, SessionEvent, SessionId, SessionStatus,
 };
 use vessel_rpc::CallError;
 
-use crate::support::{
-    Fixture, agent_of, prompt, read_until, status_of, structured_spec, terminal_spec, within,
-};
+use crate::support::{Fixture, ask, read_until, status_of, structured_spec, terminal_spec, within};
 
 fn name(text: &str) -> ProfileName {
     text.parse().unwrap()
@@ -58,31 +55,6 @@ async fn refused(client: &NodeClient, session: SessionId, profile: &str, code: E
         panic!("a move to {profile} must be refused");
     };
     assert_eq!(error.code, code, "{profile}: {error:?}");
-}
-
-/// Prompt a structured session and return its reply text.
-async fn ask(
-    client: &NodeClient,
-    stream: &mut SessionStream,
-    seen: &mut Vec<EventRecord>,
-    session: SessionId,
-    text: &str,
-) -> String {
-    let start = seen.len();
-    client.send(session, prompt(text)).await.unwrap();
-    read_until(stream, seen, |record| {
-        matches!(agent_of(record), Some(AgentEvent::TurnEnded { .. }))
-    })
-    .await;
-    seen[start..]
-        .iter()
-        .filter_map(|record| match agent_of(record) {
-            Some(AgentEvent::MessageChunk {
-                content: ContentBlock::Text { text },
-            }) => Some(text.as_str()),
-            _ => None,
-        })
-        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

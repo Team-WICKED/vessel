@@ -11,7 +11,7 @@
 //!   (`devices::Connected`), which is simpler to get right than revoking
 //!   authority mid-connection.
 
-use vessel_proto::{DeviceId, ErrorCode, Method, Scope, WireError};
+use vessel_proto::{DeviceId, ErrorCode, Method, NodeId, Scope, SessionId, WireError};
 
 /// The caller behind one connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,24 +27,40 @@ pub(crate) enum Principal {
         /// What it may do.
         scopes: Vec<Scope>,
     },
+    /// A session's agent, through `vessel mcp` with its session's
+    /// credential (ADR 0013): its creator's scopes, at most `read` and
+    /// `operate`, and `operate` on a session only where the agent started
+    /// it or one of its ancestors (checked by the service).
+    Agent {
+        /// The node whose session it is.
+        node: NodeId,
+        /// Its session.
+        session: SessionId,
+        /// What it may do.
+        scopes: Vec<Scope>,
+    },
 }
 
 impl Principal {
     /// Whether this principal may call `method`; `forbidden` if not.
     pub(crate) fn permit(&self, method: Method) -> Result<(), WireError> {
         let needed = method.scope();
-        match self {
-            Self::Owner => Ok(()),
-            Self::Device { scopes, .. } if scopes.contains(&needed) => Ok(()),
-            Self::Device { .. } => Err(WireError::new(
-                ErrorCode::Forbidden,
-                format!(
-                    "this device may not call `{}` (it needs the `{}` scope)",
-                    method.as_str(),
-                    needed.as_str()
-                ),
-            )),
+        let (who, scopes) = match self {
+            Self::Owner => return Ok(()),
+            Self::Device { scopes, .. } => ("device", scopes),
+            Self::Agent { scopes, .. } => ("agent", scopes),
+        };
+        if scopes.contains(&needed) {
+            return Ok(());
         }
+        Err(WireError::new(
+            ErrorCode::Forbidden,
+            format!(
+                "this {who} may not call `{}` (it needs the `{}` scope)",
+                method.as_str(),
+                needed.as_str()
+            ),
+        ))
     }
 }
 
@@ -66,5 +82,18 @@ mod tests {
         for method in Method::ALL {
             assert!(Principal::Owner.permit(*method).is_ok());
         }
+    }
+
+    #[test]
+    fn agents_are_held_to_their_scopes() {
+        let agent = Principal::Agent {
+            node: NodeId::random(),
+            session: SessionId::random(),
+            scopes: vec![Scope::Read, Scope::Operate],
+        };
+        assert!(agent.permit(Method::CreateSession).is_ok());
+        let refused = agent.permit(Method::StopNode).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+        assert!(refused.message.contains("agent"), "{}", refused.message);
     }
 }

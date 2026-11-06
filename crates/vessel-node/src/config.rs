@@ -55,6 +55,32 @@ pub struct Config {
     /// 10 s, and a connection silent for 30 s is dropped, as a relay does
     /// for relayed ones. Clients give up after the same silence.
     pub keepalive: Keepalive,
+    /// The command that runs `vessel mcp`, attached to every session as its
+    /// `vessel` MCP server so the session's agent can reach this node with
+    /// a credential of its own (ADR 0013). `None` (the default): sessions
+    /// get neither. `vessel node start` sets its own executable; `vesseld`
+    /// a `vessel` beside it.
+    pub vessel_mcp: Option<VesselMcp>,
+}
+
+/// A command that runs `vessel mcp` ([`Config::vessel_mcp`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VesselMcp {
+    /// The program, an absolute path.
+    pub program: PathBuf,
+    /// Its arguments (`["mcp"]` for `vessel`).
+    pub args: Vec<String>,
+}
+
+impl VesselMcp {
+    /// `program mcp`.
+    #[must_use]
+    pub fn vessel(program: PathBuf) -> Self {
+        Self {
+            program,
+            args: vec!["mcp".to_owned()],
+        }
+    }
 }
 
 impl Config {
@@ -75,6 +101,7 @@ impl Config {
             relay_token_file: None,
             public: Vec::new(),
             keepalive: Keepalive::DEFAULT,
+            vessel_mcp: None,
         }
     }
 }

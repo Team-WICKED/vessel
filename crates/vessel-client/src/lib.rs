@@ -13,7 +13,9 @@
 //! (ADR 0007). [`follow_resuming`] builds on it: a [`ResumingStream`] that
 //! dials again when the connection drops and continues from its cursor,
 //! reporting the loss and the resume as non-fatal items; [`Pinned`] makes
-//! sure it is the same node each time. Where a node is comes as a
+//! sure it is the same node each time. [`NodeClient::connect_local`] reaches
+//! a node on this machine through its local socket, with the node's token
+//! or a session agent's credential (ADR 0013). Where a node is comes as a
 //! [`NodeAddress`]: a websocket URL or an [`SshTarget`], by name from the
 //! user's node [`book`].
 //!
@@ -39,6 +41,7 @@ mod client;
 mod connector;
 mod credential;
 mod error;
+mod local;
 pub mod pairing;
 mod pinned;
 mod resume;
@@ -58,6 +61,7 @@ pub use client::NodeClient;
 pub use connector::{Connector, WsConnector};
 pub use credential::{CredentialError, CredentialMismatch, CredentialSource, DeviceCredential};
 pub use error::{ConnectError, StreamError};
+pub use local::{LocalConnectError, LocalCredential};
 pub use pinned::{Pinned, PinnedError};
 pub use resume::{Backoff, ResumingStream, follow_resuming};
 pub use stream::SessionStream;

@@ -51,6 +51,7 @@
 //!   flush their last frames; close the store. Subscribers therefore see
 //!   the final status, and a restart finds every log complete.
 
+mod agents;
 pub mod attach;
 mod auth;
 pub mod cleanup;
@@ -73,7 +74,7 @@ mod shutdown;
 mod subscribe;
 mod transport;
 
-pub use config::Config;
+pub use config::{Config, VesselMcp};
 
 /// This binary's version and target triple, as `vesseld version` prints
 /// them: what the remote installer checks (ADR 0008).

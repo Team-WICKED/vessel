@@ -145,6 +145,35 @@ pub(crate) enum ServiceError {
     /// resolves per session.
     #[error("profile `{0}`'s harness home cannot be known (a relative path)")]
     HomeUnknown(ProfileName),
+    /// An agent's session is gone while it asks for a new one.
+    #[error("the calling agent's session {0} has ended")]
+    AgentGone(SessionId),
+    /// Agents may start agents only so deep (ADR 0013).
+    #[error("agents may start sessions at most {limit} levels deep")]
+    AgentDepth {
+        /// The limit.
+        limit: u8,
+    },
+    /// An agent owns as many live sessions as it may (ADR 0013).
+    #[error("an agent may own at most {limit} live sessions; end one first")]
+    AgentLimit {
+        /// The limit.
+        limit: usize,
+    },
+    /// An agent asked to operate on a session it did not start (ADR 0013).
+    #[error("an agent may only operate on sessions it started, or that those started")]
+    NotOwned(SessionId),
+    /// The `vessel` server's definition cannot be built (a name the
+    /// protocol refuses: a bug).
+    #[error("cannot define the `vessel` MCP server")]
+    AgentTools(#[source] vessel_proto::InvalidName),
+    /// The node's local endpoint is not Unicode, so `vessel mcp` cannot be
+    /// told where it is.
+    #[error("the node's local socket path is not Unicode")]
+    AgentToolsPath,
+    /// A profile move of this session is running already.
+    #[error("session {0} is already moving to another profile")]
+    MoveRunning(SessionId),
     /// The target profile's account is not logged in (its harness's check
     /// failed, or did not answer in time).
     #[error("profile `{0}` is not logged in; log it in first")]
@@ -168,7 +197,12 @@ impl ServiceError {
             | Self::ProfileGone(_)
             | Self::NoUserHome
             | Self::HomeUnknown(_)
-            | Self::NotLoggedIn(_) => ErrorCode::Conflict,
+            | Self::NotLoggedIn(_)
+            | Self::AgentGone(_)
+            | Self::MoveRunning(_) => ErrorCode::Conflict,
+            Self::AgentDepth { .. } | Self::AgentLimit { .. } | Self::NotOwned(_) => {
+                ErrorCode::Forbidden
+            }
             Self::Draining | Self::TooManyInvitations => ErrorCode::Unavailable,
             Self::Ahead { .. }
             | Self::InvalidTtl
@@ -178,9 +212,12 @@ impl ServiceError {
             Self::Session(error) => error.code(),
             Self::Store(error) | Self::Profiles(ProfilesFileError::Read(error)) => error.code(),
             Self::Outbound(error) => error.code(),
-            Self::Unpersisted(_) | Self::Task(_) | Self::Random(_) | Self::Link(_) => {
-                ErrorCode::Internal
-            }
+            Self::Unpersisted(_)
+            | Self::Task(_)
+            | Self::Random(_)
+            | Self::Link(_)
+            | Self::AgentTools(_)
+            | Self::AgentToolsPath => ErrorCode::Internal,
         };
         let mut message = self.to_string();
         let mut source = std::error::Error::source(self);

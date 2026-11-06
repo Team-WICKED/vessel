@@ -21,14 +21,14 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension as _, Row, params};
 use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
-use vessel_proto::{DeviceId, DeviceInfo, DeviceSecret, Scope};
+use vessel_proto::{AgentSecret, DeviceId, DeviceInfo, DeviceSecret, Scope};
 
 use crate::codec::{encode, time_from_sql, time_to_sql};
 use crate::error::StoreError;
 
-/// SHA-256 of a device's credential: what the node keeps instead of the
-/// secret. There is no `PartialEq`; [`matches`](Self::matches) compares in
-/// constant time.
+/// SHA-256 of a credential: what the node keeps instead of the secret (a
+/// device's, stored; an agent's, in memory only, ADR 0013). There is no
+/// `PartialEq`; the `matches` methods compare in constant time.
 #[derive(Clone)]
 pub struct CredentialHash([u8; 32]);
 
@@ -36,14 +36,35 @@ impl CredentialHash {
     /// The hash of `secret`.
     #[must_use]
     pub fn of(secret: &DeviceSecret) -> Self {
-        Self(Sha256::digest(secret.expose()).into())
+        Self::of_bytes(secret.expose())
     }
 
     /// Whether `secret` is the credential this hash was made from. Takes the
     /// same time wherever the first difference is.
     #[must_use]
     pub fn matches(&self, secret: &DeviceSecret) -> bool {
-        Self::of(secret).0.ct_eq(&self.0).into()
+        self.matches_bytes(secret.expose())
+    }
+
+    /// The hash of an agent's credential.
+    #[must_use]
+    pub fn of_agent(secret: &AgentSecret) -> Self {
+        Self::of_bytes(secret.expose())
+    }
+
+    /// Whether `secret` is the agent credential this hash was made from,
+    /// in constant time.
+    #[must_use]
+    pub fn matches_agent(&self, secret: &AgentSecret) -> bool {
+        self.matches_bytes(secret.expose())
+    }
+
+    fn of_bytes(secret: &[u8]) -> Self {
+        Self(Sha256::digest(secret).into())
+    }
+
+    fn matches_bytes(&self, secret: &[u8]) -> bool {
+        Self::of_bytes(secret).0.ct_eq(&self.0).into()
     }
 }
 
@@ -195,5 +216,13 @@ mod tests {
         assert!(hash.matches(&secret));
         assert!(!hash.matches(&DeviceSecret::from_bytes([6; 32])));
         assert_eq!(format!("{hash:?}"), "CredentialHash(..)");
+    }
+
+    #[test]
+    fn an_agent_credential_hash_matches_only_its_secret() {
+        let secret = AgentSecret::from_bytes([5; 32]);
+        let hash = CredentialHash::of_agent(&secret);
+        assert!(hash.matches_agent(&secret));
+        assert!(!hash.matches_agent(&AgentSecret::from_bytes([6; 32])));
     }
 }
