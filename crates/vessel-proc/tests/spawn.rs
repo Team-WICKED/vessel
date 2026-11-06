@@ -14,6 +14,8 @@
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use vessel_proc::{CommandSpec, Signal, Spawned, spawn};
 
+#[cfg(target_os = "macos")]
+use support::exited_unreaped;
 use support::{drain, fake_tui, read_until, within};
 
 /// Helpers live in a `#[cfg(test)]` module so clippy's test allowances
@@ -36,6 +38,29 @@ mod support {
         vessel_testkit::within(SAFETY_NET, test)
             .await
             .expect("test timed out")
+    }
+
+    /// Block until process `pid` has exited, without reaping it: `kqueue`'s
+    /// `NOTE_EXIT` (macOS).
+    #[cfg(target_os = "macos")]
+    pub(super) fn exited_unreaped(pid: u32) {
+        use nix::errno::Errno;
+        use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent, Kqueue};
+
+        let watch = KEvent::new(
+            usize::try_from(pid).unwrap(),
+            EventFilter::EVFILT_PROC,
+            EvFlags::EV_ADD | EvFlags::EV_ONESHOT,
+            FilterFlag::NOTE_EXIT,
+            0,
+            0,
+        );
+        let mut seen = [watch];
+        // Blocks until the exit; `ESRCH` if it had exited already.
+        match Kqueue::new().unwrap().kevent(&[watch], &mut seen, None) {
+            Ok(_) | Err(Errno::ESRCH) => {}
+            Err(error) => panic!("cannot watch the child: {error}"),
+        }
     }
 
     #[cfg(unix)]
@@ -200,31 +225,53 @@ async fn dropping_an_unwaited_child_kills_its_group() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn signalling_a_leader_that_exited_unreaped_succeeds() {
-    use nix::errno::Errno;
-    use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent, Kqueue};
-
     within(async {
         let Spawned {
             mut child, stdout, ..
         } = spawn(&fake_tui().arg("--version")).unwrap();
         let printed = drain(BufReader::new(stdout).lines()).await;
         assert!(printed.contains("fake-tui"), "{printed}");
-        let watch = KEvent::new(
-            usize::try_from(child.pid()).unwrap(),
-            EventFilter::EVFILT_PROC,
-            EvFlags::EV_ADD | EvFlags::EV_ONESHOT,
-            FilterFlag::NOTE_EXIT,
-            0,
-            0,
-        );
-        let mut seen = [watch];
-        // Blocks until the exit; `ESRCH` if it had exited already.
-        match Kqueue::new().unwrap().kevent(&[watch], &mut seen, None) {
-            Ok(_) | Err(Errno::ESRCH) => {}
-            Err(error) => panic!("cannot watch the child: {error}"),
-        }
+        exited_unreaped(child.pid());
         child.signal(Signal::Terminate).unwrap();
         assert_eq!(child.wait().await.unwrap(), Some(0));
     })
     .await;
+}
+
+/// The one rule for a refused group signal
+/// (`ProcessGroup::signal_with_leader`, which `Child` and `vessel-pty`'s
+/// killer share), on a real group whose only member is a zombie: the
+/// refusal stands while the leader is not reaped, a second refusal after a
+/// claimed reap is returned, and once the leader is reaped the group is
+/// gone. The leader is started and reaped here, outside `vessel-proc`, so
+/// the test decides when the reap happens. macOS only, as above.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refused_group_signal_counts_as_gone_only_after_the_reap() {
+    use std::os::unix::process::CommandExt as _;
+
+    use vessel_proc::ProcessGroup;
+
+    let mut leader = std::process::Command::new(vessel_testkit::Fake::Tui.path().unwrap())
+        .arg("--version")
+        .process_group(0)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    exited_unreaped(leader.id());
+    let group = ProcessGroup::of_leader(leader.id()).unwrap();
+    assert!(
+        group.signal(Signal::Terminate).unwrap_err().is_refused(),
+        "macOS refuses a group of zombies"
+    );
+    let not_reaped = group.signal_with_leader(Signal::Terminate, |_grace| false);
+    assert!(not_reaped.unwrap_err().is_refused());
+    let still_there = group.signal_with_leader(Signal::Terminate, |_grace| true);
+    assert!(still_there.unwrap_err().is_refused());
+    group
+        .signal_with_leader(Signal::Terminate, |_grace| {
+            assert!(leader.wait().unwrap().success());
+            true
+        })
+        .unwrap();
 }

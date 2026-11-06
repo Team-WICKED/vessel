@@ -33,7 +33,7 @@ use crate::subscribe;
 use crate::transfers::export::Exporter;
 use crate::transfers::import::{Importer, Local, Pull, Remote};
 use crate::transfers::{Holder, Transfers};
-use crate::waits::{ConnectionWaits, WaitSlot, Waiter, Waits};
+use crate::waits::{ConnectionWaits, Share, WaitSlot, Waiter, Waits};
 
 /// The node's protocol implementation.
 #[derive(Debug)]
@@ -107,23 +107,22 @@ impl NodeService {
         }
     }
 
-    /// A place for the wait of a read `waiter` makes on `connection`, if it
-    /// waits and both shares have room (`waits`); otherwise the wait is
-    /// dropped and the read answers at once.
+    /// A place for the wait of a read on `connection` in `shares`, if it
+    /// waits and the connection and every share have room (`waits`);
+    /// otherwise the wait is dropped and the read answers at once.
     pub(crate) fn wait_slot(
         &self,
         connection: &Connection,
-        waiter: Waiter,
+        shares: Vec<Share>,
         wait: &mut Option<u32>,
     ) -> Option<WaitSlot> {
         let _seconds = wait.as_ref()?;
-        let slot = self.waits.take(&connection.waiting, waiter);
+        let slot = self.waits.take(&connection.waiting, shares);
         if slot.is_none() {
             *wait = None;
             tracing::debug!(
-                ?waiter,
-                "a waiting read answers at once: its connection's or its origin's share of waits \
-                 is taken"
+                "a waiting read answers at once: its connection's half, or one of its shares \
+                 (origin, node, relaying device), is taken"
             );
         }
         slot
@@ -304,8 +303,9 @@ impl NodeService {
         connection: &Connection,
         mut request: ReadEvents,
     ) -> Result<EventPage, WireError> {
-        let waiter = Waiter::of(connection.principal(), self.links.node());
-        let _slot = self.wait_slot(connection, waiter, &mut request.wait);
+        let here = self.links.node();
+        let shares = Waiter::of(connection.principal(), here).shares(here);
+        let _slot = self.wait_slot(connection, shares, &mut request.wait);
         let read = match request.wait {
             Some(seconds) => {
                 let wait = Duration::from_secs(seconds.min(ReadEvents::MAX_WAIT).into());

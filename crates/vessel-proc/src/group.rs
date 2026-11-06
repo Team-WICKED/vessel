@@ -1,10 +1,17 @@
 //! [`ProcessGroup`]: signalling every process in a Unix process group.
 
+use std::time::Duration;
+
 use nix::errno::Errno;
 use nix::unistd::Pid;
 
 use crate::error::{InvalidGroup, SignalError};
 use crate::signal::Signal;
+
+/// How long a refused group signal waits for the group's leader to be
+/// reaped ([`ProcessGroup::signal_with_leader`]). A leader is reaped as soon
+/// as it has exited, so this only bounds a real refusal's answer.
+pub const REAP_GRACE: Duration = Duration::from_millis(500);
 
 /// A Unix process group, identified by its leader's pid.
 ///
@@ -49,6 +56,56 @@ impl ProcessGroup {
         match nix::sys::signal::killpg(self.0, signal.to_nix()) {
             Ok(()) | Err(Errno::ESRCH) => Ok(()),
             Err(errno) => Err(SignalError::from(std::io::Error::from(errno))),
+        }
+    }
+
+    /// Send `signal` to the group of a leader of ours that may be exiting:
+    /// the one rule for a refused signal (`EPERM`), shared by
+    /// [`Child`](crate::Child) and `vessel-pty`'s killer. On `EPERM`,
+    /// `reaped` waits up to [`REAP_GRACE`] for the leader to be reaped (by
+    /// the caller's own means) and says whether it was. If it was, the group
+    /// is signalled again, with `SIGKILL` as a sweep is: success or `ESRCH`
+    /// means everything is gone, and another `EPERM` is a real refusal and
+    /// is returned. If it was not, the first refusal is returned.
+    ///
+    /// [Decision Log]
+    /// - Problem: macOS refuses to signal a group whose members have all
+    ///   begun exiting (zombies, or on their way to being one), where Linux
+    ///   signals zombies without complaint. For our own leader that means it
+    ///   is gone. But `EPERM` also means a member runs as another user (a
+    ///   setuid helper, `sudo`): a real refusal, which must not pass as
+    ///   success.
+    /// - One look was not enough: CI on macOS saw `EPERM` while `try_wait`
+    ///   still said the leader runs (it had begun exiting and was not yet
+    ///   waitable), so the refusal was returned and a session's stop failed
+    ///   (2026-11-06, `a_broken_transport_still_settles_the_turn_and_its_
+    ///   requests`). Hence a grace for the reap, not one look.
+    /// - One function: `vessel-proc` reaps with `try_wait`, `vessel-pty`'s
+    ///   waiter thread reaps and reports through a condition variable; both
+    ///   say "reaped within the grace" through `reaped`, and the rule after
+    ///   it is this one.
+    /// - Cost: the caller blocks up to the grace, and only after `EPERM`.
+    ///   The signal after a reap may, in the microseconds after the group's
+    ///   last member went, reach a group that reused the id: the race every
+    ///   sweep after a reap accepts.
+    ///
+    /// # Errors
+    /// The refusal, if the leader was not reaped within the grace or the
+    /// group refused again after it was; any other failure to signal.
+    pub fn signal_with_leader(
+        self,
+        signal: Signal,
+        reaped: impl FnOnce(Duration) -> bool,
+    ) -> Result<(), SignalError> {
+        match self.signal(signal) {
+            Err(refused) if refused.is_refused() => {
+                if reaped(REAP_GRACE) {
+                    self.signal(Signal::Kill)
+                } else {
+                    Err(refused)
+                }
+            }
+            delivered => delivered,
         }
     }
 }

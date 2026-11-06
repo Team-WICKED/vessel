@@ -10,6 +10,11 @@ use crate::group::ProcessGroup;
 use crate::signal::Signal;
 use crate::spec::CommandSpec;
 
+/// How often a refused signal looks again whether the leader has exited
+/// (`Child::reaped_within`).
+#[cfg(unix)]
+const REAP_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// A started child and its three pipes.
 #[derive(Debug)]
 pub struct Spawned {
@@ -122,10 +127,8 @@ impl Child {
         }
         #[cfg(unix)]
         {
-            match self.group.signal(signal) {
-                Err(refused) if refused.is_refused() => self.exited_already(refused),
-                delivered => delivered,
-            }
+            let group = self.group;
+            group.signal_with_leader(signal, |grace| self.reaped_within(grace))
         }
         #[cfg(windows)]
         {
@@ -134,32 +137,28 @@ impl Child {
         }
     }
 
-    /// The group refused a signal (`EPERM`). macOS answers that when every
-    /// member of the group has exited but is not reaped yet, which for our
-    /// leader means it is already gone: if it has exited, reap it now (its
-    /// code is kept for [`wait`](Self::wait)) and signal the group again,
-    /// as the sweep would. `ESRCH` then means everything is gone; another
-    /// refusal is real (a member still runs as another user, a setuid
-    /// helper or `sudo`) and is returned, as is the first when the leader
-    /// still runs.
-    ///
-    /// [Decision Log]
-    /// - Seen on CI (macOS): an agent that exited by itself between the
-    ///   session's decision to stop it and the signal made `kill` fail.
-    /// - Alternatives: map every `EPERM` to success (hides a real refusal);
-    ///   ask the OS whether the leader is a zombie (no portable call that
-    ///   does not reap it: `waitid` with `WNOWAIT` is missing on macOS).
-    /// - Choice: `try_wait`, which never blocks and only succeeds for an
-    ///   exited leader; reaping it here is what `wait` would do next anyway.
-    ///   The signal after it is the sweep `wait` does, so it is `SIGKILL`.
+    /// Whether the leader has exited, looking for up to `grace`: if so it is
+    /// reaped now, its code kept for [`wait`](Self::wait) (which would reap
+    /// it next anyway). For a refused group signal
+    /// ([`ProcessGroup::signal_with_leader`]); blocks, polling `try_wait`,
+    /// which never blocks and succeeds only for an exited leader (`waitid`
+    /// with `WNOWAIT`, which would not reap, is missing on macOS).
     #[cfg(unix)]
-    fn exited_already(&mut self, refused: SignalError) -> Result<(), SignalError> {
-        match self.inner.try_wait() {
-            Ok(Some(status)) => {
-                self.state = State::Reaped(status.code());
-                self.group.signal(Signal::Kill)
+    fn reaped_within(&mut self, grace: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now().checked_add(grace);
+        loop {
+            match self.inner.try_wait() {
+                Ok(Some(status)) => {
+                    self.state = State::Reaped(status.code());
+                    return true;
+                }
+                Ok(None) => {}
+                Err(_) => return false,
             }
-            Ok(None) | Err(_) => Err(refused),
+            if deadline.is_none_or(|deadline| std::time::Instant::now() >= deadline) {
+                return false;
+            }
+            std::thread::sleep(REAP_POLL);
         }
     }
 
@@ -202,10 +201,13 @@ impl Child {
 #[cfg(unix)]
 impl Drop for Child {
     fn drop(&mut self) {
-        if self.state == State::Running
-            && let Err(error) = self.group.signal(Signal::Kill)
-        {
-            tracing::warn!(pid = self.pid, %error, "cannot kill dropped process group");
+        if self.state == State::Running {
+            let group = self.group;
+            if let Err(error) =
+                group.signal_with_leader(Signal::Kill, |grace| self.reaped_within(grace))
+            {
+                tracing::warn!(pid = self.pid, %error, "cannot kill dropped process group");
+            }
         }
     }
 }
