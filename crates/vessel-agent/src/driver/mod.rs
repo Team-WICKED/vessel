@@ -28,6 +28,15 @@
 //!   When the consumer stops reading, the loop stops, the transport stops
 //!   reading, and the agent blocks on its writes. (The SDK's own queues are
 //!   unbounded; `transport` is what bounds what reaches them.)
+//!
+//! Layout: this module sets the connection up and runs the loop, which
+//! takes the client's commands (`commands`) and the agent's traffic
+//! (`agent`) in order; `close` settles what a closed connection leaves
+//! open. All of them share the one [`Driver`] state.
+
+mod agent;
+mod close;
+mod commands;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,14 +46,12 @@ use agent_client_protocol::v1::{ConnectionTo, Responder};
 use agent_client_protocol::{Agent, Client, Error};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
-use vessel_proto::{
-    AgentEvent, ContentBlock, HarnessSessionId, PermissionOutcome, PermissionRequest, ToolCallId,
-};
+use vessel_proto::{AgentEvent, HarnessSessionId, ToolCallId};
 
-use crate::error::{Disconnect, InputError};
+use crate::error::Disconnect;
 use crate::handshake::{self, AgentSetup, HandshakeError};
-use crate::input::{Command, Reply};
-use crate::mapper::{self, Update};
+use crate::input::Command;
+use crate::mapper;
 use crate::output::AgentOutput;
 use crate::permissions::Permissions;
 use crate::recent::Recent;
@@ -255,176 +262,6 @@ impl Driver {
         None
     }
 
-    async fn update(&mut self, notification: acp::SessionNotification) {
-        match mapper::session_update(notification.update) {
-            Update::Event(event) => {
-                if let AgentEvent::ToolCall(call) = &event {
-                    let _ = self.tool_calls.insert(call.id.clone());
-                }
-                self.emit(event).await;
-            }
-            Update::Skipped(kind) => tracing::trace!(?kind, "session update skipped"),
-        }
-    }
-
-    /// Hold a permission request and announce it.
-    async fn permission(
-        &mut self,
-        request: acp::RequestPermissionRequest,
-        responder: Responder<acp::RequestPermissionResponse>,
-    ) {
-        let tool_call = ToolCallId::new(Arc::clone(&request.tool_call.tool_call_id.0));
-        let known = !self.tool_calls.insert(tool_call.clone());
-        if let Some(event) = mapper::permission_tool_call(request.tool_call, known) {
-            self.emit(event).await;
-        }
-        let options = mapper::permission_options(request.options);
-        let id = self.permissions.open(responder, &options);
-        self.emit(AgentEvent::PermissionRequested(PermissionRequest {
-            id,
-            tool_call,
-            options,
-        }))
-        .await;
-        if self.cancelling {
-            // Sent before the agent saw the cancel. ACP has the client
-            // answer every permission request of a cancelled turn with
-            // `cancelled`, and the agent cannot end the turn until it has
-            // that answer. The timeline shows the request and its
-            // withdrawal, as for one that was pending at the cancel.
-            self.withdraw_permissions().await;
-        }
-    }
-
-    async fn command(&mut self, cx: &ConnectionTo<Agent>, command: Command) {
-        match command {
-            Command::Prompt { content, reply } => {
-                let result = self.prompt(cx, content).await;
-                answer(reply, result);
-            }
-            Command::CancelTurn { reply } => {
-                let result = self.cancel(cx).await;
-                answer(reply, result);
-            }
-            Command::Answer { id, outcome, reply } => {
-                let result = self.permissions.answer(id, &outcome);
-                if result.is_ok() {
-                    self.emit(AgentEvent::PermissionResolved { id, outcome })
-                        .await;
-                }
-                answer(reply, result);
-            }
-        }
-    }
-
-    async fn prompt(
-        &mut self,
-        cx: &ConnectionTo<Agent>,
-        content: Vec<ContentBlock>,
-    ) -> Result<(), InputError> {
-        if self.turn {
-            return Err(InputError::TurnInProgress);
-        }
-        let Some(session) = &self.session else {
-            return Err(InputError::Closed);
-        };
-        let blocks = content
-            .iter()
-            .cloned()
-            .map(mapper::prompt_block)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(InputError::InvalidContent)?;
-        let sent = cx.send_request(acp::PromptRequest::new(session.clone(), blocks));
-        let inbound = self.inbound.clone();
-        let spawned = cx.spawn(async move {
-            let result = sent.block_task().await;
-            forward(&inbound, Inbound::TurnDone(result)).await;
-            Ok(())
-        });
-        if spawned.is_err() {
-            return Err(InputError::Closed);
-        }
-        self.turn = true;
-        self.cancelling = false;
-        self.emit(AgentEvent::TurnStarted { content }).await;
-        Ok(())
-    }
-
-    async fn cancel(&mut self, cx: &ConnectionTo<Agent>) -> Result<(), InputError> {
-        let Some(session) = &self.session else {
-            return Err(InputError::Closed);
-        };
-        if !self.turn {
-            return Ok(());
-        }
-        if cx
-            .send_notification(acp::CancelNotification::new(session.clone()))
-            .is_err()
-        {
-            return Err(InputError::Closed);
-        }
-        // ACP: after `session/cancel` the client answers every pending
-        // permission request with `cancelled` (also those still on their
-        // way, see `permission`); the agent then ends the turn with the
-        // `cancelled` stop reason.
-        self.cancelling = true;
-        self.withdraw_permissions().await;
-        Ok(())
-    }
-
-    /// The connection closed: handle what is still queued, then settle
-    /// what is still open.
-    ///
-    /// The SDK fails the requests still waiting before it reports the
-    /// close, but a prompt's outcome reaches `inbound` through the prompt's
-    /// own task, which may not have run yet. Sweeping only what is queued
-    /// would then record a failure for a turn whose outcome (possibly
-    /// "ended normally", if the agent answered and then exited) is on its
-    /// way. So while a turn is open the loop keeps taking items, each
-    /// within [`AFTER_CLOSE`], until the outcome arrives.
-    async fn settle_after_close(&mut self) {
-        while self.turn {
-            let Ok(Some(item)) =
-                tokio::time::timeout(AFTER_CLOSE, self.inbound_receiver.recv()).await
-            else {
-                tracing::debug!("no turn outcome after the connection closed");
-                break;
-            };
-            if self.handle(item).await.is_some() {
-                break;
-            }
-        }
-        while let Ok(item) = self.inbound_receiver.try_recv() {
-            if self.handle(item).await.is_some() {
-                break;
-            }
-        }
-        self.abandon_turn().await;
-    }
-
-    /// The connection ended: settle what is still open.
-    async fn abandon_turn(&mut self) {
-        self.withdraw_permissions().await;
-        self.cancelling = false;
-        if self.turn {
-            self.turn = false;
-            self.emit(AgentEvent::TurnFailed {
-                message: String::from("the agent exited during the turn"),
-            })
-            .await;
-        }
-    }
-
-    async fn withdraw_permissions(&mut self) {
-        for id in self.permissions.cancel_all() {
-            self.emit(AgentEvent::PermissionResolved {
-                id,
-                outcome: PermissionOutcome::Cancelled,
-            })
-            .await;
-        }
-    }
-
     /// `&mut self` rather than `&self`: the session holds permission
     /// responders, which are `Send` but not `Sync`, so a shared borrow held
     /// across this `.await` would make the driver future non-`Send`.
@@ -440,13 +277,6 @@ async fn forward(inbound: &mpsc::Sender<Inbound>, item: Inbound) {
     // dropped permission responder answers the agent with an error.
     if inbound.send(item).await.is_err() {
         tracing::debug!("agent traffic after the session loop ended");
-    }
-}
-
-fn answer(reply: Reply, result: Result<(), InputError>) {
-    // The caller may have stopped waiting; the command was applied anyway.
-    if reply.send(result).is_err() {
-        tracing::debug!("agent command reply dropped");
     }
 }
 
