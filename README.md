@@ -194,12 +194,18 @@ gets copies in each of its harness profiles, keeping any local edit
 # on the home
 vessel fleet init --instructions ~/.codex/AGENTS.md --skills ~/.codex/skills --skip 'paseo*'
 vessel fleet invite --label laptop    # a single-use link with the `sync` scope
+vessel fleet invite --label laptop --relay   # also lets the laptop reach other members
 # on the laptop: paste the link at the prompt, never on the command line
-vessel fleet join
+vessel fleet join                     # the home gets read, operate here (--grant to choose)
 vessel fleet status                   # generation, and files left as they are
 # on the home
 vessel fleet members
 ```
+
+- Calls across nodes go through the home: a member's node grants the home
+  the scopes chosen at join when it connects, and a call to another node
+  runs there with no more than that grant and the caller's own scopes
+  (protocol 6, ADR 0013). `vessel fleet join --grant none` grants nothing.
 
 - Edit the sources on the home; members follow within seconds (the home
   watches `<data_dir>/fleet.toml` and its sources).

@@ -3,22 +3,24 @@
 //! transport serves it behind the scope check (`guard::Guarded`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, BlobChunk, CreateSession, DeviceInfo, ErrorCode, EventPage, FleetMember, Generation,
-    GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession, ListDevices,
-    ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile, NodeInfo,
-    ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice, SendInput,
-    SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet, WireError,
+    Ack, BlobChunk, CreateSession, Creator, DeviceInfo, ErrorCode, EventPage, FleetMember,
+    Generation, GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession,
+    ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile,
+    NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice,
+    SendInput, SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet,
+    WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
 use crate::agents::{Agents, MAX_DEPTH};
 use crate::devices::Devices;
 use crate::error::ServiceError;
-use crate::fleet::Home;
+use crate::fleet::{Home, Links};
 use crate::lifecycle::Lifecycle;
 use crate::principal::Principal;
 use crate::profiles::launch::{Launcher, agent_session};
@@ -29,7 +31,7 @@ use crate::subscribe;
 /// The node's protocol implementation.
 #[derive(Debug)]
 pub(crate) struct NodeService {
-    lifecycle: Lifecycle,
+    pub(crate) lifecycle: Lifecycle,
     lookup: Lookup,
     sessions: Arc<Sessions>,
     devices: Arc<Devices>,
@@ -41,9 +43,11 @@ pub(crate) struct NodeService {
     /// What `session.create` adds to the spec.
     launcher: Launcher,
     /// Sessions' agents (ADR 0013): credentials, grants, limits.
-    agents: Arc<Agents>,
+    pub(crate) agents: Arc<Agents>,
     /// The fleet's home side (ADR 0012).
     fleet: Arc<Home>,
+    /// The links to other nodes of the fleet (protocol 6, `envelope`).
+    pub(crate) links: Arc<Links>,
 }
 
 /// The parts a [`NodeService`] serves.
@@ -57,6 +61,7 @@ pub(crate) struct Parts {
     pub(crate) launcher: Launcher,
     pub(crate) agents: Arc<Agents>,
     pub(crate) fleet: Arc<Home>,
+    pub(crate) links: Arc<Links>,
 }
 
 impl NodeService {
@@ -71,6 +76,7 @@ impl NodeService {
             launcher,
             agents,
             fleet,
+            links,
         } = parts;
         Self {
             lifecycle,
@@ -82,6 +88,7 @@ impl NodeService {
             launcher,
             agents,
             fleet,
+            links,
         }
     }
 }
@@ -116,6 +123,15 @@ impl Connection {
     /// Who is calling.
     pub(crate) const fn principal(&self) -> &Principal {
         &self.principal
+    }
+
+    /// This connection, calling as `principal`: a call delivered from
+    /// another node runs as its delegated principal (protocol 6).
+    pub(crate) fn acting_as(&self, principal: Principal) -> Self {
+        Self {
+            outbound: self.outbound.clone(),
+            principal,
+        }
     }
 }
 
@@ -231,18 +247,20 @@ impl NodeService {
         _: &Connection,
         request: ReadEvents,
     ) -> Result<EventPage, WireError> {
-        // Answering at once would look like a wait that ended empty, and a
-        // caller looping on it would spin; refuse until it is built.
-        if request.wait.is_some() {
-            return Err(crate::unbuilt::unbuilt(
-                vessel_proto::Method::ReadEvents,
-                "Track X: `wait`",
-            ));
-        }
-        self.sessions
-            .read(request.session, request.from, request.limit)
-            .await
-            .map_err(|error| wire(&error))
+        let read = match request.wait {
+            Some(seconds) => {
+                let wait = Duration::from_secs(seconds.min(ReadEvents::MAX_WAIT).into());
+                self.sessions
+                    .read_waiting(request.session, request.from, request.limit, wait)
+                    .await
+            }
+            None => {
+                self.sessions
+                    .read(request.session, request.from, request.limit)
+                    .await
+            }
+        };
+        read.map_err(|error| wire(&error))
     }
 
     pub(crate) async fn subscribe(
@@ -387,20 +405,19 @@ impl NodeService {
 
     /// For an agent, an `operate` call on `session` needs the session to
     /// have been started by the agent's session or a session it started,
-    /// and so on (ADR 0013); anyone else passes.
+    /// and so on (ADR 0013); anyone else passes. The agent may be another
+    /// node's whose call was delivered here (protocol 6): the chain is
+    /// followed through this node's sessions until it reaches the agent's
+    /// `(node, session)`.
     pub(crate) async fn check_owner(
         &self,
         principal: &Principal,
         session: SessionId,
     ) -> Result<(), WireError> {
-        let Principal::Agent {
-            node,
-            session: agent,
-            ..
-        } = principal
-        else {
+        let Some(agent) = principal.agent() else {
             return Ok(());
         };
+        let here = self.lifecycle.info().id;
         let mut current = session;
         // A chain longer than the depth limit cannot lead to the agent.
         for _step in 0..=MAX_DEPTH {
@@ -409,8 +426,14 @@ impl NodeService {
                 .get(current)
                 .await
                 .map_err(|error| wire(&error))?;
-            match agent_session(&info.created_by, *node) {
-                Some(parent) if parent == *agent => return Ok(()),
+            let Creator::Agent { node, session } = info.created_by else {
+                break;
+            };
+            if (node, session) == agent {
+                return Ok(());
+            }
+            // Only this node's sessions can be followed further.
+            match agent_session(&info.created_by, here) {
                 Some(parent) => current = parent,
                 None => break,
             }

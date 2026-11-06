@@ -53,6 +53,13 @@ impl Connected {
         }
     }
 
+    /// Whether `device` has a connection open now.
+    pub(crate) fn is_open(&self, device: DeviceId) -> bool {
+        self.lock()
+            .get(&device)
+            .is_some_and(|open| !open.is_empty())
+    }
+
     /// Close every open connection of `device`; returns how many there were.
     pub(crate) fn close(&self, device: DeviceId) -> usize {
         let open = self.lock().get(&device).cloned().unwrap_or_default();

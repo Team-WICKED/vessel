@@ -39,7 +39,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio_util::sync::CancellationToken;
-use vessel_proto::{AgentAuth, AgentSecret, NodeId, Scope, SessionId};
+use vessel_proto::{AgentAuth, AgentSecret, NodeId, Origin, OriginBy, Scope, SessionId};
 use vessel_store::CredentialHash;
 
 use crate::error::ServiceError;
@@ -71,8 +71,9 @@ struct Entry {
     scopes: Vec<Scope>,
     /// 0 for a session a user created.
     depth: u8,
-    /// The agent session that created this one.
-    parent: Option<SessionId>,
+    /// The agent session that created this one, with its node: this node,
+    /// or another node of the fleet whose agent's call was delivered here.
+    parent: Option<(NodeId, SessionId)>,
     /// Open connections of the agent, closed when the session ends.
     connections: HashMap<u64, CancellationToken>,
 }
@@ -110,26 +111,39 @@ impl Agents {
         let mut sessions = self.lock();
         let (scopes, depth, parent) = match principal {
             Principal::Owner => (AGENT_SCOPES.to_vec(), 0, None),
-            Principal::Device { scopes, .. } => (within_agent_scopes(scopes), 0, None),
             Principal::Agent {
-                session, scopes, ..
+                node,
+                session,
+                scopes,
             } => {
                 let creator = sessions
                     .get(session)
                     .ok_or(ServiceError::AgentGone(*session))?;
-                let depth = creator
-                    .depth
-                    .checked_add(1)
-                    .filter(|depth| *depth <= MAX_DEPTH)
-                    .ok_or(ServiceError::AgentDepth { limit: MAX_DEPTH })?;
-                let owned = sessions
-                    .values()
-                    .filter(|entry| entry.parent == Some(*session))
-                    .count();
-                if owned >= MAX_OWNED {
-                    return Err(ServiceError::AgentLimit { limit: MAX_OWNED });
-                }
-                (scopes.clone(), depth, Some(*session))
+                let parent = (*node, *session);
+                let depth = deeper(creator.depth)?;
+                owns_fewer_than_the_limit(&sessions, parent)?;
+                (scopes.clone(), depth, Some(parent))
+            }
+            // Another node's agent: its depth comes with the call (its own
+            // node vouches for it, and the home for that node), and what it
+            // owns here is counted here.
+            Principal::Delegated {
+                scopes,
+                origin:
+                    Origin {
+                        node,
+                        by: OriginBy::Agent { session, depth },
+                        ..
+                    },
+                ..
+            } => {
+                let parent = (*node, *session);
+                let depth = deeper(*depth)?;
+                owns_fewer_than_the_limit(&sessions, parent)?;
+                (within_agent_scopes(scopes), depth, Some(parent))
+            }
+            Principal::Device { scopes, .. } | Principal::Delegated { scopes, .. } => {
+                (within_agent_scopes(scopes), 0, None)
             }
         };
         let previous = sessions.insert(
@@ -146,6 +160,12 @@ impl Agents {
             tracing::error!(session = %id, "an agent place was reserved twice");
         }
         Ok(secret)
+    }
+
+    /// How many agents deep a live session is (0 for a user's), for the
+    /// `Origin` of a call its agent sends to another node.
+    pub(crate) fn depth(&self, id: SessionId) -> Option<u8> {
+        self.lock().get(&id).map(|entry| entry.depth)
     }
 
     /// Forget a session that did not start.
@@ -276,6 +296,29 @@ impl Drop for Registration {
 }
 
 /// `scopes` limited to what an agent may have.
+/// The depth of a session an agent at `depth` starts, within the limit.
+fn deeper(depth: u8) -> Result<u8, ServiceError> {
+    depth
+        .checked_add(1)
+        .filter(|depth| *depth <= MAX_DEPTH)
+        .ok_or(ServiceError::AgentDepth { limit: MAX_DEPTH })
+}
+
+/// The agent `parent` may start another session.
+fn owns_fewer_than_the_limit(
+    sessions: &HashMap<SessionId, Entry>,
+    parent: (NodeId, SessionId),
+) -> Result<(), ServiceError> {
+    let owned = sessions
+        .values()
+        .filter(|entry| entry.parent == Some(parent))
+        .count();
+    if owned >= MAX_OWNED {
+        return Err(ServiceError::AgentLimit { limit: MAX_OWNED });
+    }
+    Ok(())
+}
+
 fn within_agent_scopes(scopes: &[Scope]) -> Vec<Scope> {
     AGENT_SCOPES
         .into_iter()

@@ -33,15 +33,20 @@ pub(crate) async fn command(target: &Target, command: FleetCommand) -> Result<()
             skills,
             skip,
         } => init(files, instructions, skills, skip).await,
-        FleetCommand::Invite { label, ttl } => {
+        FleetCommand::Invite { label, ttl, relay } => {
             let client = connect(target).await?.client;
-            let invitation = client
-                .invite_with_scopes(label, ttl, vec![Scope::Sync])
-                .await?;
+            // Never `admin`: a member's agents act on other nodes only
+            // within what each node's own owner granted the home.
+            let scopes = if relay {
+                vec![Scope::Sync, Scope::Relay]
+            } else {
+                vec![Scope::Sync]
+            };
+            let invitation = client.invite_with_scopes(label, ttl, scopes).await?;
             devices::show_invitation(&invitation, "on the joining node run\n  vessel fleet join")
                 .await
         }
-        FleetCommand::Join { yes } => join(files, yes).await,
+        FleetCommand::Join { yes, grant } => join(files, yes, grant.0).await,
         FleetCommand::Leave => {
             let was = blocking(move || fleet::leave(&files).map_err(CliError::from)).await?;
             io::note(if was {
@@ -106,10 +111,10 @@ async fn init(
     Ok(())
 }
 
-async fn join(files: FleetFiles, yes: bool) -> Result<(), CliError> {
-    let offer =
-        pair::offer_from_stdin(yes, "vessel fleet invite", "join this node's fleet?").await?;
-    let joined = fleet::join(&files, &offer, &node_name()).await?;
+async fn join(files: FleetFiles, yes: bool, grant: Vec<Scope>) -> Result<(), CliError> {
+    let question = join_question(&grant);
+    let offer = pair::offer_from_stdin(yes, "vessel fleet invite", &question).await?;
+    let joined = fleet::join(&files, &offer, &node_name(), grant).await?;
     io::note(&format!(
         "joined the fleet of {} ({}) via {}; this node follows it within a few seconds \
          (once it runs: `vessel node start`)\n",
@@ -117,6 +122,18 @@ async fn join(files: FleetFiles, yes: bool) -> Result<(), CliError> {
     ))
     .await?;
     Ok(())
+}
+
+/// The question before joining, saying what the home will get here.
+pub(crate) fn join_question(grant: &[Scope]) -> String {
+    if grant.is_empty() {
+        return "join this node's fleet (its home gets no access here)?".to_owned();
+    }
+    let names: Vec<&str> = grant.iter().map(|scope| scope.as_str()).collect();
+    format!(
+        "join this node's fleet (its home gets {} here)?",
+        names.join(", ")
+    )
 }
 
 /// What this node calls itself on its fleet's home: the host's name.

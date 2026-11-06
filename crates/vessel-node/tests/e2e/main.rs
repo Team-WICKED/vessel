@@ -6,6 +6,8 @@
 //! `support::within` only turns a hang into a failure.
 
 #[cfg(test)]
+mod across;
+#[cfg(test)]
 mod agents;
 #[cfg(test)]
 mod fleet;

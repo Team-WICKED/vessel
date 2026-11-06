@@ -41,8 +41,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use vessel_proto::{
-    AgentSecret, Creator, McpServerName, McpTransport, NodeId, ResolvedMcpServers, ResolvedValue,
-    SecretName, SessionId, SessionSpec,
+    AgentSecret, Creator, McpServerName, McpTransport, NodeId, OriginBy, RemoteCreator,
+    ResolvedMcpServers, ResolvedValue, SecretName, SessionId, SessionOrigin, SessionSpec,
 };
 use vessel_session::LaunchOptions;
 
@@ -208,10 +208,12 @@ impl Launcher {
             created_by: creator(principal),
             notices,
             id: None,
-            // This node's own caller; a delivered call (Track X) and an
-            // import (F4) set where the session came from.
-            origin: None,
-            via: None,
+            // An import (F4) sets its own origin.
+            origin: origin(principal),
+            via: match principal {
+                Principal::Delegated { via, .. } => Some(*via),
+                Principal::Owner | Principal::Device { .. } | Principal::Agent { .. } => None,
+            },
         })
     }
 
@@ -237,7 +239,10 @@ fn missing_secret(name: &SecretName) -> String {
     )
 }
 
-/// Who a caller is, as a session records it (ADR 0013).
+/// Who a caller is, as a session records it (ADR 0013). A delivered call
+/// (protocol 6) is recorded as the origin's agent, a variant protocol 5
+/// readers know, or else as the delivering device, which is true here;
+/// [`origin`] keeps the rest.
 fn creator(principal: &Principal) -> Creator {
     match principal {
         Principal::Owner => Creator::Owner,
@@ -246,7 +251,32 @@ fn creator(principal: &Principal) -> Creator {
             node: *node,
             session: *session,
         },
+        Principal::Delegated { device, origin, .. } => match origin.by {
+            OriginBy::Agent { session, .. } => Creator::Agent {
+                node: origin.node,
+                session,
+            },
+            OriginBy::Owner | OriginBy::Device { .. } => Creator::Device { id: *device },
+        },
     }
+}
+
+/// Where a session a caller creates comes from: another node, for a
+/// delivered call of its owner or one of its devices (an agent's is in
+/// `created_by` already).
+fn origin(principal: &Principal) -> Option<SessionOrigin> {
+    let Principal::Delegated { origin, .. } = principal else {
+        return None;
+    };
+    let by = match origin.by {
+        OriginBy::Owner => RemoteCreator::Owner,
+        OriginBy::Device { id } => RemoteCreator::Device { id },
+        OriginBy::Agent { .. } => return None,
+    };
+    Some(SessionOrigin::Remote {
+        node: origin.node,
+        by,
+    })
 }
 
 /// Whether `creator` is an agent session of `node`: the session, if so.

@@ -44,6 +44,7 @@
 mod config;
 mod files;
 mod home;
+mod links;
 mod local;
 mod mcp;
 mod member;
@@ -64,9 +65,10 @@ use vessel_proto::HarnessKind;
 pub use config::{FleetInit, InitError, SourcesError, init};
 pub use files::{FileError, FleetFiles};
 pub(crate) use home::Home;
+pub(crate) use links::Links;
 pub use local::{RestoreError, restore};
 pub(crate) use mcp::FleetMcp;
-pub use member::{JoinError, Joined, join, leave};
+pub use member::{DEFAULT_GRANT, JoinError, Joined, join, leave};
 pub use secrets::{SecretsError, delete_secret, secret_names, set_secret};
 pub use state::{ConflictEntry, ConflictWhy, FailureEntry, FleetState, FleetStatus, Role, status};
 /// A `skip` pattern of `fleet.toml` (`vessel fleet init --skip`).
@@ -112,13 +114,14 @@ impl Default for FleetConfig {
 }
 
 /// Start the fleet loop of the node keeping its state in `files`; the
-/// home's side, for the service. Blocks briefly (reads `members.json` and
-/// `state.json`).
+/// home's side and the links across nodes, for the service. Blocks briefly
+/// (reads `members.json` and `state.json`).
 pub(crate) fn start(
     files: FleetFiles,
     config: &FleetConfig,
     profiles: &Arc<NodeProfiles>,
     mcp: Arc<FleetMcp>,
+    links: Arc<Links>,
     tasks: &TaskTracker,
     stop: &CancellationToken,
 ) -> Arc<Home> {
@@ -133,6 +136,7 @@ pub(crate) fn start(
     drop(tasks.spawn(supervisor::run(
         local,
         Arc::clone(&home),
+        links,
         config.clone(),
         profiles.user_home().map(ToOwned::to_owned),
         tasks.clone(),

@@ -61,6 +61,7 @@ mod auth;
 pub mod cleanup;
 mod config;
 mod devices;
+mod envelope;
 mod error;
 pub mod fleet;
 mod guard;

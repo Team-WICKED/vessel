@@ -23,9 +23,10 @@
 //!   the client's backoff (0.5 s to 30 s, jittered); a failed pull waits
 //!   the same before the next, so a broken disk does not spin. Each is in
 //!   `state.json` for `vessel fleet status`.
-//! - Not in F2: the mutual grant (the member issuing the home a
-//!   credential on itself, ADR 0012) needs a way to hand it over that
-//!   protocol 5 does not have; it comes with cross-node calls (Track X).
+//! - The mutual grant (protocol 6, Track X): after connecting, the loop
+//!   gives the home a credential on this node with the scopes the owner
+//!   chose at join (`links`), and shares its connection for calls this
+//!   node relays through the home.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,10 +44,11 @@ use vessel_client::{
 use vessel_fleet::BlobStore;
 use vessel_proto::{
     BlobChunk, ClientInfo, Generation, Manifest, NodeId, NodeInfo, NodePublicKey, PairingOffer,
-    RouteUrl,
+    RouteUrl, Scope,
 };
 
 use super::files::{self, FileError, FleetFiles};
+use super::links::Links;
 use super::local::Local;
 
 /// The home this node is a member of (`fleet/member.json`).
@@ -65,6 +67,11 @@ pub(crate) struct Membership {
     pub(crate) direct: Vec<RouteUrl>,
     /// When this node joined.
     pub(crate) joined_at: DateTime<Utc>,
+    /// What the home may do on this node (protocol 6, `vessel fleet join
+    /// --grant`): its credential here is made with these. Empty grants
+    /// nothing, as for a membership from before grants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) grant: Vec<Scope>,
 }
 
 impl Membership {
@@ -120,10 +127,14 @@ pub enum JoinError {
 ///
 /// # Errors
 /// See [`JoinError`].
+///
+/// `grant` is what the home may do on this node once it runs (protocol 6;
+/// [`DEFAULT_GRANT`] unless the owner chose otherwise, empty for nothing).
 pub async fn join(
     files: &FleetFiles,
     offer: &PairingOffer,
     device_name: &str,
+    grant: Vec<Scope>,
 ) -> Result<Joined, JoinError> {
     if files.sources().exists() {
         return Err(JoinError::Home);
@@ -142,6 +153,7 @@ pub async fn join(
         relays: offer.relays.clone(),
         direct: offer.direct.clone(),
         joined_at: Utc::now(),
+        grant,
     };
     let files = files.clone();
     let credential = paired.credential;
@@ -240,10 +252,18 @@ enum PullError {
     Task(#[from] tokio::task::JoinError),
 }
 
-/// Pull from the home through `connector` until `stop`.
+/// What a member grants its home unless its owner chooses: enough for the
+/// home to pass on other nodes' calls to read and drive sessions here,
+/// never `admin`.
+pub const DEFAULT_GRANT: [Scope; 2] = [Scope::Read, Scope::Operate];
+
+/// Pull from the home of `membership` through `connector` until `stop`,
+/// sharing the connection with `links` while it lasts.
 pub(crate) async fn run<C: Connector>(
     connector: C,
+    membership: Membership,
     local: Arc<Local>,
+    links: Arc<Links>,
     pacing: Pacing,
     stop: CancellationToken,
 ) {
@@ -267,7 +287,10 @@ pub(crate) async fn run<C: Connector>(
         };
         failures = 0;
         tracing::info!(home = %client.node().id, "connected to the fleet's home");
+        links.connected_home(client.clone());
+        links.grant(&client, &membership).await;
         session(&client, &local, pacing, &mut applied, &stop).await;
+        links.lost_home();
     }
 }
 

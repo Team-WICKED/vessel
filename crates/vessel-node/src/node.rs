@@ -326,11 +326,18 @@ fn core(
     ));
     // Fleet sync's tasks are session-adjacent work: shutdown waits for an
     // apply in progress before the data directory is released.
+    let links = Arc::new(fleet::Links::new(
+        id,
+        lifecycle.info().name,
+        FleetFiles::new(&config.data_dir),
+        Arc::clone(&devices),
+    ));
     let fleet = fleet::start(
         FleetFiles::new(&config.data_dir),
         &config.fleet,
         &setup.profiles,
         setup.fleet_mcp,
+        Arc::clone(&links),
         &tasks,
         &stop,
     );
@@ -344,6 +351,7 @@ fn core(
         launcher: setup.launcher,
         agents: Arc::clone(&agents),
         fleet,
+        links,
     })));
     Core {
         runtime,

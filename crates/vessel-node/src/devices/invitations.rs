@@ -17,7 +17,8 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sha2::{Digest as _, Sha256};
-use vessel_proto::{InvitationSecret, Scope};
+use tokio::sync::oneshot;
+use vessel_proto::{DeviceId, InvitationSecret, Scope};
 
 /// Invitations that may wait at once.
 pub(crate) const MAX_PENDING: usize = 64;
@@ -32,6 +33,18 @@ pub(crate) struct Invitations {
 struct Pending {
     grant: Grant,
     expires: DateTime<Utc>,
+    /// Told the new device's id once the invitation is redeemed (a fleet
+    /// member's grant to its home, which must know the device it made).
+    paired: Option<oneshot::Sender<DeviceId>>,
+}
+
+/// A redeemed invitation.
+#[derive(Debug)]
+pub(crate) struct Redeemed {
+    /// What it gives.
+    pub(crate) grant: Grant,
+    /// Whom to tell the new device's id, if anyone.
+    pub(crate) paired: Option<oneshot::Sender<DeviceId>>,
 }
 
 /// What an invitation gives the device that redeems it.
@@ -56,11 +69,41 @@ impl Invitations {
         expires: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<(), Full> {
+        self.insert(secret, grant, expires, now, None)
+    }
+
+    /// Remember a new invitation whose redemption `paired` learns of.
+    pub(crate) fn add_tracked(
+        &mut self,
+        secret: &InvitationSecret,
+        grant: Grant,
+        expires: DateTime<Utc>,
+        now: DateTime<Utc>,
+        paired: oneshot::Sender<DeviceId>,
+    ) -> Result<(), Full> {
+        self.insert(secret, grant, expires, now, Some(paired))
+    }
+
+    fn insert(
+        &mut self,
+        secret: &InvitationSecret,
+        grant: Grant,
+        expires: DateTime<Utc>,
+        now: DateTime<Utc>,
+        paired: Option<oneshot::Sender<DeviceId>>,
+    ) -> Result<(), Full> {
         self.purge(now);
         if self.pending.len() >= MAX_PENDING {
             return Err(Full);
         }
-        let _replaced = self.pending.insert(key(secret), Pending { grant, expires });
+        let _replaced = self.pending.insert(
+            key(secret),
+            Pending {
+                grant,
+                expires,
+                paired,
+            },
+        );
         Ok(())
     }
 
@@ -70,12 +113,15 @@ impl Invitations {
         &mut self,
         secret: &InvitationSecret,
         now: DateTime<Utc>,
-    ) -> Option<Grant> {
+    ) -> Option<Redeemed> {
         self.purge(now);
         self.pending
             .remove(&key(secret))
             .filter(|pending| pending.expires > now)
-            .map(|pending| pending.grant)
+            .map(|pending| Redeemed {
+                grant: pending.grant,
+                paired: pending.paired,
+            })
     }
 
     fn purge(&mut self, now: DateTime<Utc>) {
@@ -116,14 +162,23 @@ mod tests {
             .add(&second, grant(None), at(600), at(0))
             .unwrap();
 
+        let redeem = |invitations: &mut Invitations, secret, now| {
+            invitations
+                .redeem(secret, now)
+                .map(|redeemed| redeemed.grant)
+        };
         assert_eq!(
-            invitations.redeem(&first, at(10)),
+            redeem(&mut invitations, &first, at(10)),
             Some(grant(Some("laptop")))
         );
-        assert_eq!(invitations.redeem(&first, at(11)), None, "single use");
-        assert_eq!(invitations.redeem(&second, at(600)), None, "expired");
+        assert_eq!(redeem(&mut invitations, &first, at(11)), None, "single use");
+        assert_eq!(redeem(&mut invitations, &second, at(600)), None, "expired");
         assert_eq!(
-            invitations.redeem(&InvitationSecret::from_bytes([3; 16]), at(1)),
+            redeem(
+                &mut invitations,
+                &InvitationSecret::from_bytes([3; 16]),
+                at(1)
+            ),
             None
         );
     }
