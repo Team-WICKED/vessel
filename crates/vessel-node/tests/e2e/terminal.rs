@@ -1,6 +1,6 @@
 //! Terminal mode: `fake-tui` as `claude`.
 
-use vessel_client::{CallError, ClientConfig, NodeClient};
+use vessel_client::{CallError, ClientConfig, NodeClient, SessionStream};
 use vessel_proto::{
     ContentBlock, ErrorCode, EventRecord, EventSeq, HarnessKind, SessionInput, SessionStatus,
     TerminalInput, TerminalSize,
@@ -266,10 +266,10 @@ async fn tiny_rings_force_store_gap_fills_and_lag_without_losing_records() {
 /// them, and a follower waiting for that output waited forever: the flake
 /// in `a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows`.)
 ///
-/// Returns the follower's records up to "echo: three", and the gap it
-/// reported, if any. The output is produced before the follower reads, so
-/// the catch-up happens with the session already idle.
-async fn catch_up_after_pruning(ring: usize) -> (Vec<EventRecord>, Option<(EventSeq, EventSeq)>) {
+/// Returns the follower's records up to "echo: three", and the gaps it
+/// reported. The output is produced before the follower reads, so the
+/// catch-up happens with the session already idle.
+async fn catch_up_after_pruning(ring: usize) -> (Vec<EventRecord>, Vec<Gap>) {
     let fixture = Fixture::new();
     let node = fixture
         .start_with(|config| {
@@ -295,14 +295,14 @@ async fn catch_up_after_pruning(ring: usize) -> (Vec<EventRecord>, Option<(Event
     let mut lagging = slow.follow(id, EventSeq::ZERO).await.unwrap();
     let mut watcher = client.follow(id, EventSeq::ZERO).await.unwrap();
     let mut progress = Vec::new();
-    collect_until(&mut watcher, &mut progress, "> ").await;
+    watch_until(&mut watcher, &mut progress, "> ").await;
     for line in ["one\r", "two\r", "three\r"] {
         client.send(id, keys(line)).await.unwrap();
     }
-    collect_until(&mut watcher, &mut progress, "echo: three").await;
+    watch_until(&mut watcher, &mut progress, "echo: three").await;
 
     let mut seen = Vec::new();
-    let mut gap = None;
+    let mut gaps = Vec::new();
     let caught_up = async {
         while !output_of(&seen).contains("echo: three") {
             match lagging.next().await.unwrap() {
@@ -310,10 +310,11 @@ async fn catch_up_after_pruning(ring: usize) -> (Vec<EventRecord>, Option<(Event
                 Err(vessel_client::StreamError::Missing {
                     expected,
                     resumed_at,
-                }) => {
-                    assert!(gap.is_none(), "a second gap");
-                    gap = Some((expected, resumed_at));
-                }
+                }) => gaps.push(Gap {
+                    expected,
+                    resumed_at,
+                    at: seen.len(),
+                }),
                 Err(error) => panic!("{error}"),
             }
         }
@@ -326,15 +327,48 @@ async fn catch_up_after_pruning(ring: usize) -> (Vec<EventRecord>, Option<(Event
     client.kill(id).await.unwrap();
     drop((lagging, watcher, slow, client));
     node.stop().await.unwrap();
-    (seen, gap)
+    (seen, gaps)
+}
+
+/// A gap a follower reported: records `expected..resumed_at` are gone, and
+/// it came after the follower's first `at` records.
+#[derive(Debug)]
+struct Gap {
+    expected: EventSeq,
+    resumed_at: EventSeq,
+    at: usize,
+}
+
+/// Read `watcher` until its output holds `needle`, accepting reported
+/// gaps.
+///
+/// The watcher only tells the test when output is done, and it lives under
+/// the same retention as the follower under test: with a ring of four and
+/// the store pruned to one record, it is told records are missing whenever
+/// it falls four behind. That happens under load in two ways: the start-up
+/// output (two status records, the `size` line, the prompt) outruns the
+/// ring before the watcher subscribes from zero (`Missing { expected: 0,
+/// resumed_at: 2 }`, reproduced with 12 copies in parallel), or a burst of
+/// echoes outruns its forwarder. Neither hides what it waits for: the
+/// prompt and "echo: three" are each among the newest two records when
+/// they appear, and the ring keeps the newest four.
+async fn watch_until(watcher: &mut SessionStream, seen: &mut Vec<EventRecord>, needle: &str) {
+    while !output_of(seen).contains(needle) {
+        match watcher.next().await {
+            Some(Ok(record)) => seen.push(record),
+            Some(Err(vessel_client::StreamError::Missing { .. })) => {}
+            Some(Err(error)) => panic!("{error}; before {needle:?}"),
+            None => panic!("the watcher ended before {needle:?}"),
+        }
+    }
 }
 
 /// The ring holds the whole log: the follower gets every record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_lagging_follower_catches_up_from_the_ring_when_the_store_was_pruned() {
     within(async {
-        let (seen, gap) = catch_up_after_pruning(256).await;
-        assert_eq!(gap, None);
+        let (seen, gaps) = catch_up_after_pruning(256).await;
+        assert!(gaps.is_empty(), "{gaps:?}");
         let expected: Vec<u64> = (0..u64::try_from(seen.len()).unwrap()).collect();
         assert_eq!(seqs(&seen), expected);
     })
@@ -346,27 +380,37 @@ async fn a_lagging_follower_catches_up_from_the_ring_when_the_store_was_pruned()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_lagging_follower_skips_only_what_neither_store_nor_ring_has() {
     within(async {
-        let (seen, gap) = catch_up_after_pruning(4).await;
-        let Some((expected, resumed_at)) = gap else {
+        let (seen, gaps) = catch_up_after_pruning(4).await;
+        // Under load the follower may subscribe only after the start-up
+        // output (two status records, the size line, the prompt) has left
+        // both the ring and the store: then it reports that gap first,
+        // from record 0. The gap under test is the last one, from lagging.
+        let Some(lag) = gaps.last() else {
             // Retention had not pruned yet when the follower read: the store
             // still had everything, and so did the follower.
             let all: Vec<u64> = (0..u64::try_from(seen.len()).unwrap()).collect();
             assert_eq!(seqs(&seen), all);
             return;
         };
+        match gaps.as_slice() {
+            [_lag] => {}
+            [start, _lag] => assert_eq!((start.expected, start.at), (EventSeq::ZERO, 0)),
+            more => panic!("more gaps than the start and the lag: {more:?}"),
+        }
         // The store kept one record; the ring four. "echo: three" is at most
         // one record from the end (only "> " follows it), so a gap that ends
         // at the ring's oldest record leaves at least two records after it.
+        let after = &seen[lag.at..];
         assert!(
-            seen.len() > 2,
+            after.len() >= 2,
             "the gap ran to the store's last record, past the ring: {:?}",
             seqs(&seen)
         );
-        assert_eq!(seqs(&seen[..1]), [expected.get().checked_sub(1).unwrap()]);
-        let after: Vec<u64> = (resumed_at.get()..)
-            .take(seen.len().checked_sub(1).unwrap())
-            .collect();
-        assert_eq!(seqs(&seen[1..]), after);
+        let resumed: Vec<u64> = (lag.resumed_at.get()..).take(after.len()).collect();
+        assert_eq!(seqs(after), resumed);
+        if let Some(before) = lag.at.checked_sub(1).and_then(|last| seen.get(last)) {
+            assert_eq!(before.seq.get(), lag.expected.get().checked_sub(1).unwrap());
+        }
     })
     .await;
 }

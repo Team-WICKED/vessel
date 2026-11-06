@@ -15,6 +15,7 @@ mod error;
 mod io;
 mod log;
 mod nodes;
+mod pair;
 mod remote;
 mod render;
 mod selector;

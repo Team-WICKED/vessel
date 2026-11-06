@@ -6,7 +6,8 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
-license = "UNLICENSED"
+license = "LicenseRef-PolyForm-Strict-1.0.0"
+license-file = "LICENSE.md"
 repository = "https://github.com/Team-WICKED/vessel"
 
 [workspace.lints.rust]
@@ -163,7 +164,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 which = "7"
-# Wipes the node's secret key from memory when it is dropped (vessel-secure).
+# Wipes the node's secret key from memory when it is dropped: the key pair
+# (vessel-secure) and the bytes read from `node.key` (vessel-store).
 zeroize = "1"
 
 # SHA-256 over a `vesseld` build (vessel-remote: its `-dev-<hash>` name)

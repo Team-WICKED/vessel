@@ -37,7 +37,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`), SQLite event log, retention, restart recovery. | proto |
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3). | proto, rpc, harness, session, store, secure, relay |
-| `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections (milestone 3). | proto, rpc, secure |
+| `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
@@ -164,7 +164,8 @@ they started.
     stale, with the holder's pid, binary and version in `vesseld.owner`),
     the `StartLock` racing proxies share, and the `bin/`, `logs/` and
     socket paths. Milestone 3 (Track P): `node.key` (the node's secret key,
-    32 bytes, 0600, created on first start and never replaced), and the
+    32 bytes, 0600, created on first start and never replaced; its bytes
+    are wiped from memory when dropped), and the
     `devices` table (schema version 2) holding each paired device with only
     the SHA-256 of its credential, compared in constant time; a revoked
     device stays as a tombstone.
@@ -181,18 +182,31 @@ they started.
     (`<config_dir>/vessel/nodes.toml`, a project's `.vessel/config.toml`
     that may only pick one of the user's nodes, `resolve` for `--node`;
     edited with `toml_edit`, keeping comments).
-    Milestone 3 (Track P, in progress): a third kind of book entry, a
-    paired node (`key`, `relay`, `direct`, `credential = { file }`; exactly
-    one of `ssh`, `url` and `key` per node, and a `key` node needs a
-    credential and a route), as `NodeAddress::Secure(SecureTarget)`;
+    Milestone 3 (Track P): a third kind of book entry, a paired node
+    (`key`, `relay`, `direct`, `credential = { file }`; exactly one of
+    `ssh`, `url` and `key` per node, and a `key` node needs a credential
+    and a route), as `NodeAddress::Secure(SecureTarget)`;
     `DeviceCredential` files (`<config_dir>/vessel/credentials/<node
-    id>.secret`, directory 0700, file 0600, replaced atomically); and
-    `pairing::pair`/`authenticate`, the device preamble over any frame
-    transport, with typed refusals that say whether retrying can help;
-    `secure::open`/`pair`, the handshake to the pinned key, the preamble
-    and `hello` over any `vessel-secure` carrier, with errors that say
-    whether retrying can help. The connector that dials routes comes with
-    `vessel-relay`.
+    id>.secret`: the node id and key from the pairing link, the device
+    id and secret; directory 0700, file 0600, replaced atomically through
+    a randomly named temporary file), bound to their node: `check` refuses
+    another key or id before anything is dialled, so a book entry naming
+    someone else's key cannot draw the secret out; `pairing::pair`
+    (checks that the node pinned is the link's) and `authenticate`, the
+    device preamble over any frame transport. `secure::SecureConnector`
+    is the paired node's `Connector`: direct routes first (3 s dial
+    timeout), then relays (10 s), each followed by the handshake to the
+    pinned key, the preamble and `hello`. Before the handshake completes
+    a failure is the route's, and the next route is tried; after it, the
+    node's answer holds for every route, so a refusal ends the search.
+    `4401` (a wrong key), a refused `Revoked` or `UnknownDevice`, and
+    tampering are final; a network failure, `4404`, `4408` and `4429`
+    are transient; all routes failed is final if any failure was. Carriers
+    come from a `Dialer`: `WsDialer` (`vessel_relay::connect` to a direct
+    route's `/secure`, `vessel_relay::dial` through a relay, close codes
+    through `node_close`/`relay_close`, TLS from the system roots), or
+    in-memory ones in tests. `pair_over` pairs over the link's routes and
+    stops once a channel is up.
   - `vessel-remote` (milestone 2, Track C): `ssh` (the system
     client with fixed options, `ControlMaster` sharing on Unix, commands
     built from fixed words and single-quoted values, the last 64 stderr
@@ -248,15 +262,21 @@ they started.
     in memory, by hash, at most a day, at most 64 waiting), `device.list`,
     `device.revoke` (closes the device's open connections: each device
     connection has its own RPC server whose shutdown token is registered
-    under the device). `SecureGateway::accept` answers the Noise handshake
-    with the node's key pair (`vessel-secure`, from `node.key`, which is
-    created on start), then runs the device preamble
-    (`devices::preamble`) and the protocol; a failed handshake goes back
-    to the caller, which closes with 4401. `NodeInfo.public_key` carries
-    the public key. `/secure` and relay data connections reach the gateway
-    once `vessel-relay` brings the websocket carrier. `--relay`,
-    `--relay-token-file` (checked at start) and `--public` feed pairing
-    links.
+    under the device; pairing registers the connection before it stores
+    the device). `NodeService`'s calls are inherent methods, so only
+    `Guarded` can be served. `SecureGateway::accept` answers the Noise
+    handshake with the node's key pair (`vessel-secure`, from `node.key`,
+    which is created on start) through `vessel_relay::respond`, which
+    closes with 4401 when it fails, then runs the device preamble
+    (`devices::preamble`) and the protocol; at most 64 channels may be in
+    their handshake or preamble at once, and their frames are limited to
+    64 KiB until the preamble is answered. `NodeInfo.public_key` carries the
+    public key. Carriers arrive from `/secure` on the node's listener (an
+    `AxumCarrier`, messages capped at one record) and from one `NodeLink`
+    per `--relay` (registering with `--relay-token-file`'s token, TLS for
+    `wss://` from the system roots; `Node::relay_links` reports their
+    state). `--public` adds direct routes to pairing links. Device labels
+    lose control and invisible formatting characters.
   - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
     `sessions`, `run`, `attach`, `send`, `log`, `kill`; sessions named by
     id prefix; terminal attach in raw mode with `Ctrl-]` to detach, also
@@ -293,14 +313,20 @@ they started.
     `VESSEL_SSH` (the `ssh` program) and `VESSEL_GH` (the GitHub CLI);
     tests set all three so they never touch the user's book, the real
     `ssh`, or GitHub (the README lists them).
-    Milestone 3 (Track P, in progress): `vessel node pair [--label]
-    [--ttl 10m]` (the link alone on stdout, a QR code from `qrcode` 0.14
-    when stdout is a terminal, instructions on stderr), `vessel node
-    devices` and `vessel node devices revoke ID-PREFIX`, over any
-    connection with the `admin` scope; `nodes show` for a paired node, and
-    `node status`, show the key's fingerprint. `nodes add --pair` and
-    connecting to paired nodes wait for `SecureConnector`, which dials the
-    routes with `vessel-relay`.
+    Milestone 3 (Track P): `vessel node pair [--label] [--ttl 10m]` (the
+    link alone on stdout, a QR code from `qrcode` 0.14 when stdout is a
+    terminal, instructions on stderr), `vessel node devices` and `vessel
+    node devices revoke ID-PREFIX`, over any connection with the `admin`
+    scope; `nodes show` for a paired node, and `node status`, show the
+    key's fingerprint. `vessel nodes add NAME --pair` reads the link from
+    standard input only (argv is visible to other users and kept in shell
+    history, so `--pair LINK` is refused as exposed), shows the node id,
+    key fingerprint, routes and expiry, confirms at a terminal (`--yes`
+    otherwise), pairs, and writes the credential and then the book entry.
+    Every command reaches a paired node by name through
+    `Pinned<SecureConnector<WsDialer>>`, and an attach resumes over the
+    routes as it does over SSH. Tested end to end through an in-process
+    relay (`tests/cli/devices.rs`).
 - Milestone 3, Track S (in progress, `backend/m3-secure`):
   - `vessel-secure` (2026-11-06): `initiate`/`respond` run Noise
     `NK_25519_ChaChaPoly_SHA256` (prologue `vessel/secure/1`, 48-byte

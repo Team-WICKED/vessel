@@ -7,10 +7,18 @@
 //!   not end up where the node book does (the book is edited by hand and
 //!   may be shared between machines).
 //! - Choice: `<config_dir>/vessel/credentials/<node id>.secret`, a small
-//!   TOML file (`device`, `secret`), owner-only on Unix (directory 0700,
-//!   file 0600). The book points to it (`credential = { file = ... }`).
-//!   Named by node id, so pairing the same node again replaces it.
-//! - Written under a temporary name and renamed into place, so a crash
+//!   TOML file (`node`, `key`, `device`, `secret`), owner-only on Unix
+//!   (directory 0700, file 0600). The book points to it (`credential = {
+//!   file = ... }`). Named by node id, so pairing the same node again
+//!   replaces it.
+//! - Bound to its node: the file names the node's id and key from the
+//!   pairing link, and nothing sends the secret to any other key or id
+//!   ([`DeviceCredential::check`], before a dial). The book is shared and
+//!   edited by hand, so an entry may name someone else's key and relay
+//!   while pointing at this file; without the binding the handshake to
+//!   that key would succeed and the secret would go to its holder.
+//! - Written under a temporary name (random, so a stale file from a
+//!   crashed run cannot collide) and renamed into place, so a crash
 //!   leaves the old credential or the new one, never half of one.
 //! - Windows: the files inherit the user profile's access control, which
 //!   keeps other users out; no extra ACL code.
@@ -22,7 +30,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use vessel_proto::{DeviceId, DeviceSecret, NodeId};
+use vessel_proto::{DeviceId, DeviceSecret, NodeId, NodePublicKey};
 
 /// Where a paired node's device credential is kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +55,10 @@ impl CredentialSource {
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceCredential {
+    /// The node it was issued by (the pairing link's id).
+    pub node: NodeId,
+    /// That node's key (the pairing link's): the only key it is sent to.
+    pub key: NodePublicKey,
     /// The device, as the node knows it.
     pub device: DeviceId,
     /// Its secret.
@@ -56,6 +68,7 @@ pub struct DeviceCredential {
 impl fmt::Debug for DeviceCredential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeviceCredential")
+            .field("node", &self.node)
             .field("device", &self.device)
             .finish_non_exhaustive()
     }
@@ -83,7 +96,56 @@ pub enum CredentialError {
     },
 }
 
+/// A credential that belongs to another node than the one it would be sent
+/// to. Never sent; final (pair this node, or fix the book).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CredentialMismatch {
+    /// The node's key is not the credential's.
+    #[error(
+        "the credential is for the node with key {credential}, not {target}; it is not sent \
+         (pair this node, or fix its entry in the book)"
+    )]
+    Key {
+        /// The key the credential belongs to.
+        credential: NodePublicKey,
+        /// The key it would have gone to.
+        target: NodePublicKey,
+    },
+    /// The node's id is not the credential's.
+    #[error(
+        "the credential is for node {credential}, not {pinned}; it is not sent (pair this \
+         node, or fix its entry in the book)"
+    )]
+    Node {
+        /// The node the credential belongs to.
+        credential: NodeId,
+        /// The node it would have gone to.
+        pinned: NodeId,
+    },
+}
+
 impl DeviceCredential {
+    /// Whether this credential may be sent to the node with `key` and id
+    /// `node`: only to the node that issued it.
+    ///
+    /// # Errors
+    /// The key or the id is another node's.
+    pub fn check(&self, key: &NodePublicKey, node: NodeId) -> Result<(), CredentialMismatch> {
+        if self.key != *key {
+            return Err(CredentialMismatch::Key {
+                credential: self.key,
+                target: *key,
+            });
+        }
+        if self.node != node {
+            return Err(CredentialMismatch::Node {
+                credential: self.node,
+                pinned: node,
+            });
+        }
+        Ok(())
+    }
+
     /// Where pairing puts the credential for `node`, under a configuration
     /// directory (`dirs::config_dir()` in the CLI).
     #[must_use]
@@ -122,16 +184,12 @@ impl DeviceCredential {
         if let Some(dir) = path.parent() {
             private_dir(dir).map_err(io)?;
         }
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+        let temporary = temporary_name(path).map_err(io)?;
         let text = format!(
             "# A Vessel device credential. Keep it secret; to move this device,\n\
              # pair it again, and revoke it on the node if it is lost.\n\
-             device = \"{}\"\nsecret = \"{}\"\n",
-            self.device, self.secret
+             node = \"{}\"\nkey = \"{}\"\ndevice = \"{}\"\nsecret = \"{}\"\n",
+            self.node, self.key, self.device, self.secret
         );
         let written = new_private_file(&temporary)
             .and_then(|mut file| {
@@ -144,6 +202,17 @@ impl DeviceCredential {
         }
         written.map_err(io)
     }
+}
+
+/// `.<name>.<random>.tmp` beside `path`.
+fn temporary_name(path: &Path) -> io::Result<PathBuf> {
+    let mut suffix = [0_u8; 8];
+    getrandom::fill(&mut suffix).map_err(io::Error::other)?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(path.with_file_name(format!(".{name}.{:016x}.tmp", u64::from_le_bytes(suffix))))
 }
 
 #[cfg(unix)]
@@ -190,7 +259,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let node = NodeId::random();
         let path = DeviceCredential::path_in(temp.path(), node);
+        let key = NodePublicKey::from_bytes([3; 32]);
         let credential = DeviceCredential {
+            node,
+            key,
             device: DeviceId::random(),
             secret: DeviceSecret::from_bytes([8; 32]),
         };
@@ -199,6 +271,8 @@ mod tests {
         assert!(!format!("{credential:?}").contains(&credential.secret.to_string()));
 
         let replaced = DeviceCredential {
+            node,
+            key,
             device: DeviceId::random(),
             secret: DeviceSecret::from_bytes([9; 32]),
         };
@@ -216,6 +290,32 @@ mod tests {
         assert!(matches!(
             DeviceCredential::read(&path),
             Err(CredentialError::Invalid { .. })
+        ));
+        let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
+        assert_eq!(leftovers, 1, "no temporary file is left behind");
+    }
+
+    /// A book entry can name any key and relay while pointing at this
+    /// file; the credential still only goes to the node that issued it.
+    #[test]
+    fn a_credential_is_only_for_the_node_that_issued_it() {
+        let node = NodeId::random();
+        let key = NodePublicKey::from_bytes([3; 32]);
+        let credential = DeviceCredential {
+            node,
+            key,
+            device: DeviceId::random(),
+            secret: DeviceSecret::from_bytes([8; 32]),
+        };
+        assert!(credential.check(&key, node).is_ok());
+        let attacker = NodePublicKey::from_bytes([4; 32]);
+        assert!(matches!(
+            credential.check(&attacker, node),
+            Err(CredentialMismatch::Key { .. })
+        ));
+        assert!(matches!(
+            credential.check(&key, NodeId::random()),
+            Err(CredentialMismatch::Node { .. })
         ));
     }
 }

@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use vessel_proto::{
-    DeviceId, DeviceSecret, InvitationSecret, NodeInfo, Preamble, PreambleReply, RefusalReason,
+    DeviceId, DeviceSecret, NodeId, NodeInfo, NodePublicKey, PairingOffer, Preamble, PreambleReply,
+    RefusalReason,
 };
 use vessel_rpc::FrameTransport;
 
@@ -56,6 +57,10 @@ pub enum PreambleError {
     /// The channel failed.
     #[error("the connection failed: {0}")]
     Transport(String),
+    /// The node that paired the device is not the one the link names (its
+    /// id, or the key in its `NodeInfo`). Nothing is pinned.
+    #[error("the node that answered is not the one in the pairing link: {0}")]
+    OtherNode(String),
 }
 
 impl PreambleError {
@@ -70,6 +75,17 @@ impl PreambleError {
                 | RefusalReason::InvalidInvitation => true,
                 RefusalReason::Unavailable => false,
             },
+            Self::OtherNode(_) => true,
+            Self::Closed | Self::Timeout | Self::Protocol(_) | Self::Transport(_) => false,
+        }
+    }
+
+    /// Whether the node answered (with a refusal), as opposed to the
+    /// channel failing or the node not answering properly.
+    #[must_use]
+    pub const fn is_answer(&self) -> bool {
+        match self {
+            Self::Refused(_) | Self::OtherNode(_) => true,
             Self::Closed | Self::Timeout | Self::Protocol(_) | Self::Transport(_) => false,
         }
     }
@@ -93,18 +109,24 @@ const fn refusal(reason: RefusalReason) -> &'static str {
     }
 }
 
-/// Redeem `invite` as a device called `device_name`. On success the channel
-/// is returned for `hello`, and the result holds the new credential.
+/// Redeem `offer`'s invitation as a device called `device_name`. On
+/// success the channel is returned for `hello`, and the result holds the
+/// new credential, bound to the link's node id and key.
+///
+/// The node that answers must be the link's: the caller ran the handshake
+/// to `offer.key`, and the `NodeInfo` it sends back must carry the link's
+/// id and key, since that id is what the book pins.
 ///
 /// # Errors
-/// The node refused, or the channel failed or timed out.
+/// The node refused, answered as another node, or the channel failed or
+/// timed out.
 pub async fn pair<T: FrameTransport>(
     mut channel: T,
-    invite: &InvitationSecret,
+    offer: &PairingOffer,
     device_name: &str,
 ) -> Result<(Paired, T), PreambleError> {
     let request = Preamble::PairRequest {
-        invite: invite.clone(),
+        invite: offer.invite.clone(),
         device_name: device_name.to_owned(),
     };
     match exchange(&mut channel, &request).await? {
@@ -112,13 +134,27 @@ pub async fn pair<T: FrameTransport>(
             device,
             secret,
             node,
-        } => Ok((
-            Paired {
-                node: *node,
-                credential: DeviceCredential { device, secret },
-            },
-            channel,
-        )),
+        } => {
+            if node.id != offer.node {
+                return Err(PreambleError::OtherNode(format!(
+                    "node {} answered a link for {}",
+                    node.id, offer.node
+                )));
+            }
+            if node.public_key != Some(offer.key) {
+                return Err(PreambleError::OtherNode(
+                    "its description names another key than the link".to_owned(),
+                ));
+            }
+            let credential = credential(offer.node, offer.key, device, secret);
+            Ok((
+                Paired {
+                    node: *node,
+                    credential,
+                },
+                channel,
+            ))
+        }
         PreambleReply::Refused { reason } => Err(PreambleError::Refused(reason)),
         PreambleReply::Authenticated { .. } => Err(PreambleError::Protocol(
             "`authenticated` in answer to a pairing request".to_owned(),
@@ -169,11 +205,21 @@ async fn exchange<T: FrameTransport>(
     serde_json::from_str(&answer).map_err(|error| PreambleError::Protocol(error.to_string()))
 }
 
-/// A device's credential and id, as [`authenticate`] needs them; for
-/// callers that hold the parts.
+/// A device's credential for the node `node` with `key`; for callers that
+/// hold the parts.
 #[must_use]
-pub const fn credential(device: DeviceId, secret: DeviceSecret) -> DeviceCredential {
-    DeviceCredential { device, secret }
+pub const fn credential(
+    node: NodeId,
+    key: NodePublicKey,
+    device: DeviceId,
+    secret: DeviceSecret,
+) -> DeviceCredential {
+    DeviceCredential {
+        node,
+        key,
+        device,
+        secret,
+    }
 }
 
 #[cfg(test)]
@@ -198,7 +244,12 @@ mod tests {
 
     #[tokio::test]
     async fn refusals_are_typed_and_say_whether_to_retry() {
-        let credential = credential(DeviceId::random(), DeviceSecret::from_bytes([1; 32]));
+        let credential = credential(
+            NodeId::random(),
+            NodePublicKey::from_bytes([3; 32]),
+            DeviceId::random(),
+            DeviceSecret::from_bytes([1; 32]),
+        );
         for (reason, final_) in [
             (RefusalReason::Revoked, true),
             (RefusalReason::UnknownDevice, true),
@@ -224,5 +275,58 @@ mod tests {
                 .unwrap_err()
                 .is_final()
         );
+    }
+
+    fn info(id: NodeId, key: Option<NodePublicKey>) -> NodeInfo {
+        NodeInfo {
+            id,
+            name: "box".to_owned(),
+            hostname: "box".to_owned(),
+            os: "linux".to_owned(),
+            arch: "x86_64".to_owned(),
+            version: "0".to_owned(),
+            protocol: vessel_proto::ProtocolRange::CURRENT,
+            started_at: chrono::DateTime::UNIX_EPOCH,
+            state: vessel_proto::NodeState::Serving,
+            public_key: key,
+        }
+    }
+
+    /// The credential is bound to the link's node, and a node that
+    /// describes itself as another is not pinned.
+    #[tokio::test]
+    async fn pairing_pins_only_the_node_the_link_names() {
+        let offer = PairingOffer {
+            v: vessel_proto::OfferVersion,
+            node: NodeId::random(),
+            key: NodePublicKey::from_bytes([5; 32]),
+            relays: Vec::new(),
+            direct: Vec::new(),
+            invite: vessel_proto::InvitationSecret::from_bytes([6; 16]),
+            expires: chrono::DateTime::UNIX_EPOCH,
+        };
+        let paired = |node: NodeInfo| PreambleReply::Paired {
+            device: DeviceId::random(),
+            secret: DeviceSecret::from_bytes([1; 32]),
+            node: Box::new(node),
+        };
+
+        let reply = paired(info(offer.node, Some(offer.key)));
+        let (done, _channel) = pair(node_answering(reply), &offer, "laptop").await.unwrap();
+        assert_eq!(done.credential.node, offer.node);
+        assert_eq!(done.credential.key, offer.key);
+
+        for (id, key) in [
+            (NodeId::random(), Some(offer.key)),
+            (offer.node, Some(NodePublicKey::from_bytes([7; 32]))),
+            (offer.node, None),
+        ] {
+            let reply = paired(info(id, key));
+            let error = pair(node_answering(reply), &offer, "laptop")
+                .await
+                .unwrap_err();
+            assert!(matches!(error, PreambleError::OtherNode(_)), "{error}");
+            assert!(error.is_final());
+        }
     }
 }

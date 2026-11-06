@@ -80,13 +80,30 @@ pub(crate) enum CliError {
          machine, and the next connection starts the new version"
     )]
     TooOldToStop(String),
-    /// A paired node, which needs the secure channel (milestone 3,
-    /// `vessel-secure`), in a build that cannot open one yet.
-    #[error(
-        "{node} is a paired node, reached over a secure channel; this build of vessel cannot \
-         open one yet"
-    )]
-    NoSecureChannel { node: String },
+    /// A paired node's book entry without its credential file.
+    #[error("{node} is a paired node without a `credential` file in the book; pair it again")]
+    NoCredential { node: String },
+    /// A paired node's credential file is unreadable or damaged.
+    #[error(transparent)]
+    Credential(vessel_client::CredentialError),
+    /// The credential file belongs to another node than the book entry.
+    #[error(transparent)]
+    CredentialMismatch(#[from] vessel_client::CredentialMismatch),
+    /// No route reached the paired node, or it refused this device.
+    #[error(transparent)]
+    Reach(vessel_client::secure::ReachError<vessel_client::secure::DialError>),
+    /// `wss://` routes, and no TLS roots to verify them.
+    #[error("cannot verify wss:// routes")]
+    Tls(#[source] vessel_client::secure::TlsError),
+    /// `--pair` and nothing on standard input.
+    #[error("no pairing link on standard input")]
+    NoPairingLink,
+    /// The pasted text is not a pairing link.
+    #[error(transparent)]
+    PairingLink(vessel_proto::LinkError),
+    /// The person did not confirm the node.
+    #[error("not paired")]
+    NotPaired,
     /// `vessel node devices revoke` with an id that matches no device.
     #[error("no device matches `{0}`; `vessel node devices` lists them")]
     NoSuchDevice(String),

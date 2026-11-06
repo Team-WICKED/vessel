@@ -12,16 +12,18 @@ use vessel_client::secure;
 use vessel_harness::Lookup;
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, HarnessKind,
-    InvitationSecret, InviteDevice, ListDevices, ListSessions, NodePublicKey, PairingOffer,
-    Preamble, PreambleReply, RefusalReason, RevokeDevice, Scope, SessionMode, SessionSpec,
-    TerminalSize,
+    InviteDevice, ListDevices, ListSessions, NodeClose, NodePublicKey, PairingOffer, Preamble,
+    PreambleReply, RefusalReason, RevokeDevice, Scope, SessionId, SessionInput, SessionMode,
+    SessionSpec, TerminalSize,
 };
+use vessel_relay::NodeCarrier;
 use vessel_rpc::memory::{self, MemoryTransport};
 use vessel_rpc::{CallError, ClientConfig, Connection};
 use vessel_secure::{MemoryCarrier, NodeKeypair, SecureChannel, SecureError, memory_pair};
 use vessel_store::{CredentialHash, DataDir};
 
 use super::*;
+use crate::secure::{MAX_UNADMITTED, NotServed};
 use crate::{Config, Node};
 
 async fn node() -> (TempDir, Node) {
@@ -78,8 +80,8 @@ fn invite(node: &Node, label: Option<&str>) -> PairingOffer {
 /// Pair through a fresh channel with the client's own `pair`; returns the
 /// device, its secret, and the protocol connection that follows on the same
 /// channel.
-async fn pair(node: &Node, invite: InvitationSecret) -> (DeviceId, DeviceSecret, Connection) {
-    let (paired, channel) = pairing::pair(channel(node), &invite, "laptop")
+async fn pair(node: &Node, offer: PairingOffer) -> (DeviceId, DeviceSecret, Connection) {
+    let (paired, channel) = pairing::pair(channel(node), &offer, "laptop")
         .await
         .unwrap();
     assert_eq!(paired.node.id, node.info().id);
@@ -99,7 +101,9 @@ async fn authenticate(
     device: DeviceId,
     secret: &DeviceSecret,
 ) -> Result<Connection, RefusalReason> {
-    let credential = pairing::credential(device, secret.clone());
+    let info = node.info();
+    let key = info.public_key.unwrap();
+    let credential = pairing::credential(info.id, key, device, secret.clone());
     match pairing::authenticate(channel(node), &credential).await {
         Ok(channel) => Ok(
             Connection::connect(channel, client(), &ClientConfig::default())
@@ -161,6 +165,73 @@ async fn the_node_key_comes_from_node_key_and_survives_a_restart() {
     again.stop().await.unwrap();
 }
 
+/// An in-memory carrier the node can close with a code, as it closes
+/// websockets: the code is recorded for the test to read.
+struct Closable {
+    carrier: MemoryCarrier,
+    closed: Arc<Mutex<Option<NodeClose>>>,
+}
+
+impl futures_util::Stream for Closable {
+    type Item = std::io::Result<bytes::Bytes>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_next(cx)
+    }
+}
+
+impl futures_util::Sink<bytes::Bytes> for Closable {
+    type Error = std::io::Error;
+
+    fn poll_ready(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_ready(cx)
+    }
+
+    fn start_send(self: std::pin::Pin<&mut Self>, item: bytes::Bytes) -> std::io::Result<()> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).start_send(item)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_flush(cx)
+    }
+
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_close(cx)
+    }
+}
+
+impl NodeCarrier for Closable {
+    async fn close_with(self, close: NodeClose) {
+        *self.closed.lock().unwrap() = Some(close);
+    }
+}
+
+/// The node's gateway answering on one end of a new in-memory pair; the
+/// other end, and how the node closed it (if it did).
+fn carrier(node: &Node) -> (MemoryCarrier, Arc<Mutex<Option<NodeClose>>>) {
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let closed = Arc::new(Mutex::new(None));
+    let node_end = Closable {
+        carrier: node_end,
+        closed: Arc::clone(&closed),
+    };
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    (client_end, closed)
+}
+
 /// A secure channel to the node: a carrier the gateway answers with the
 /// node's key, and the client's end after its handshake to `key`.
 async fn secure(
@@ -168,12 +239,22 @@ async fn secure(
     key: &NodePublicKey,
 ) -> (
     Result<SecureChannel<MemoryCarrier>, SecureError>,
-    tokio::task::JoinHandle<Result<(), SecureError>>,
+    tokio::task::JoinHandle<Result<(), NotServed>>,
+    Arc<Mutex<Option<NodeClose>>>,
 ) {
     let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let closed = Arc::new(Mutex::new(None));
+    let node_end = Closable {
+        carrier: node_end,
+        closed: Arc::clone(&closed),
+    };
     let gateway = node.secure.clone();
     let accepted = tokio::spawn(async move { gateway.accept(node_end).await });
-    (vessel_secure::initiate(client_end, key).await, accepted)
+    (
+        vessel_secure::initiate(client_end, key).await,
+        accepted,
+        closed,
+    )
 }
 
 /// Pairing and authenticating through the real Noise channel, as `/secure`
@@ -185,21 +266,18 @@ async fn devices_pair_and_authenticate_over_the_secure_channel() {
     let offer = invite(&node, None);
     let config = ClientConfig::default();
 
-    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
-    let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let (client_end, _closed) = carrier(&node);
     let (paired, connection) = secure::pair(client_end, &offer, "laptop", client(), &config)
         .await
         .unwrap();
     assert_eq!(paired.node.id, node.info().id);
     assert_eq!(connection.devices().await.unwrap().len(), 1);
 
-    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
-    let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let (client_end, _closed) = carrier(&node);
     let connection = secure::open(
         client_end,
         &offer.key,
+        offer.node,
         &paired.credential,
         client(),
         &config,
@@ -209,9 +287,7 @@ async fn devices_pair_and_authenticate_over_the_secure_channel() {
     assert!(connection.sessions().await.unwrap().is_empty());
 
     // Spent: the same link again is refused, and that is final.
-    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
-    let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let (client_end, _closed) = carrier(&node);
     let error = secure::pair(client_end, &offer, "again", client(), &config)
         .await
         .unwrap_err();
@@ -220,17 +296,18 @@ async fn devices_pair_and_authenticate_over_the_secure_channel() {
 }
 
 /// A client that pinned another key never gets a channel, and the node
-/// reports the failed handshake to its caller (which closes with 4401).
+/// closes the carrier with 4401 so the client knows it is final.
 #[tokio::test]
 async fn a_client_with_another_key_gets_no_channel() {
     let (_temp, node) = node().await;
     let other = *NodeKeypair::generate().unwrap().public();
-    let (channel, accepted) = secure(&node, &other).await;
+    let (channel, accepted, closed) = secure(&node, &other).await;
     assert!(channel.is_err());
     assert!(matches!(
         accepted.await.unwrap(),
-        Err(SecureError::Handshake(_))
+        Err(NotServed::Handshake(SecureError::Handshake(_)))
     ));
+    assert_eq!(*closed.lock().unwrap(), Some(NodeClose::HandshakeFailed));
     node.stop().await.unwrap();
 }
 
@@ -238,7 +315,7 @@ async fn a_client_with_another_key_gets_no_channel() {
 async fn pairing_creates_a_device_once_and_its_credential_authenticates_it() {
     let (_temp, node) = node().await;
     let offer = invite(&node, Some("work laptop"));
-    let (device, secret, paired) = pair(&node, offer.invite.clone()).await;
+    let (device, secret, paired) = pair(&node, offer.clone()).await;
 
     // The channel that paired goes on to serve the protocol, with every scope.
     let devices: Vec<DeviceInfo> = paired.call(ListDevices).await.unwrap();
@@ -288,8 +365,8 @@ async fn pairing_creates_a_device_once_and_its_credential_authenticates_it() {
 #[tokio::test]
 async fn revoking_a_device_closes_its_connections_and_refuses_it_after() {
     let (_temp, node) = node().await;
-    let (laptop, laptop_secret, laptop_paired) = pair(&node, invite(&node, None).invite).await;
-    let (_phone, _phone_secret, phone) = pair(&node, invite(&node, None).invite).await;
+    let (laptop, laptop_secret, laptop_paired) = pair(&node, invite(&node, None)).await;
+    let (_phone, _phone_secret, phone) = pair(&node, invite(&node, None)).await;
     let laptop_again = authenticate(&node, laptop, &laptop_secret).await.unwrap();
 
     // The phone revokes the laptop.
@@ -371,5 +448,108 @@ async fn a_channel_without_a_preamble_is_dropped_unanswered() {
     let channel = channel(&node);
     let refused = Connection::connect(channel, client(), &ClientConfig::default()).await;
     assert!(refused.is_err(), "{refused:?}");
+    node.stop().await.unwrap();
+}
+
+/// Anyone who reaches the node can open channels; at most
+/// `MAX_UNADMITTED` wait for their preamble, one more is dropped at once,
+/// and a slot comes back when a waiting one leaves.
+#[tokio::test]
+async fn channels_waiting_for_their_preamble_are_capped() {
+    let (_temp, node) = node().await;
+    let permits = || node.secure.unadmitted.available_permits();
+    let mut waiting: Vec<MemoryTransport> = (0..MAX_UNADMITTED).map(|_| channel(&node)).collect();
+    while permits() > 0 {
+        tokio::task::yield_now().await;
+    }
+    let mut extra = channel(&node);
+    assert!(extra.next().await.is_none(), "dropped at once");
+
+    drop(waiting.pop());
+    while permits() == 0 {
+        tokio::task::yield_now().await;
+    }
+    let (_device, _secret, connection) = pair(&node, invite(&node, None)).await;
+    assert_eq!(connection.call(ListDevices).await.unwrap().len(), 1);
+    drop(waiting);
+    node.stop().await.unwrap();
+}
+
+/// Pairing registers its connection under the new device's id before the
+/// device is stored (the order `DeviceAuth` uses), so a revocation that
+/// finds the device also finds the connection.
+#[tokio::test]
+async fn a_pairing_connection_is_registered_under_the_device_it_stores() {
+    let (_temp, node) = node().await;
+    let devices = &node.secure.devices;
+    let closing = CancellationToken::new();
+    let registration = devices.connect(DeviceId::random(), &closing);
+    let offer = invite(&node, None);
+    let (_secret, scopes) = devices
+        .pair(&registration, &offer.invite, "laptop")
+        .await
+        .unwrap();
+    assert_eq!(scopes, Scope::ALL.to_vec());
+    let stored = devices.list().await.unwrap();
+    assert_eq!(stored[0].id, registration.device());
+    devices.revoke(registration.device()).await.unwrap();
+    assert!(registration.closing().is_cancelled());
+    node.stop().await.unwrap();
+}
+
+#[test]
+fn labels_lose_control_and_invisible_formatting_characters() {
+    // A right-to-left override would show "laptop\u{202E}exe.txt" as
+    // "laptoptxt.exe"; zero-width and isolate characters hide in names.
+    assert_eq!(label("lap\u{202E}top\u{200B}\u{2066}\u{2069}"), "laptop");
+    assert_eq!(label("\u{FEFF}work\u{00AD}\u{E0041}\tlaptop"), "worklaptop");
+    assert_eq!(label("\u{200D}\u{2060} \n"), "device");
+    assert_eq!(label("Pixel 9 (José)"), "Pixel 9 (José)");
+}
+
+/// Until the preamble is answered a frame may be 64 KiB at most: a
+/// stranger's larger first frame closes the channel unanswered. Once
+/// admitted, a device may send the usual large frames.
+#[tokio::test]
+async fn frames_are_small_until_the_device_is_admitted() {
+    let (_temp, node) = node().await;
+    let key = node.info().public_key.unwrap();
+    let big = "x".repeat(100 * 1024);
+
+    // A valid pairing request, made large by its device name: without the
+    // limit the node would pair it.
+    let offer = invite(&node, None);
+    let oversized = serde_json::to_string(&Preamble::PairRequest {
+        invite: offer.invite.clone(),
+        device_name: big.clone(),
+    })
+    .unwrap();
+    let (client_end, _closed) = carrier(&node);
+    let mut stranger = vessel_secure::initiate(client_end, &key).await.unwrap();
+    stranger.send(oversized).await.unwrap();
+    assert!(
+        !matches!(stranger.next().await, Some(Ok(_))),
+        "the node read an oversized first frame"
+    );
+
+    // The invitation was never read, so it still pairs.
+    let (client_end, _closed) = carrier(&node);
+    let (_paired, connection) = secure::pair(
+        client_end,
+        &offer,
+        "laptop",
+        client(),
+        &ClientConfig::default(),
+    )
+    .await
+    .unwrap();
+    let input = SessionInput::Prompt {
+        content: vec![vessel_proto::ContentBlock::Text { text: big }],
+    };
+    let answered = connection.send(SessionId::random(), input).await;
+    assert!(
+        !matches!(answered, Err(CallError::Disconnected)),
+        "an admitted device's large frame was refused: {answered:?}"
+    );
     node.stop().await.unwrap();
 }

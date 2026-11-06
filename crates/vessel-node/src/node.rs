@@ -6,10 +6,13 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use vessel_proto::{NodeId, NodeInfo, NodePublicKey, RelayToken};
+use vessel_proto::{NodeId, NodeInfo, NodePublicKey, RelayToken, RouteUrl};
+use vessel_relay::{LinkState, NodeLink, TlsConfig, WsCarrier};
 use vessel_rpc::Server;
 use vessel_secure::NodeKeypair;
 use vessel_session::{RuntimeConfig, SessionRuntime};
@@ -22,7 +25,7 @@ use crate::guard::Guarded;
 use crate::identity;
 use crate::ipc::{self, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
-use crate::secure::SecureGateway;
+use crate::secure::{MAX_UNADMITTED, SecureGateway};
 use crate::server::{self, Gateway};
 use crate::service::NodeService;
 use crate::sessions::Sessions;
@@ -35,16 +38,12 @@ pub struct Node {
     address: Option<SocketAddr>,
     local: Endpoint,
     lifecycle: Lifecycle,
-    /// Serves paired devices over secure channels. Reached by `/secure` and
-    /// relay data connections once `vessel-secure` lands (plan, Track P).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "served by /secure and relay links with vessel-secure"
-        )
-    )]
+    /// The gateway `/secure` and the relay links serve; tests reach it
+    /// directly with in-memory carriers.
+    #[cfg(test)]
     pub(crate) secure: SecureGateway,
+    /// Each relay link's state.
+    relays: Vec<(RouteUrl, watch::Receiver<LinkState>)>,
     stop: CancellationToken,
     task: JoinHandle<Result<(), NodeError>>,
 }
@@ -70,7 +69,7 @@ impl Node {
     pub async fn start(config: Config) -> Result<Self, NodeError> {
         // Checked before anything starts, so a misconfigured relay is an
         // error at once rather than a node that is unreachable later.
-        let _relay_token = relay_token(&config)?;
+        let relaying = relaying(&config)?;
         let dir = config.data_dir.clone();
         let Prepared {
             id,
@@ -80,15 +79,7 @@ impl Node {
         } = tokio::task::spawn_blocking(move || prepare(&dir))
             .await
             .map_err(NodeError::Task)??;
-        let Opened { store, interrupted } = Store::open(&config.data_dir, config.store)
-            .await
-            .map_err(NodeError::Store)?;
-        if !interrupted.is_empty() {
-            tracing::info!(
-                sessions = interrupted.len(),
-                "sessions from the previous run are now interrupted"
-            );
-        }
+        let store = open_store(&config).await?;
 
         let Core {
             runtime,
@@ -115,12 +106,14 @@ impl Node {
 
         let secure = SecureGateway {
             keypair: Arc::new(keypair),
+            channel: vessel_secure::Config::default(),
             service,
             lifecycle: lifecycle.clone(),
             devices,
             config: config.rpc.clone(),
             closing: closing.clone(),
             connections: connections.clone(),
+            unadmitted: Arc::new(Semaphore::new(MAX_UNADMITTED)),
         };
         let teardown = Teardown {
             runtime,
@@ -136,10 +129,12 @@ impl Node {
                 server::router(Gateway {
                     rpc: Arc::clone(&rpc),
                     token: Arc::clone(&token),
+                    secure: secure.clone(),
                     connections: connections.clone(),
                 }),
             )
         });
+        let relays = link_relays(relaying, &config.relays, &secure, &connections, &stop);
         let gateway = LocalGateway {
             rpc,
             token,
@@ -162,7 +157,9 @@ impl Node {
             address,
             local: local_endpoint,
             lifecycle,
+            #[cfg(test)]
             secure,
+            relays,
             stop,
             task,
         })
@@ -181,6 +178,13 @@ impl Node {
     #[must_use]
     pub fn local_endpoint(&self) -> &Path {
         self.local.path()
+    }
+
+    /// Each configured relay and where the node's link to it stands
+    /// (connecting, registered, refused), to read or wait on.
+    #[must_use]
+    pub fn relay_links(&self) -> Vec<(RouteUrl, watch::Receiver<LinkState>)> {
+        self.relays.clone()
     }
 
     /// The node's current description.
@@ -206,6 +210,20 @@ impl Node {
         self.stop.cancel();
         self.task.await.map_err(NodeError::Task)?
     }
+}
+
+/// Open the event log, closing sessions a previous run left live.
+async fn open_store(config: &Config) -> Result<Store, NodeError> {
+    let Opened { store, interrupted } = Store::open(&config.data_dir, config.store)
+        .await
+        .map_err(NodeError::Store)?;
+    if !interrupted.is_empty() {
+        tracing::info!(
+            sessions = interrupted.len(),
+            "sessions from the previous run are now interrupted"
+        );
+    }
+    Ok(store)
 }
 
 /// The node's parts below its transports.
@@ -290,26 +308,85 @@ async fn bind(
     Ok((local, tcp))
 }
 
-/// The relays' registration token, read from `relay_token_file`; required
-/// once any relay is configured, and checked even when none is.
-fn relay_token(config: &Config) -> Result<Option<RelayToken>, NodeError> {
-    let Some(path) = &config.relay_token_file else {
-        if config.relays.is_empty() {
-            return Ok(None);
-        }
-        return Err(NodeError::RelayToken(
-            "a relay needs its registration token: pass --relay-token-file".to_owned(),
-        ));
+/// The relays' registration token and the TLS setup for them, if any
+/// relay is configured. The token file is read even without relays, so a
+/// broken one shows before it is needed.
+fn relaying(config: &Config) -> Result<Option<(RelayToken, TlsConfig)>, NodeError> {
+    let token = match &config.relay_token_file {
+        Some(path) => Some(vessel_relay::read_token_file(path)?),
+        None => None,
     };
-    let text = std::fs::read_to_string(path).map_err(|error| {
-        NodeError::RelayToken(format!(
-            "cannot read the relay token file {}: {error}",
-            path.display()
-        ))
-    })?;
-    RelayToken::new(&text).map(Some).map_err(|_empty| {
-        NodeError::RelayToken(format!("the relay token file {} is empty", path.display()))
-    })
+    if config.relays.is_empty() {
+        return Ok(None);
+    }
+    let token = token.ok_or(NodeError::NoRelayToken)?;
+    Ok(Some((token, relay_tls(&config.relays)?)))
+}
+
+/// TLS for `wss://` relays: the system's root certificates (plan, decision
+/// 1). Only a `wss://` relay needs them, so a machine without any can
+/// still use `ws://` relays.
+fn relay_tls(relays: &[RouteUrl]) -> Result<TlsConfig, NodeError> {
+    match TlsConfig::native_roots() {
+        Ok(tls) => Ok(tls),
+        Err(error)
+            if relays
+                .iter()
+                .any(|relay| relay.as_str().starts_with("wss://")) =>
+        {
+            Err(NodeError::RelayTls(error))
+        }
+        Err(error) => {
+            tracing::debug!(%error, "no TLS roots; only ws:// relays are configured");
+            TlsConfig::with_roots(rustls::RootCertStore::empty()).map_err(NodeError::RelayTls)
+        }
+    }
+}
+
+/// One [`NodeLink`] per relay, until the node stops. Each client a relay
+/// splices to the node arrives as a carrier and takes the same path as a
+/// direct `/secure` connection.
+///
+/// [Decision Log]
+/// - Lifetime: the links stop with `stop` (the node was asked to stop), so
+///   no new client arrives while the node shuts down; the connections they
+///   delivered close with the others. Link tasks and their connections
+///   are tracked with the node's connections, so shutdown waits for them.
+/// - Alternatives: one task registering with every relay (a slow relay
+///   would hold the others back); links started lazily on the first
+///   pairing (a node that was paired before a restart would be
+///   unreachable until then).
+fn link_relays(
+    relaying: Option<(RelayToken, TlsConfig)>,
+    relays: &[RouteUrl],
+    gateway: &SecureGateway,
+    connections: &TaskTracker,
+    stop: &CancellationToken,
+) -> Vec<(RouteUrl, watch::Receiver<LinkState>)> {
+    let Some((token, tls)) = relaying else {
+        return Vec::new();
+    };
+    let mut states = Vec::with_capacity(relays.len());
+    for relay in relays {
+        let link = NodeLink::new(
+            relay.clone(),
+            Arc::clone(&gateway.keypair),
+            token.clone(),
+            tls.clone(),
+        );
+        let gateway = gateway.clone();
+        let tracker = connections.clone();
+        let accept = move |carrier: WsCarrier| {
+            let gateway = gateway.clone();
+            drop(tracker.spawn(async move {
+                gateway.accept_logged(carrier, "relay").await;
+            }));
+        };
+        states.push((relay.clone(), link.state()));
+        tracing::info!(%relay, "linking to a relay");
+        drop(connections.spawn(link.run(accept, stop.clone())));
+    }
+    states
 }
 
 /// The blocking part of start-up: directory, identity, token, key, lock.

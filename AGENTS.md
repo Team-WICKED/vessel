@@ -18,16 +18,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-CI runs exactly these, but not on every push: hosted minutes are limited
-(macOS counts 10x, Windows 2x). Pull requests to `main` run Linux; Windows
-and macOS run only when the coordinator starts them at a milestone merge.
-So do not push to get a CI result and do not wait on CI: the local gate is
-the bar for a track branch. Code that only builds on Linux must be behind
-`cfg(unix)` with a working (or explicitly erroring) Windows path; where the
-crate allows it, also run `cargo clippy --target x86_64-pc-windows-gnu` and
-`--target x86_64-apple-darwin` locally (crates that build C, such as `ring`
-or bundled SQLite, need a cross C toolchain; say so in the report when you
-could not).
+CI runs exactly these on Linux, Windows and macOS for every push to
+`backend/**` (the repository is public, so hosted runners cost nothing).
+CI does not replace the local gate: run it before pushing, and report both.
+Code that only builds on Linux must be behind `cfg(unix)` with a working (or
+explicitly erroring) Windows path.
 
 ## 2. Types: no "any", no strings pretending to be types
 
@@ -185,3 +180,7 @@ ADR 0001 records why; `docs/plans/backend-m1.md` says who owns which crate.
   with messages that say why. Do not push, do not rewrite shared history.
 - Report: what you built, the three-command gate result, what you deferred
   and why, and any contract change you need.
+- The repository is public (ADR 0014): every commit, doc, test fixture and
+  CI log can be read by anyone. Never put credentials, customer data,
+  internal host names or addresses, or private repository paths in any of
+  them; describe the operator's setup in general terms instead.

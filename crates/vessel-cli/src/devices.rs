@@ -38,7 +38,8 @@ pub(crate) async fn pair(target: &Target, label: Option<String>, ttl: u32) -> Re
     }
     io::out(text.as_bytes()).await?;
     io::note(&format!(
-        "valid once, until {}; on the new device run:\n  vessel nodes add NAME --pair '<link>'\n",
+        "valid once, until {}; on the new device run\n  vessel nodes add NAME --pair\n\
+         and paste the link at its prompt (never put it on a command line)\n",
         invitation.expires.format("%Y-%m-%d %H:%M:%S UTC")
     ))
     .await?;
