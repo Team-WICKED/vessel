@@ -18,6 +18,13 @@
 //! - A carrier that ends between frames ends the stream cleanly; one that
 //!   ends inside a frame is an error, so a cut connection never delivers
 //!   half a frame.
+//! - The frame limit can change while the channel is open
+//!   ([`SecureChannel::set_max_frame`]): a node admits a client under a
+//!   small limit until it knows who the client is, so an unauthenticated
+//!   peer cannot make it buffer 16 MiB, then raises it. The limit is checked
+//!   where a frame is announced, so the change takes effect at the next
+//!   announcement; a frame already announced is bounded by its own length,
+//!   checked when it was announced, and finishes under that.
 
 use std::fmt;
 use std::pin::Pin;
@@ -58,6 +65,38 @@ impl<C> fmt::Debug for SecureChannel<C> {
             .field("read_ended", &self.read_ended)
             .field("broken", &self.broken)
             .finish_non_exhaustive()
+    }
+}
+
+impl<C> SecureChannel<C> {
+    /// The longest frame this channel takes or sends now.
+    #[must_use]
+    pub const fn max_frame(&self) -> u32 {
+        self.max_frame
+    }
+
+    /// Change the frame limit, in both directions, from the next frame
+    /// announcement on.
+    ///
+    /// - Receiving: the next `FIRST` chunk read is checked against
+    ///   `max_frame` before anything is buffered; over it, the channel
+    ///   closes with [`SecureError::TooLarge`]. Frames the peer sent but
+    ///   this end has not read yet are judged when they are read, so a
+    ///   limit raised after a first frame covers whatever the peer pipelined
+    ///   behind it.
+    /// - Sending: the next frame passed to `send` is refused over it
+    ///   (`TooLarge`, the channel stays open).
+    /// - A frame already announced, half received or half sent, is not
+    ///   affected: its length was checked against the limit in force when it
+    ///   was announced, it can never grow past that length, and it finishes
+    ///   normally. Lowering the limit under it therefore never fails it.
+    ///
+    /// For example, a node runs the device preamble under 64 KiB and raises
+    /// the limit to [`DEFAULT_MAX_FRAME`](crate::DEFAULT_MAX_FRAME) once the
+    /// client is admitted.
+    pub fn set_max_frame(&mut self, max_frame: u32) {
+        self.max_frame = max_frame;
+        self.reassembly.set_max_frame(max_frame);
     }
 }
 

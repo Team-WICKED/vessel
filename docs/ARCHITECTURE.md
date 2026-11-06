@@ -312,7 +312,9 @@ they started.
     each chunk rule), a seeded fuzz of the parser, 16 MiB frames, and a
     `vessel-rpc` connection over the channel. The cipher crates are
     optimised in dev builds (`Cargo.toml` explains why). `try_respond`
-    hands the carrier back after a failed handshake.
+    hands the carrier back after a failed handshake. `set_max_frame`
+    changes the frame limit from the next announcement on, so the node can
+    admit under 64 KiB and raise it after the preamble.
   - `vessel-relay` (2026-11-06): `serve` on plain HTTP behind a reverse
     proxy (`/v1/node`, `/v1/accept`, `/v1/connect`, `/health`), state in
     memory only. A node registers with the relay token (constant-time) and

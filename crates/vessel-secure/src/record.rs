@@ -128,6 +128,12 @@ impl Reassembly {
         }
     }
 
+    /// Check the next announced frame against `max_frame`. A frame already
+    /// announced keeps its own length as its bound.
+    pub(crate) fn set_max_frame(&mut self, max_frame: u32) {
+        self.max_frame = max_frame;
+    }
+
     /// Whether a frame is half received.
     pub(crate) fn in_frame(&self) -> bool {
         self.partial.is_some()
