@@ -249,22 +249,31 @@ fn missing_harness_and_bad_directory_are_errors() {
     let bin = TempDir::new();
     let lookup = Lookup::new([bin.path().to_path_buf()]);
     assert_eq!(
-        launch(&lookup, &terminal(HarnessKind::Gemini, &[], None)).unwrap_err(),
-        HarnessError::NotInstalled {
-            harness: HarnessKind::Gemini,
-            binary: "gemini",
-        }
+        format!(
+            "{:?}",
+            launch(&lookup, &terminal(HarnessKind::Gemini, &[], None)).unwrap_err()
+        ),
+        format!(
+            "{:?}",
+            HarnessError::NotInstalled {
+                harness: HarnessKind::Gemini,
+                binary: "gemini",
+            }
+        )
     );
 
     drop(install(bin.path(), HarnessKind::Gemini, Role::Terminal, &fake_tui()).unwrap());
     let nowhere = bin.path().join("no-such-dir");
     assert_eq!(
-        launch(
-            &lookup,
-            &terminal(HarnessKind::Gemini, &[], Some(nowhere.clone()))
-        )
-        .unwrap_err(),
-        HarnessError::NoSuchDirectory { cwd: nowhere }
+        format!(
+            "{:?}",
+            launch(
+                &lookup,
+                &terminal(HarnessKind::Gemini, &[], Some(nowhere.clone()))
+            )
+            .unwrap_err()
+        ),
+        format!("{:?}", HarnessError::NoSuchDirectory { cwd: nowhere })
     );
 }
 
@@ -313,10 +322,13 @@ fn relative_working_directories_are_refused() {
         )
         .unwrap_err();
         assert_eq!(
-            error,
-            HarnessError::RelativeDirectory {
-                cwd: PathBuf::from(relative)
-            }
+            format!("{error:?}"),
+            format!(
+                "{:?}",
+                HarnessError::RelativeDirectory {
+                    cwd: PathBuf::from(relative)
+                }
+            )
         );
     }
 }

@@ -93,7 +93,7 @@ impl SessionError {
             // The node resolves `spec.profile`; another profile is its bug.
             Self::Internal(_)
             | Self::Launch(
-                HarnessError::McpFile { .. }
+                HarnessError::McpFile(_)
                 | HarnessError::ProfileNotRequested { .. }
                 | HarnessError::NoMcpDirectory,
             ) => ErrorCode::Internal,

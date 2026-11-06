@@ -66,9 +66,9 @@ pub use home::{home, login_check};
 pub use launch::{Launch, launch};
 pub use layout::{HarnessLayout, layout};
 pub use lookup::Lookup;
-pub use mcp::{McpError, McpFile, WrittenMcpFile};
+pub use mcp::{EncodeProblem, McpError, McpFile, WrittenMcpFile};
 pub use profile::{
-    Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles, same_variable,
+    Position, Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles, same_variable,
 };
 pub use sessions::{
     LinkError, Linked, SessionFiles, SessionFilesError, link_session, session_files,

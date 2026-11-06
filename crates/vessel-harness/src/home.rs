@@ -110,6 +110,7 @@ mod tests {
         parse_profiles(text, Some(&absolute("home/u")))
             .unwrap()
             .get(&name.parse().unwrap())
+            .cloned()
             .unwrap()
     }
 
@@ -178,14 +179,17 @@ mod tests {
             "alt",
         );
         assert_eq!(
-            login_check(&lookup, &alt),
-            Err(HarnessError::NotInstalled {
-                harness: HarnessKind::ClaudeCode,
-                binary: "claude"
-            })
+            format!("{:?}", login_check(&lookup, &alt).unwrap_err()),
+            format!(
+                "{:?}",
+                HarnessError::NotInstalled {
+                    harness: HarnessKind::ClaudeCode,
+                    binary: "claude"
+                }
+            )
         );
         let gemini = Profile::default_for(HarnessKind::Gemini);
-        assert_eq!(login_check(&lookup, &gemini), Ok(None));
+        assert!(matches!(login_check(&lookup, &gemini), Ok(None)));
         drop(std::fs::remove_dir(&dir));
     }
 

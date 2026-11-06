@@ -72,7 +72,6 @@ impl NodeProfiles {
     pub(crate) fn list(&self, harness: Option<HarnessKind>) -> Vec<ProfileInfo> {
         self.snapshot()
             .all()
-            .iter()
             .filter(|profile| harness.is_none_or(|harness| profile.harness() == harness))
             .map(Profile::info)
             .collect()
@@ -92,7 +91,7 @@ impl NodeProfiles {
 
     /// The profile named `name`, a defined one or a harness's default.
     pub(crate) fn get(&self, name: &ProfileName) -> Option<Profile> {
-        self.snapshot().get(name)
+        self.snapshot().get(name).cloned()
     }
 
     fn snapshot(&self) -> Arc<Profiles> {

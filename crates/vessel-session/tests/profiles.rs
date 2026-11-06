@@ -145,7 +145,7 @@ mod support {
     }
 
     pub(super) fn named(profiles: &Profiles, name: &str) -> Profile {
-        profiles.get(&name.parse().unwrap()).unwrap()
+        profiles.get(&name.parse().unwrap()).cloned().unwrap()
     }
 
     pub(super) fn servers() -> ResolvedMcpServers {

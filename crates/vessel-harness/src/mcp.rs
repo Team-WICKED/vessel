@@ -77,13 +77,30 @@ pub enum McpError {
         name: EnvName,
     },
     /// A server's definition could not be encoded for the harness.
-    #[error("MCP server {server} cannot be written for this harness: {reason}")]
+    #[error("MCP server {server} cannot be written for this harness: {problem}")]
     Encode {
         /// The server.
         server: McpServerName,
         /// Why.
-        reason: String,
+        problem: EncodeProblem,
     },
+}
+
+/// Why a server could not be encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum EncodeProblem {
+    /// Its command is a path that is not valid UTF-8; the harness's
+    /// configuration is text.
+    #[error("its command is not valid UTF-8")]
+    CommandNotUtf8,
+    /// The configuration could not be serialised (only text and maps keyed
+    /// by text go in, so this does not happen).
+    #[error("its configuration could not be serialised")]
+    Unserialisable,
+    /// No variable name could be made for one of its headers (indexes only,
+    /// so this does not happen).
+    #[error("no variable name for one of its headers")]
+    HeaderVariable,
 }
 
 /// A harness's launch-time MCP form, before a file path is chosen.
@@ -184,6 +201,12 @@ impl WrittenMcpFile {
     }
 }
 
+/// Removing the file blocks, on whatever thread drops the guard (in the
+/// node, the session's actor on a runtime worker). It is one unlink of a
+/// small file in a local directory, once per session, which is cheaper
+/// than handing it to the blocking pool; and doing it here, not later,
+/// means the secrets in it go with the session even if the runtime is
+/// shutting down.
 impl Drop for WrittenMcpFile {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_file(&self.path)

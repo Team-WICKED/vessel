@@ -163,6 +163,7 @@ mod support {
         parse_profiles(PROFILES, Some(Path::new("/home/u")))
             .unwrap()
             .get(&name.parse().unwrap())
+            .cloned()
             .unwrap()
     }
 
@@ -366,13 +367,16 @@ fn codex_refuses_one_variable_with_two_values() {
     );
     let default = Profile::default_for(HarnessKind::Codex);
     assert_eq!(
-        launch(&lookup, &spec, &default, &two).unwrap_err(),
-        HarnessError::Mcp(shared())
+        format!("{:?}", launch(&lookup, &spec, &default, &two).unwrap_err()),
+        format!("{:?}", HarnessError::Mcp(shared()))
     );
     // The profile sets it to something else.
     assert_eq!(
-        launch(&lookup, &spec, &profile("codex-shares"), &servers()).unwrap_err(),
-        HarnessError::Mcp(shared())
+        format!(
+            "{:?}",
+            launch(&lookup, &spec, &profile("codex-shares"), &servers()).unwrap_err()
+        ),
+        format!("{:?}", HarnessError::Mcp(shared()))
     );
     // A server may not move Codex's home through Codex's environment.
     let homing = BTreeMap::from([(
@@ -387,10 +391,16 @@ fn codex_refuses_one_variable_with_two_values() {
         },
     )]);
     assert_eq!(
-        launch(&lookup, &spec, &default, &homing).unwrap_err(),
-        HarnessError::Mcp(McpError::ProtectedVariable {
-            name: "CODEX_HOME".parse().unwrap()
-        })
+        format!(
+            "{:?}",
+            launch(&lookup, &spec, &default, &homing).unwrap_err()
+        ),
+        format!(
+            "{:?}",
+            HarnessError::Mcp(McpError::ProtectedVariable {
+                name: "CODEX_HOME".parse().unwrap()
+            })
+        )
     );
     // Nor change what Codex inherits from the node (cargo sets this one
     // for the test process).
@@ -409,10 +419,16 @@ fn codex_refuses_one_variable_with_two_values() {
         )])
     };
     assert_eq!(
-        launch(&lookup, &spec, &default, &clashing("/elsewhere")).unwrap_err(),
-        HarnessError::Mcp(McpError::SharedVariable {
-            name: "CARGO_MANIFEST_DIR".parse().unwrap()
-        })
+        format!(
+            "{:?}",
+            launch(&lookup, &spec, &default, &clashing("/elsewhere")).unwrap_err()
+        ),
+        format!(
+            "{:?}",
+            HarnessError::Mcp(McpError::SharedVariable {
+                name: "CARGO_MANIFEST_DIR".parse().unwrap()
+            })
+        )
     );
     assert!(launch(&lookup, &spec, &default, &clashing(&inherited)).is_ok());
 }
@@ -483,12 +499,15 @@ fn another_harness_profile_is_refused() {
     )
     .unwrap_err();
     assert_eq!(
-        error,
-        HarnessError::ProfileMismatch {
-            profile: "codex-work".parse().unwrap(),
-            profile_harness: HarnessKind::Codex,
-            harness: HarnessKind::ClaudeCode,
-        }
+        format!("{error:?}"),
+        format!(
+            "{:?}",
+            HarnessError::ProfileMismatch {
+                profile: "codex-work".parse().unwrap(),
+                profile_harness: HarnessKind::Codex,
+                harness: HarnessKind::ClaudeCode,
+            }
+        )
     );
 }
 
@@ -518,7 +537,10 @@ fn login_checks_run_with_the_profile() {
         .unwrap()
         .unwrap();
     assert_eq!(check.args, ["login", "status"]);
-    assert_eq!(login_check(&lookup, &profile("gemini-plain")), Ok(None));
+    assert!(matches!(
+        login_check(&lookup, &profile("gemini-plain")),
+        Ok(None)
+    ));
 }
 
 #[test]
@@ -534,11 +556,17 @@ fn the_profile_must_be_the_one_the_spec_asks_for() {
 
     // No profile named: only the default will do.
     assert_eq!(
-        vessel_harness::launch(&lookup, &spec, &alt, &none, None).unwrap_err(),
-        HarnessError::ProfileNotRequested {
-            requested: None,
-            given: alt.name().clone(),
-        }
+        format!(
+            "{:?}",
+            vessel_harness::launch(&lookup, &spec, &alt, &none, None).unwrap_err()
+        ),
+        format!(
+            "{:?}",
+            HarnessError::ProfileNotRequested {
+                requested: None,
+                given: alt.name().clone(),
+            }
+        )
     );
     assert!(vessel_harness::launch(&lookup, &spec, &default, &none, None).is_ok());
     // The default named explicitly is the default.
@@ -548,11 +576,17 @@ fn the_profile_must_be_the_one_the_spec_asks_for() {
     let wants_alt = asking(spec, &alt);
     assert!(vessel_harness::launch(&lookup, &wants_alt, &alt, &none, None).is_ok());
     assert_eq!(
-        vessel_harness::launch(&lookup, &wants_alt, &default, &none, None).unwrap_err(),
-        HarnessError::ProfileNotRequested {
-            requested: Some(alt.name().clone()),
-            given: default.name().clone(),
-        }
+        format!(
+            "{:?}",
+            vessel_harness::launch(&lookup, &wants_alt, &default, &none, None).unwrap_err()
+        ),
+        format!(
+            "{:?}",
+            HarnessError::ProfileNotRequested {
+                requested: Some(alt.name().clone()),
+                given: default.name().clone(),
+            }
+        )
     );
 }
 
@@ -566,8 +600,11 @@ fn a_harness_that_needs_an_mcp_file_needs_a_directory() {
     let spec = terminal(HarnessKind::ClaudeCode, &[], bin.path());
     let default = Profile::default_for(HarnessKind::ClaudeCode);
     assert_eq!(
-        vessel_harness::launch(&lookup, &spec, &default, &servers(), None).unwrap_err(),
-        HarnessError::NoMcpDirectory
+        format!(
+            "{:?}",
+            vessel_harness::launch(&lookup, &spec, &default, &servers(), None).unwrap_err()
+        ),
+        format!("{:?}", HarnessError::NoMcpDirectory)
     );
     // Without servers, or for a harness without a file, none is needed.
     let none = ResolvedMcpServers::new();

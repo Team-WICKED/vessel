@@ -191,34 +191,44 @@ fn default_name(harness: HarnessKind) -> ProfileName {
 }
 
 /// The profiles of one node: every harness's default and those defined in
-/// `profiles.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// `profiles.toml`. The defaults are built once, with the set.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profiles {
+    defaults: Vec<Profile>,
     defined: BTreeMap<ProfileName, Profile>,
 }
 
+/// The default profiles only (no `profiles.toml`).
+impl Default for Profiles {
+    fn default() -> Self {
+        Self::with(BTreeMap::new())
+    }
+}
+
 impl Profiles {
-    /// The profile named `name`: a defined one, or a harness's default.
-    #[must_use]
-    pub fn get(&self, name: &ProfileName) -> Option<Profile> {
-        if let Some(profile) = self.defined.get(name) {
-            return Some(profile.clone());
+    fn with(defined: BTreeMap<ProfileName, Profile>) -> Self {
+        Self {
+            defaults: HarnessKind::ALL
+                .into_iter()
+                .map(Profile::default_for)
+                .collect(),
+            defined,
         }
-        HarnessKind::ALL
-            .into_iter()
-            .map(Profile::default_for)
-            .find(|profile| profile.name() == name)
+    }
+
+    /// The profile named `name`: a defined one, or a harness's default
+    /// (names do not overlap: a defined one may not take a harness's name).
+    #[must_use]
+    pub fn get(&self, name: &ProfileName) -> Option<&Profile> {
+        self.defined
+            .get(name)
+            .or_else(|| self.defaults.iter().find(|profile| profile.name() == name))
     }
 
     /// Every profile: the defaults (in harness order), then the defined
     /// ones by name.
-    #[must_use]
-    pub fn all(&self) -> Vec<Profile> {
-        HarnessKind::ALL
-            .into_iter()
-            .map(Profile::default_for)
-            .chain(self.defined.values().cloned())
-            .collect()
+    pub fn all(&self) -> impl Iterator<Item = &Profile> {
+        self.defaults.iter().chain(self.defined.values())
     }
 
     /// The profiles defined in the file, by name.
@@ -258,10 +268,10 @@ pub enum ProfilesError {
     /// Not TOML, or not the shape of `profiles.toml` (an unknown key, a
     /// missing `harness`, a value of the wrong type). The message names the
     /// key and the position, and never quotes the file.
-    #[error("profiles.toml, {position}: {message}")]
+    #[error("profiles.toml, {}: {message}", position.map_or_else(|| "unknown position".to_owned(), |at| at.to_string()))]
     Toml {
-        /// Line and column, `line 3, column 7`, or `unknown position`.
-        position: String,
+        /// Where, if the TOML library said.
+        position: Option<Position>,
         /// The TOML library's message.
         message: String,
     },
@@ -372,7 +382,7 @@ pub fn parse_profiles(text: &str, user_home: Option<&Path>) -> Result<Profiles, 
         let profile = profile(name, raw_profile, home).map_err(fail)?;
         let _new = defined.insert(profile.name.clone(), profile);
     }
-    Ok(Profiles { defined })
+    Ok(Profiles::with(defined))
 }
 
 /// One profile's checks, after its name.
@@ -495,18 +505,32 @@ fn without_values(message: &str) -> String {
     message.to_owned()
 }
 
-/// `line L, column C` of a byte offset, both from 1.
-fn position(text: &str, span: Option<std::ops::Range<usize>>) -> String {
-    let Some(before) = span.and_then(|span| text.get(..span.start)) else {
-        return "unknown position".to_owned();
-    };
+/// A place in `profiles.toml`; both count from 1, the column in
+/// characters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    /// The line.
+    pub line: usize,
+    /// The column.
+    pub column: usize,
+}
+
+impl fmt::Display for Position {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}, column {}", self.line, self.column)
+    }
+}
+
+/// The position of a byte offset.
+fn position(text: &str, span: Option<std::ops::Range<usize>>) -> Option<Position> {
+    let before = span.and_then(|span| text.get(..span.start))?;
     let line = before.matches('\n').count().saturating_add(1);
     let column = before
         .rsplit('\n')
         .next()
         .map_or(0, |line| line.chars().count())
         .saturating_add(1);
-    format!("line {line}, column {column}")
+    Some(Position { line, column })
 }
 
 #[cfg(test)]
@@ -534,6 +558,7 @@ mod tests {
         let x = parse_profiles(text, home())
             .unwrap()
             .get(&"x".parse().unwrap())
+            .cloned()
             .unwrap();
         let windows = cfg!(windows);
         assert_eq!(x.get(&var("CODEX_HOME")).is_some(), windows);
@@ -582,11 +607,7 @@ mod tests {
         assert!(!alt.is_default());
         let work = profiles.get(&"codex-work".parse().unwrap()).unwrap();
         assert_eq!(work.get(&var("CODEX_HOME")), Some("/home/u"));
-        let names: Vec<_> = profiles
-            .all()
-            .iter()
-            .map(|p| p.name().to_string())
-            .collect();
+        let names: Vec<_> = profiles.all().map(|p| p.name().to_string()).collect();
         assert_eq!(
             names,
             [
@@ -609,7 +630,7 @@ mod tests {
             assert_eq!(default.env().count(), 0);
             assert_eq!(default.unset().count(), 0);
             assert!(default.args().is_empty());
-            assert_eq!(profiles.get(default.name()), Some(default));
+            assert_eq!(profiles.get(default.name()), Some(&default));
         }
         assert_eq!(
             Profile::default_for(HarnessKind::ClaudeCode)
@@ -663,6 +684,16 @@ mod tests {
         let typed = "[profiles.x]\nharness = \"claude\"\nunset = \"HOME\"\n";
         let shown = parse_profiles(typed, home()).unwrap_err().to_string();
         assert!(shown.contains("line 3"), "{shown}");
+    }
+
+    #[test]
+    fn toml_errors_carry_a_typed_position() {
+        let error =
+            parse_profiles("[profiles.x]\nharness = \"claude\"\nenv = 3\n", home()).unwrap_err();
+        let ProfilesError::Toml { position, .. } = error else {
+            panic!("expected a TOML error");
+        };
+        assert_eq!(position, Some(Position { line: 3, column: 7 }));
     }
 
     /// Review finding: serde's messages quoted the value they found, and a
