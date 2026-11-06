@@ -11,6 +11,8 @@
 //!   process group) and starting the tasks below;
 //! - `driver`: the ACP connection and the session state machine
 //!   (handshake, prompt, cancel, permission round trip);
+//! - `transport`: the agent's stdio as the SDK's line transport, holding
+//!   lines back while the driver is behind (backpressure);
 //! - `handshake`: `initialize`, `session/new` or `session/load`, model;
 //! - `model`: picking the requested model among ACP config options;
 //! - `permissions`: pending permission requests, first answer wins;
@@ -44,6 +46,7 @@ mod output;
 mod permissions;
 mod process;
 mod stderr;
+mod transport;
 
 pub use error::{AgentError, Disconnect, InputError};
 pub use handshake::{AgentSetup, DEFAULT_HANDSHAKE_TIMEOUT};

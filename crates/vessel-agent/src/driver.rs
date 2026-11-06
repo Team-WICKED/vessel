@@ -22,10 +22,12 @@
 //!   for `session/load`, whose replayed history arrives before its
 //!   response: the handshake runs in a task, so the loop keeps draining the
 //!   replay while the handshake waits.
-//! - Backpressure: `inbound` and the outputs are bounded. When the consumer
-//!   stops reading, the loop stops, handlers wait, and the SDK stops reading
-//!   the agent's stdout. (The SDK itself queues internally without bounds;
-//!   that is outside this crate's control.)
+//! - Backpressure: `inbound` and the outputs are bounded, and the SDK reads
+//!   the agent's stdout through `transport`, which holds each update and
+//!   permission request back until this loop has taken the previous ones.
+//!   When the consumer stops reading, the loop stops, the transport stops
+//!   reading, and the agent blocks on its writes. (The SDK's own queues are
+//!   unbounded; `transport` is what bounds what reaches them.)
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -33,10 +35,9 @@ use std::time::Duration;
 
 use agent_client_protocol::v1::schema as acp;
 use agent_client_protocol::v1::{ConnectionTo, Responder};
-use agent_client_protocol::{Agent, ByteStreams, Client, Error};
+use agent_client_protocol::{Agent, Client, Error};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
-use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 use vessel_proto::{
     AgentEvent, ContentBlock, HarnessSessionId, PermissionOutcome, PermissionRequest, ToolCallId,
 };
@@ -47,6 +48,7 @@ use crate::input::{Command, Reply};
 use crate::mapper::{self, Update};
 use crate::output::AgentOutput;
 use crate::permissions::Permissions;
+use crate::transport::{self, Gate};
 
 /// Bound of the inbound queue between the SDK's handlers and the loop.
 const INBOUND: usize = 64;
@@ -76,7 +78,8 @@ pub(crate) async fn run(
     setup: AgentSetup,
 ) {
     let (inbound, inbound_receiver) = mpsc::channel(INBOUND);
-    let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
+    let gate = Gate::new();
+    let transport = transport::lines(stdin, stdout, gate.clone());
     // Outside the connection's closure, so it can still be settled when the
     // connection fails rather than closes (see the end of this function).
     let mut driver = Driver {
@@ -89,6 +92,7 @@ pub(crate) async fn run(
         turn: false,
         permissions: Permissions::default(),
         tool_calls: HashSet::new(),
+        gate,
     };
     let ended = Client
         .v1()
@@ -150,6 +154,10 @@ struct Driver {
     permissions: Permissions,
     /// Tool calls already announced on the timeline.
     tool_calls: HashSet<ToolCallId>,
+    /// Holds the agent's lines back while this loop is behind (see
+    /// `transport`); each update and permission request taken from
+    /// `inbound` returns its permit.
+    gate: Gate,
 }
 
 impl Driver {
@@ -216,16 +224,12 @@ impl Driver {
                     message: describe(&error),
                 });
             }
-            Inbound::Update(notification) => match mapper::session_update(notification.update) {
-                Update::Event(event) => {
-                    if let AgentEvent::ToolCall(call) = &event {
-                        let _ = self.tool_calls.insert(call.id.clone());
-                    }
-                    self.emit(event).await;
-                }
-                Update::Skipped(kind) => tracing::trace!(?kind, "session update skipped"),
-            },
+            Inbound::Update(notification) => {
+                self.gate.release();
+                self.update(notification).await;
+            }
             Inbound::Permission(request, responder) => {
+                self.gate.release();
                 self.permission(request, responder).await;
             }
             Inbound::TurnDone(result) => {
@@ -243,6 +247,18 @@ impl Driver {
             }
         }
         None
+    }
+
+    async fn update(&mut self, notification: acp::SessionNotification) {
+        match mapper::session_update(notification.update) {
+            Update::Event(event) => {
+                if let AgentEvent::ToolCall(call) = &event {
+                    let _ = self.tool_calls.insert(call.id.clone());
+                }
+                self.emit(event).await;
+            }
+            Update::Skipped(kind) => tracing::trace!(?kind, "session update skipped"),
+        }
     }
 
     /// Hold a permission request and announce it.

@@ -35,7 +35,9 @@
 //!   buffer gets `Lagged` from tokio and resumes from the store through the
 //!   node. The durable channel is the only path that may slow the session:
 //!   records are never dropped for the store, so when the node stops
-//!   draining, the actor stops reading output, and the program stalls.
+//!   draining, the actor stops reading output, and the program stalls (a
+//!   structured session's agent through `vessel-agent`'s gated transport;
+//!   ADR 0003 lists the little the ACP SDK still reads regardless).
 //! - Sharing: each record is allocated once as an `Arc<EventRecord>`; the
 //!   durable channel, the ring and every follower hold that same `Arc`, so
 //!   fan-out costs a reference count per reader, not a copy.
