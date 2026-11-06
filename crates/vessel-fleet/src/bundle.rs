@@ -11,6 +11,11 @@
 //!   A directory without a usable name, or with a name another directory
 //!   already took (the first in name order wins), is left out and
 //!   reported, never guessed at.
+//! - Names are compared as macOS and Windows compare them (ignoring case
+//!   and Unicode normalisation, [`fold`]): two skills, or two entries of
+//!   one directory, that would be one file there are a problem, the first
+//!   in name order bundled. Names ending in `.vessel-incoming` are
+//!   refused: members write incoming versions under them.
 //! - Dot entries inside a skill (`.env`, `.git/`, editor swap files) are
 //!   left out and reported: they are rarely meant for every machine and
 //!   easily hold a secret. At the top of the skills directory they are a
@@ -41,6 +46,7 @@ use vessel_proto::{BundleFile, BundlePath, Generation, Manifest, McpDefinitions}
 
 use crate::blobs::BlobStore;
 use crate::files;
+use crate::rel::fold;
 use crate::skill::{SkillNameError, skill_name};
 
 /// The largest file a bundle carries; larger ones are left out.
@@ -163,6 +169,20 @@ pub enum SourceProblem {
     /// unless a `skip` glob names it (then it is left out silently).
     #[error("{}: a dot entry inside a skill", .0.display())]
     Hidden(PathBuf),
+    /// A name that is one file with another on macOS or Windows (they
+    /// differ only in letter case or Unicode normalisation); the first in
+    /// name order is bundled.
+    #[error("{}: the same file as {} on macOS and Windows", path.display(), kept.display())]
+    NameCollision {
+        /// The entry left out.
+        path: PathBuf,
+        /// The entry bundled.
+        kept: PathBuf,
+    },
+    /// A name ending in `.vessel-incoming`, which members use for incoming
+    /// versions.
+    #[error("{}: names ending in `.vessel-incoming` are Vessel's own", .0.display())]
+    ReservedName(PathBuf),
     /// A symlink leading out of the skills directory.
     #[error("{}: a symlink out of the skills directory", .0.display())]
     Symlink(PathBuf),
@@ -351,7 +371,7 @@ impl Builder<'_> {
             if self.skipped(&skill) {
                 continue;
             }
-            if let Some(kept) = names.get(&skill) {
+            if let Some(kept) = names.get(&fold(&skill)) {
                 self.problems.push(SourceProblem::DuplicateSkill {
                     name: skill,
                     dir: path,
@@ -359,7 +379,7 @@ impl Builder<'_> {
                 });
                 continue;
             }
-            let _new = names.insert(skill.clone(), path);
+            let _new = names.insert(fold(&skill), path);
             self.add_tree(&dir, &format!("{}/{skill}", crate::SKILLS))?;
         }
         Ok(())
@@ -373,6 +393,9 @@ impl Builder<'_> {
             // once is enough.
             return Ok(());
         }
+        // Names that are one file on macOS or Windows: the first (in name
+        // order) is bundled.
+        let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
         for (name, path) in sorted_entries(dir)? {
             if self.skipped(&name) {
                 continue;
@@ -383,6 +406,19 @@ impl Builder<'_> {
                 self.problems.push(SourceProblem::Hidden(path));
                 continue;
             }
+            let key = fold(&name);
+            if key.ends_with(crate::INCOMING_SUFFIX) {
+                self.problems.push(SourceProblem::ReservedName(path));
+                continue;
+            }
+            if let Some(kept) = seen.get(&key) {
+                self.problems.push(SourceProblem::NameCollision {
+                    path,
+                    kept: kept.clone(),
+                });
+                continue;
+            }
+            let _new = seen.insert(key, path.clone());
             let joined = format!("{prefix}/{name}");
             let Some(bundle) = bundle_path(&joined) else {
                 self.problems.push(SourceProblem::BadName(path));

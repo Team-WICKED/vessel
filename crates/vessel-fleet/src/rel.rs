@@ -91,12 +91,22 @@ impl Rel {
         path
     }
 
-    /// The key under which names that differ only in letter case collide,
-    /// as they do on case-insensitive filesystems.
+    /// The key under which paths that are one file on macOS or Windows
+    /// collide ([`fold`]).
     #[must_use]
     pub(crate) fn folded(&self) -> String {
-        self.to_string().to_lowercase()
+        fold(&self.to_string())
     }
+}
+
+/// The key under which names that are one file on macOS or Windows
+/// collide: lower case, then NFC. APFS ignores both case and Unicode
+/// normalisation (`café` written as one code point or as `e` and a
+/// combining accent), NTFS ignores case; one key for both reports a
+/// collision wherever it would be one.
+pub(crate) fn fold(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    name.to_lowercase().nfc().collect()
 }
 
 /// An ordinary name: not empty, not `.` or `..`, no separator or NUL.
@@ -156,6 +166,14 @@ mod tests {
         assert!(plain_absolute(Path::new("/home/u/.claude")));
         assert!(!plain_absolute(Path::new("/home/u/.claude/../.ssh")));
         assert!(!plain_absolute(Path::new("home")));
+    }
+
+    #[test]
+    fn names_one_file_on_macos_or_windows_fold_alike() {
+        assert_eq!(fold("README.md"), fold("readme.md"));
+        assert_eq!(fold("caf\u{e9}.md"), fold("cafe\u{301}.md"));
+        assert_eq!(fold("CAFE\u{301}"), fold("caf\u{e9}"));
+        assert_ne!(fold("a.md"), fold("b.md"));
     }
 
     #[test]

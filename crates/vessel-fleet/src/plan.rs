@@ -88,7 +88,7 @@ pub struct Plan {
     pub(crate) roots: BTreeMap<PathBuf, Option<Rel>>,
     /// The files at placed places, by identity.
     placed: BTreeSet<Identity>,
-    /// The placed places, by root and name without case.
+    /// The placed places, by root and folded name ([`Rel::folded`]).
     placed_names: BTreeSet<(PathBuf, String)>,
 }
 
@@ -183,6 +183,10 @@ pub enum SkipReason {
     /// The target's names are not plain relative paths, or the path does
     /// not belong in a target.
     Unplaced,
+    /// The path is the same file as another bundle path's on macOS or
+    /// Windows (they differ only in case or Unicode normalisation); the
+    /// first is placed.
+    Collision,
     /// The target's root does not exist: the harness is not set up there,
     /// and Vessel does not create its home.
     NoHome,
@@ -274,7 +278,16 @@ pub fn plan(
                 root: root.clone(),
                 rel,
             };
-            let _new = plan.placed_names.insert((root.clone(), place.rel.folded()));
+            if !plan.placed_names.insert((root.clone(), place.rel.folded())) {
+                // One file with a path already placed on macOS or Windows
+                // (a manifest the home should not have made).
+                plan.skips.push(Skip {
+                    bundle: Some(bundle.clone()),
+                    path: place.path(),
+                    reason: SkipReason::Collision,
+                });
+                continue;
+            }
             let _new = placed_rels.insert(place.clone());
             plan.add(bundle, place, file, managed);
         }

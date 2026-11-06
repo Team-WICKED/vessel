@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use vessel_proto::{BundlePath, HarnessKind};
 
-use crate::rel::Rel;
+use crate::rel::{Rel, fold};
 
 /// One harness home to write the bundle into: its root, and the names the
 /// harness gives the instructions file and the skills directory under it
@@ -91,6 +91,10 @@ impl Target {
             return Place::Unused;
         };
         let rest = segments.collect::<Vec<_>>().join("/");
+        // Members write incoming versions under this suffix.
+        if fold(&rest).ends_with(crate::INCOMING_SUFFIX) {
+            return Place::Invalid;
+        }
         Rel::parse(&rest).map_or(Place::Invalid, |rest| Place::At(skills.join(&rest)))
     }
 
