@@ -6,7 +6,7 @@ use super::*;
 async fn every_unary_method_round_trips() {
     let mut running = start(ClientConfig::default()).await;
     let client = &running.client;
-    assert_eq!(client.welcome().protocol, ProtocolVersion::new(5));
+    assert_eq!(client.welcome().protocol, vessel_proto::PROTOCOL_VERSION);
 
     let input = SendInput {
         session: session(1),
@@ -20,6 +20,7 @@ async fn every_unary_method_round_trips() {
         session: session(1),
         from: EventSeq::new(3),
         limit: 10,
+        wait: None,
     };
     let create = CreateSession { spec: spec() };
 

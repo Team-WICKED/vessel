@@ -4,6 +4,72 @@ The types are defined in `crates/vessel-proto`; this file is the changelog
 and a reader's summary. Bump `PROTOCOL_VERSION` on any breaking change and add
 an entry here. Additive, optional fields do not need a bump.
 
+## Version 6 (2026-11-06)
+
+Nodes speak 2..=6; version 6 only adds. Milestone 4's F3, F4 and Track X
+implement it (`docs/plans/backend-m4.md`, "Protocol 6 (accepted)"); until
+each lands, its methods answer `unsupported` ("not built on this node yet",
+naming the track), after the scope check like every method, and
+`session.read` with `wait` is refused the same way rather than answered at
+once.
+
+- Scope `relay`: passing calls on to other fleet nodes. Independent of
+  `sync`, and a member gets it only when the home's owner asks (`vessel
+  fleet invite --relay`); `vessel fleet invite` grants `sync` alone, never
+  `admin`. `device.invite` naming `relay` needs protocol 6 (`Call::since`),
+  and `device.list` leaves `relay` out for version 2-5 clients.
+- Envelope (Track X): `fleet.forward { node, call }` (read) asks the
+  caller's own node to run `call` on fleet node `node`; `fleet.relay {
+  node, call, origin }` (relay) is a member asking its home to pass it on,
+  refused when `origin.node` is not the member's own node; `fleet.deliver
+  { call, origin }` (read) is the home having a member run it, the last
+  hop, accepted only from that member's home. All three return
+  `Forwarded { reply }`, the inner call's reply; an inner call that fails
+  fails the envelope with its error. `origin` is `{ node, by, scopes }`,
+  `by` one of `{"kind":"owner"}`, `{"kind":"device","id"}`,
+  `{"kind":"agent","session","depth"}`. The target runs the inner call
+  with its delivering device's scopes intersected with `origin.scopes`,
+  and applies ownership and the agent limits to the origin. Subscriptions
+  and the envelope's own methods cannot be forwarded
+  (`Method::forwardable`). A call needs protocol 6 on the connection it is
+  sent on; the inner call's version is checked where it is delivered.
+- Fleet: `fleet.grant { link }` (sync) hands the home a pairing link made
+  on the member, so the home holds a credential there; `fleet.peers`
+  (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
+  `protocol`, `reachable`), the home included.
+- Transfers (F4): `session.export { session, force? }` (operate,
+  ownership-checked for agents) and `memory.export { profile?, project? }`
+  (admin) snapshot files into a transfer and return `TransferManifest {
+  transfer, files, detail }`, `files` in the bundle's shape (path to
+  `{hash, size, executable?}`), `detail` `{"kind":"session",
+  "harness_session", "cwd", "info"}` or `{"kind":"memory", "harness",
+  "profile"?, "project"?}`. `transfer.read { transfer, hash, offset }`
+  (read) returns a `BlobChunk` as `fleet.blob` does; `transfer.close {
+  transfer }` (read) drops it; only the caller that opened a transfer may
+  read or close it, and transfers expire after 10 idle minutes and at
+  restart. `session.import { from: {node, session}, profile?, cwd?, start?
+  }` (operate) pulls a session here and returns `SessionImported {
+  harness_session, profile?, cwd, written, session? }`; `memory.import {
+  from: {node, profile?, project?}, profile?, project? }` (admin) returns
+  `MemoryImported { written, same, beside? }`, conflicting files written
+  beside the existing ones. Limits: 256 MiB per file and 2 GiB per
+  transfer (`MAX_TRANSFER_FILE`, `MAX_TRANSFER_TOTAL`); a transfer over
+  either is `invalid_request`, naming the limit and the size.
+- Secrets (F3), all admin: `secret.set { name, value }`, `secret.list`
+  (names only), `secret.delete { name }`, `secret.copy { name, to }`. There
+  is no `secret.get`: a value leaves a node only into another node's store.
+  `secret.copy` sends `secret.set` to `to` through the envelope, so it
+  needs the target's owner to have granted the home `admin` there.
+- `session.read` takes `wait?` (seconds, capped at 60, protocol 6): with
+  nothing at `from` yet, the node answers when something arrives or the
+  wait ends (an empty page).
+- `SessionInfo` takes `via?` (the home a creating call came through) and
+  `origin?`: `{"kind":"remote","node","by"}` (`by` owner or `{"kind":
+  "device","id"}`) for a session created by a forwarded call, `{"kind":
+  "imported","node","session"}` for an imported one. Absent for a session
+  of this node's own, so older clients see nothing new; `created_by` uses
+  only the variants protocol 5 has.
+
 ## Version 5 (2026-11-06)
 
 Nodes speak 2..=5; version 5 only adds, and older connections keep working

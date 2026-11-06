@@ -165,6 +165,7 @@ impl SessionStream {
                 session: self.session,
                 from: self.cursor,
                 limit: CATCH_UP_PAGE,
+                wait: None,
             })
             .await?;
         // An empty page that claims more is coming would loop forever;

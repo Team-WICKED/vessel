@@ -78,6 +78,7 @@ mod sessions;
 mod shutdown;
 mod subscribe;
 mod transport;
+mod unbuilt;
 
 pub use config::{Config, VesselMcp};
 

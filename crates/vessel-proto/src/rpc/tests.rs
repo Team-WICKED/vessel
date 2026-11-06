@@ -37,7 +37,13 @@ fn every_method_declares_a_scope_and_admin_is_rare() {
             "device.list",
             "device.revoke",
             "profile.reload",
-            "fleet.members"
+            "fleet.members",
+            "memory.export",
+            "memory.import",
+            "secret.set",
+            "secret.list",
+            "secret.delete",
+            "secret.copy"
         ]
     );
     assert_eq!(Method::SendInput.scope(), Scope::Operate);
@@ -59,22 +65,107 @@ fn replies_bind_to_their_request() {
 
 const V4: ProtocolVersion = ProtocolVersion::new(4);
 const V5: ProtocolVersion = ProtocolVersion::new(5);
+const V6: ProtocolVersion = ProtocolVersion::new(6);
 
 #[test]
 fn every_method_knows_its_first_version() {
     assert_eq!(Method::NodeInfo.since(), ProtocolVersion::new(2));
     assert_eq!(Method::StopNode.since(), ProtocolVersion::new(3));
     assert_eq!(Method::RevokeDevice.since(), V4);
+    let v5_fleet = [
+        Method::GetManifest,
+        Method::ReadBlob,
+        Method::WatchFleet,
+        Method::ReportApplied,
+        Method::ListMembers,
+    ];
     for method in Method::ALL {
         assert!(method.since() <= crate::PROTOCOL_VERSION, "{method:?}");
-        let fleet = method.as_str().starts_with("fleet.");
-        let profile = method.as_str().starts_with("profile.") || *method == Method::MoveProfile;
-        assert_eq!(method.since() == V5, fleet || profile, "{method:?}");
+        let name = method.as_str();
+        let fleet = name.starts_with("fleet.");
+        let profile = name.starts_with("profile.") || *method == Method::MoveProfile;
+        let v6 = (fleet && !v5_fleet.contains(method))
+            || ["session.export", "session.import"].contains(&name)
+            || ["memory.", "transfer.", "secret."]
+                .iter()
+                .any(|prefix| name.starts_with(prefix));
+        assert_eq!(method.since() == V6, v6, "{method:?}");
         assert_eq!(
-            method.scope() == Scope::Sync,
-            fleet && *method != Method::ListMembers
+            method.since() == V5,
+            (fleet || profile) && !v6,
+            "{method:?}"
         );
     }
+}
+
+#[test]
+fn every_hop_of_the_envelope_has_its_own_scope() {
+    // What a member holds on its home: `sync` for the bundle, `relay` only
+    // when its owner asked; `relay` opens nothing but passing calls on.
+    for method in Method::ALL {
+        assert_eq!(
+            method.scope() == Scope::Relay,
+            *method == Method::Relay,
+            "{method:?}"
+        );
+    }
+    assert_eq!(Method::Forward.scope(), Scope::Read);
+    assert_eq!(Method::Deliver.scope(), Scope::Read);
+    // Every secret row is `admin`, and no row returns a value.
+    for method in [
+        Method::SetSecret,
+        Method::ListSecrets,
+        Method::DeleteSecret,
+        Method::CopySecret,
+    ] {
+        assert_eq!(method.scope(), Scope::Admin, "{method:?}");
+    }
+    // Memory is kept per account on purpose: moving it is `admin`.
+    assert_eq!(Method::ExportMemory.scope(), Scope::Admin);
+    assert_eq!(Method::ImportMemory.scope(), Scope::Admin);
+    assert_eq!(Method::ExportSession.scope(), Scope::Operate);
+    // An envelope is never wrapped in another, and streams do not travel.
+    for method in [
+        Method::Forward,
+        Method::Relay,
+        Method::Deliver,
+        Method::Subscribe,
+        Method::Unsubscribe,
+    ] {
+        assert!(!method.forwardable(), "{method:?}");
+    }
+    assert!(Method::ReadEvents.forwardable());
+    assert!(Method::CreateSession.forwardable());
+}
+
+#[test]
+fn a_forwarded_call_nests_its_inner_call() {
+    let inner = ReadEvents {
+        session: crate::id::SessionId::random(),
+        from: EventSeq::ZERO,
+        limit: 10,
+        wait: Some(30),
+    }
+    .into_call();
+    let call = Forward {
+        node: crate::id::NodeId::random(),
+        call: Box::new(inner.clone()),
+    }
+    .into_call();
+    let json = serde_json::to_string(&call).unwrap();
+    assert!(
+        json.starts_with(r#"{"method":"fleet.forward","params":{"node":""#),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#""call":{"method":"session.read""#),
+        "{json}"
+    );
+    assert_eq!(serde_json::from_str::<Call>(&json).unwrap(), call);
+    // The envelope needs 6 on this connection; the inner call is checked
+    // where it is delivered.
+    assert_eq!(call.since(), V6);
+    assert_eq!(inner.since(), V6);
 }
 
 #[test]
@@ -99,6 +190,20 @@ fn a_new_field_raises_what_a_call_needs() {
     };
     assert_eq!(invite(None).since(), V4);
     assert_eq!(invite(Some(vec![Scope::Sync])).since(), V5);
+    // A protocol 5 node would refuse a scope it does not know.
+    assert_eq!(invite(Some(vec![Scope::Sync, Scope::Relay])).since(), V6);
+
+    let read = |wait| {
+        ReadEvents {
+            session: crate::id::SessionId::random(),
+            from: EventSeq::ZERO,
+            limit: 10,
+            wait,
+        }
+        .into_call()
+    };
+    assert_eq!(read(None).since(), ProtocolVersion::new(2));
+    assert_eq!(read(Some(30)).since(), V6);
 }
 
 fn record(seq: u64, event: SessionEvent) -> EventRecord {
@@ -181,26 +286,60 @@ fn older_connections_do_not_see_newer_scopes() {
         label: "member".to_owned(),
         created_at: DateTime::UNIX_EPOCH,
         last_seen: None,
-        scopes: vec![Scope::Read, Scope::Sync],
+        scopes: vec![Scope::Read, Scope::Sync, Scope::Relay],
         revoked_at: None,
     };
     let frame = ServerFrame::Response {
         id: RequestId::new(1),
         outcome: Outcome::Ok(Reply::ListDevices(vec![device])),
     };
-    assert_eq!(frame.for_protocol(V5), None);
-    let Some(ServerFrame::Response {
-        outcome: Outcome::Ok(Reply::ListDevices(devices)),
-        ..
-    }) = frame.for_protocol(V4)
-    else {
-        panic!("a device list stays a device list");
-    };
-    assert_eq!(
+    assert_eq!(frame.for_protocol(V6), None);
+    let scopes_at = |protocol| {
+        let Some(ServerFrame::Response {
+            outcome: Outcome::Ok(Reply::ListDevices(devices)),
+            ..
+        }) = frame.for_protocol(protocol)
+        else {
+            panic!("a device list stays a device list");
+        };
         devices
             .iter()
             .flat_map(|d| d.scopes.clone())
-            .collect::<Vec<_>>(),
-        [Scope::Read]
+            .collect::<Vec<_>>()
+    };
+    // A protocol 5 client cannot decode `relay`, a protocol 4 one `sync`.
+    assert_eq!(scopes_at(V5), [Scope::Read, Scope::Sync]);
+    assert_eq!(scopes_at(V4), [Scope::Read]);
+}
+
+#[test]
+fn where_a_session_came_from_is_optional_and_tagged() {
+    let spec = SessionSpec::new(
+        HarnessKind::ClaudeCode,
+        SessionMode::Structured {
+            model: None,
+            resume: None,
+        },
+    );
+    let mut info = SessionInfo::new(crate::id::SessionId::random(), spec, DateTime::UNIX_EPOCH);
+    // A session of this node only looks as it did in protocol 5.
+    let local = serde_json::to_string(&info).unwrap();
+    assert!(
+        !local.contains("via") && !local.contains("origin"),
+        "{local}"
+    );
+    info.via = Some(crate::id::NodeId::random());
+    info.origin = Some(crate::session::SessionOrigin::Imported {
+        node: crate::id::NodeId::random(),
+        session: crate::id::SessionId::random(),
+    });
+    let imported = serde_json::to_string(&info).unwrap();
+    assert!(
+        imported.contains(r#""origin":{"kind":"imported","node":""#),
+        "{imported}"
+    );
+    assert_eq!(
+        serde_json::from_str::<SessionInfo>(&imported).unwrap(),
+        info
     );
 }

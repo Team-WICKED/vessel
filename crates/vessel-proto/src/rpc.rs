@@ -26,10 +26,19 @@ use crate::fleet::{
     BlobChunk, FleetMember, Generation, GetManifest, ListMembers, Manifest, ReadBlob,
     ReportApplied, WatchFleet,
 };
+use crate::forward::{
+    Deliver, FleetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers, RelayCall,
+};
 use crate::harness::Harness;
+use crate::name::SecretName;
 use crate::node::{NodeInfo, ProtocolVersion};
 use crate::profile::{ListProfiles, MoveProfile, ProfileInfo, ReloadProfiles};
+use crate::secret::{CopySecret, DeleteSecret, ListSecrets, SetSecret};
 use crate::session::SessionInfo;
+use crate::transfer::{
+    CloseTransfer, ExportMemory, ExportSession, ImportMemory, ImportSession, MemoryImported,
+    ReadTransfer, SessionImported, TransferManifest,
+};
 
 mod frames;
 mod requests;
@@ -273,6 +282,38 @@ rpc_methods! {
     ReportApplied / report_applied / "fleet.report" [Sync, 5]: ReportApplied => Ack;
     /// List fleet members (protocol 5).
     ListMembers / list_members / "fleet.members" [Admin, 5]: ListMembers => Vec<FleetMember>;
+    /// Run a call on another node of the fleet (protocol 6).
+    Forward / forward / "fleet.forward" [Read, 6]: Forward => Forwarded;
+    /// A member asks its home to pass a call on (protocol 6).
+    Relay / relay / "fleet.relay" [Relay, 6]: RelayCall => Forwarded;
+    /// The home has a member run a call (protocol 6).
+    Deliver / deliver / "fleet.deliver" [Read, 6]: Deliver => Forwarded;
+    /// A member grants its home a credential on itself (protocol 6).
+    GrantHome / grant_home / "fleet.grant" [Sync, 6]: GrantHome => Ack;
+    /// The home's view of the fleet, for members (protocol 6).
+    ListPeers / list_peers / "fleet.peers" [Sync, 6]: ListPeers => Vec<FleetNode>;
+    /// The fleet as this node knows it (protocol 6).
+    ListNodes / list_nodes / "fleet.nodes" [Read, 6]: ListNodes => Vec<FleetNode>;
+    /// Snapshot a session's harness files (protocol 6).
+    ExportSession / export_session / "session.export" [Operate, 6]: ExportSession => TransferManifest;
+    /// Copy a session here from a node of the fleet (protocol 6).
+    ImportSession / import_session / "session.import" [Operate, 6]: ImportSession => SessionImported;
+    /// Snapshot a profile's memory (protocol 6).
+    ExportMemory / export_memory / "memory.export" [Admin, 6]: ExportMemory => TransferManifest;
+    /// Copy memory here from a node of the fleet (protocol 6).
+    ImportMemory / import_memory / "memory.import" [Admin, 6]: ImportMemory => MemoryImported;
+    /// Part of a file of an open transfer (protocol 6).
+    ReadTransfer / read_transfer / "transfer.read" [Read, 6]: ReadTransfer => BlobChunk;
+    /// Drop an open transfer (protocol 6).
+    CloseTransfer / close_transfer / "transfer.close" [Read, 6]: CloseTransfer => Ack;
+    /// Store a secret (protocol 6).
+    SetSecret / set_secret / "secret.set" [Admin, 6]: SetSecret => Ack;
+    /// List secrets by name (protocol 6).
+    ListSecrets / list_secrets / "secret.list" [Admin, 6]: ListSecrets => Vec<SecretName>;
+    /// Remove a secret (protocol 6).
+    DeleteSecret / delete_secret / "secret.delete" [Admin, 6]: DeleteSecret => Ack;
+    /// Copy a secret to a node of the fleet (protocol 6).
+    CopySecret / copy_secret / "secret.copy" [Admin, 6]: CopySecret => Ack;
 }
 
 impl Call {
@@ -286,14 +327,21 @@ impl Call {
         let method = self.method().since();
         let fields = match self {
             Self::CreateSession(request) => request.spec.profile.as_ref().map(|_| 5),
-            Self::InviteDevice(request) => request.scopes.as_ref().map(|_| 5),
+            // `scopes` came in 5; a scope newer than that needs its own
+            // version, or an older node would refuse the name it lacks.
+            Self::InviteDevice(request) => request.scopes.as_ref().map(|scopes| {
+                scopes
+                    .iter()
+                    .map(|scope| scope.since().get())
+                    .fold(5, u32::max)
+            }),
+            Self::ReadEvents(request) => request.wait.map(|_| 6),
             Self::NodeInfo(_)
             | Self::ListHarnesses(_)
             | Self::ListSessions(_)
             | Self::GetSession(_)
             | Self::SendInput(_)
             | Self::KillSession(_)
-            | Self::ReadEvents(_)
             | Self::Subscribe(_)
             | Self::Unsubscribe(_)
             | Self::StopNode(_)
@@ -306,7 +354,25 @@ impl Call {
             | Self::ReadBlob(_)
             | Self::WatchFleet(_)
             | Self::ReportApplied(_)
-            | Self::ListMembers(_) => None,
+            | Self::ListMembers(_)
+            // The inner call of an envelope is checked against the target's
+            // protocol where it is delivered, not against this connection.
+            | Self::Forward(_)
+            | Self::Relay(_)
+            | Self::Deliver(_)
+            | Self::GrantHome(_)
+            | Self::ListPeers(_)
+            | Self::ListNodes(_)
+            | Self::ExportSession(_)
+            | Self::ImportSession(_)
+            | Self::ExportMemory(_)
+            | Self::ImportMemory(_)
+            | Self::ReadTransfer(_)
+            | Self::CloseTransfer(_)
+            | Self::SetSecret(_)
+            | Self::ListSecrets(_)
+            | Self::DeleteSecret(_)
+            | Self::CopySecret(_) => None,
         };
         fields.map_or(method, |since| method.max(ProtocolVersion::new(since)))
     }

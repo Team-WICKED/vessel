@@ -148,6 +148,21 @@ impl Drop for AbortSignal {
     }
 }
 
+/// Methods this fake does not serve: each records the call and refuses it.
+macro_rules! unserved {
+    ($( $handler:ident : $request:ty => $response:ty; )*) => {
+        $(
+            async fn $handler(
+                &self,
+                _context: &Context,
+                request: $request,
+            ) -> Result<$response, WireError> {
+                self.unsupported(request)
+            }
+        )*
+    };
+}
+
 impl Handler for Fake {
     type Context = Context;
 
@@ -396,6 +411,25 @@ impl Handler for Fake {
         request: ListMembers,
     ) -> Result<Vec<FleetMember>, WireError> {
         self.unsupported(request)
+    }
+
+    unserved! {
+        forward: vessel_proto::Forward => vessel_proto::Forwarded;
+        relay: vessel_proto::RelayCall => vessel_proto::Forwarded;
+        deliver: vessel_proto::Deliver => vessel_proto::Forwarded;
+        grant_home: vessel_proto::GrantHome => Ack;
+        list_peers: vessel_proto::ListPeers => Vec<vessel_proto::FleetNode>;
+        list_nodes: vessel_proto::ListNodes => Vec<vessel_proto::FleetNode>;
+        export_session: vessel_proto::ExportSession => vessel_proto::TransferManifest;
+        import_session: vessel_proto::ImportSession => vessel_proto::SessionImported;
+        export_memory: vessel_proto::ExportMemory => vessel_proto::TransferManifest;
+        import_memory: vessel_proto::ImportMemory => vessel_proto::MemoryImported;
+        read_transfer: vessel_proto::ReadTransfer => BlobChunk;
+        close_transfer: vessel_proto::CloseTransfer => Ack;
+        set_secret: vessel_proto::SetSecret => Ack;
+        list_secrets: vessel_proto::ListSecrets => Vec<vessel_proto::SecretName>;
+        delete_secret: vessel_proto::DeleteSecret => Ack;
+        copy_secret: vessel_proto::CopySecret => Ack;
     }
 }
 

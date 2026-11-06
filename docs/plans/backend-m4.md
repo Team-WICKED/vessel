@@ -437,10 +437,13 @@ member vesseld                         home vesseld
   one node creates, drives and reads a session on another through the home;
   the target's grant to the home caps it; depth counts across nodes.
 
-## Protocol 6 (draft)
+## Protocol 6 (accepted)
 
-Drafted 2026-11-06 by Track H's worker for the coordinator's review; the
-coordinator lands the `vessel-proto` contract. It covers F4 (sessions and
+Drafted 2026-11-06 by Track H's worker, accepted by the coordinator the
+same day with the decisions recorded at the end of this section. The
+contract (`vessel-proto` types and rows, `PROTOCOL_VERSION = 6`, the rpc
+`Unary` markers, node stubs answering `unsupported` from
+`vessel-node/src/unbuilt.rs`) landed before F3, F4 and X build on it. It covers F4 (sessions and
 memory across nodes), the rest of F3 (secrets on the wire) and Track X
 (agent calls across nodes through the home), on ADR 0012 (one home,
 members pull; membership by pairing; secrets by reference; history and
@@ -486,8 +489,8 @@ Envelope (Track X):
 | Method | Scope | Request → response | What it does |
 | --- | --- | --- | --- |
 | `fleet.forward` | Read | `Forward { node: NodeId, call: Call }` → `Forwarded { reply: Reply }` | A client (CLI, device, agent) asks its own node to run `call` on fleet node `node`. The node checks `call`'s own row scope (and, for an agent, the ownership and limits it can check locally) against the caller, as if the call were local, builds the `Origin` (below), and sends `fleet.relay` to its home (or, on the home, `fleet.deliver` to the member). `node` equal to the node itself runs the call locally. |
-| `fleet.relay` | Sync | `Relay { node, call, origin: Origin }` → `Forwarded` | A member asks the home to pass a call on. The home refuses an `origin.node` other than the member's own node (a member speaks only for its own principals), then sends `fleet.deliver` to `node` with its credential there, or, when `node` is the home itself, runs the call as `fleet.deliver` would. |
-| `fleet.deliver` | Read | `Deliver { call, origin }` → `Forwarded` | The home asks a member to run a call on behalf of `origin`. The member runs it as a delegated principal (below). Never passed on: delivering is the last hop, so there are no loops and at most two hops. |
+| `fleet.relay` | Relay | `RelayCall { node, call, origin: Origin }` → `Forwarded` | A member asks the home to pass a call on. The home refuses an `origin.node` other than the member's own node (a member speaks only for its own principals), then sends `fleet.deliver` to `node` with its credential there, or, when `node` is the home itself, runs the call as `fleet.deliver` would. |
+| `fleet.deliver` | Read | `Deliver { call, origin }` → `Forwarded` | The home asks a member to run a call on behalf of `origin`. The member runs it as a delegated principal (below), and accepts it only from its home's device (the one `fleet.grant` made). Never passed on: delivering is the last hop, so there are no loops and at most two hops. |
 | `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member. |
 | `fleet.peers` | Sync | `ListPeers` → `Vec<FleetNode>` | The home's view of the fleet for members: `FleetNode { node, name, protocol, reachable }`, the home included. |
 | `fleet.nodes` | Read | `ListNodes` → `Vec<FleetNode>` | What any node knows of its fleet (a member asks its home with `fleet.peers`); the agents' `list_nodes`. |
@@ -495,7 +498,10 @@ Envelope (Track X):
 `Origin { node: NodeId, by: OriginBy, scopes: Vec<Scope> }`, with `OriginBy`
 `owner`, `device { id }` or `agent { session, depth }`. `scopes` is what the
 origin principal holds on its own node; `depth` is its session's agent
-depth.
+depth. `call` is boxed (`Box<Call>`), and must be forwardable
+(`Method::forwardable`): not a subscription, not an envelope row.
+`Forwarded { reply: Box<Reply> }`; an inner call that fails fails the
+envelope with its error.
 
 Transfers, generic (F4):
 
@@ -505,13 +511,15 @@ Transfers, generic (F4):
 | `memory.export` | Admin | `ExportMemory { profile: Option<ProfileName>, project: Option<PathBuf> }` → `TransferManifest` | Snapshot a profile's memory: one project's (`project`, a working directory on this node) or all of them. `admin`, since memory is kept per account on purpose (decision 4). |
 | `transfer.read` | Read | `ReadTransfer { transfer: TransferId, hash: BlobHash, offset: u64 }` → `BlobChunk` | A chunk of one file of an open transfer, as `fleet.blob`. |
 | `transfer.close` | Read | `CloseTransfer { transfer }` → `Ack` | Drop the snapshot. Transfers also expire after 10 idle minutes and at restart (the staging directory is emptied at start). |
-| `session.import` | Operate | `ImportSession { from: SessionRef { node, session }, profile: Option<ProfileName>, cwd: Option<PathBuf>, start: bool }` → `SessionInfo` | The target pulls: `session.export` on `from.node` (through `fleet.forward` when it is another node), reads every file, places them into the chosen profile's home with the project renamed for the target's working directory, and with `start` creates a session resuming the conversation (`session/load`). A file already there with other content refuses the import before anything is written. The new session records `origin` (below). `move` is `import` then `session.kill` on the source, done by the client. |
+| `session.import` | Operate | `ImportSession { from: SessionRef { node, session }, profile: Option<ProfileName>, cwd: Option<PathBuf>, start: bool }` → `SessionImported { harness_session, profile, cwd, written, session: Option<SessionInfo> }` | The target pulls: `session.export` on `from.node` (through `fleet.forward` when it is another node), reads every file, places them into the chosen profile's home with the project renamed for the target's working directory, and with `start` creates a session resuming the conversation (`session/load`). A file already there with other content refuses the import before anything is written. The new session records `origin` (below). `move` is `import` then `session.kill` on the source, done by the client. |
 | `memory.import` | Admin | `ImportMemory { from: MemoryRef { node, profile, project }, profile: Option<ProfileName>, project: Option<PathBuf> }` → `MemoryImported { written: u32, same: u32, beside: Vec<BundlePath> }` | The same pull for memory. Conflicting files are written beside the existing ones (`.vessel-incoming`), as the materialiser does; nothing is overwritten. |
 
 `TransferManifest { transfer: TransferId, files: BTreeMap<BundlePath,
 BundleFile>, detail: TransferDetail }`; `TransferDetail` is `session {
-harness, harness_session, profile, cwd, info: SessionInfo }` or `memory {
-harness, profile, project }`. A `TransferId` is 128 random bits and
+harness_session, cwd, info: SessionInfo }` (harness and profile are in
+`info`) or `memory { harness, profile, project }`. `session.import` answers
+`SessionImported` rather than `SessionInfo`, since without `start` there is
+no session to report, only where the conversation now is. A `TransferId` is 128 random bits and
 belongs to whoever opened it: the same principal (for a delivered call,
 the delivering device together with the origin) must read and close it.
 
@@ -535,8 +543,10 @@ redacts its `Debug`.
 
 One field (Track X):
 
-- `session.read` gains `wait: Option<u32>` (seconds, at most 60; `Call::since`
-  6 for the field): with nothing at `from` yet, the node answers once
+- `session.read` gains `wait: Option<u32>` (seconds, at most 60,
+  `ReadEvents::MAX_WAIT`; `Call::since` 6 for the field; until Track X
+  builds it a node refuses it with `unsupported` rather than answering at
+  once): with nothing at `from` yet, the node answers once
   something arrives or the wait ends (an empty page). It serves waiting on
   another node without relaying subscriptions.
 
@@ -659,16 +669,34 @@ tools. F4's cross-node pull depends on X's envelope; within one node
   there, or with their usual tools over SSH. If it is wanted later, it is
   `transfer` in the other direction, on the same shapes.
 
-### Open points for the review
+### Decisions (review, 2026-11-06)
 
-- Whether a member's `sync` credential on the home should also cover
-  relaying (`fleet.relay` at `Sync`), or relaying should be a scope of its
-  own that the home's owner grants per member.
-- Codex's `session/load` after an import into another working directory:
-  the rollout records its first working directory; whether `codex-acp`
-  resumes under a new one needs checking with throwaway homes.
-- Limits for transfers (largest file, total size, files per manifest) and
-  where they live (`Config`).
+1. **Relaying is a scope of its own, `relay`, independent of `sync`.**
+   `fleet.relay` needs it; a member's `sync` credential fetches the bundle
+   and nothing else. A member gets `relay` only when the home's owner asks:
+   `vessel fleet invite --relay` (Track X adds the flag). The home checks
+   `origin.node` against the relaying member's own node. `Scope::since` is
+   6, so `device.list` leaves it out for version 2-5 clients and
+   `device.invite` naming it needs protocol 6.
+   - **Granting it to an existing member: re-invite only** (the call left
+     to this track). No `vessel node devices grant`: widening a credential
+     in place would be the first call that adds scopes to a paired device,
+     a second path to audit beside pairing, while a new link already gives
+     the owner the same choice with expiry, single use and the device list
+     showing what each credential holds. The cost is a `vessel fleet leave`
+     and `join` on the member (its fleet files stay; it pulls again).
+     Revisit if members turn out to need it often.
+2. **Transfer limits: 256 MiB per file, 2 GiB per transfer.** Over either,
+   `invalid_request` naming the limit and the size. Both are constants in
+   one place, `vessel_proto::MAX_TRANSFER_FILE` and `MAX_TRANSFER_TOTAL`,
+   not configurable yet; files per manifest are bounded by the total.
+3. **Codex resuming under another working directory** (`codex-acp`'s
+   `session/load` after an import with a new `cwd`) is checked in F4 with
+   throwaway homes and fakes. Never against a real login.
+4. **`secret.copy` needs the target to grant the home `admin`,
+   explicitly.** `vessel fleet invite` grants `sync` alone (and `relay`
+   when asked), never `admin` by default; nor does `fleet.grant`'s default
+   (`read`, `operate`).
 
 ## Done criteria (milestone)
 

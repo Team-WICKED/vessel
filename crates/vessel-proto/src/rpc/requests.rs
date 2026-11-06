@@ -60,6 +60,17 @@ pub struct ReadEvents {
     pub from: EventSeq,
     /// Maximum number of records; the node may return fewer and caps it.
     pub limit: u32,
+    /// With nothing at `from` yet, wait this many seconds for something to
+    /// arrive before answering (an empty page when nothing did), at most
+    /// [`ReadEvents::MAX_WAIT`] (protocol 6). A long poll, so waiting on
+    /// another node's session needs no subscription across hops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<u32>,
+}
+
+impl ReadEvents {
+    /// The longest a read waits, in seconds; the node caps `wait` to it.
+    pub const MAX_WAIT: u32 = 60;
 }
 
 /// Reply to `session.read`.

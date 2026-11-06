@@ -39,11 +39,13 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
-    Call, ClientFrame, ClientInfo, CreateSession, GetManifest, GetNode, GetSession, Hello,
-    InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSessions,
-    MoveProfile, Outcome, ProtocolRange, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied,
-    Request, RequestId, RevokeDevice, SendInput, ServerFrame, StopNode, Subscribe, Unsubscribe,
-    WatchFleet, Welcome, WireError,
+    Call, ClientFrame, ClientInfo, CloseTransfer, CopySecret, CreateSession, DeleteSecret, Deliver,
+    ExportMemory, ExportSession, Forward, GetManifest, GetNode, GetSession, GrantHome, Hello,
+    ImportMemory, ImportSession, InviteDevice, KillSession, ListDevices, ListHarnesses,
+    ListMembers, ListNodes, ListPeers, ListProfiles, ListSecrets, ListSessions, MoveProfile,
+    Outcome, ProtocolRange, ReadBlob, ReadEvents, ReadTransfer, RelayCall, ReloadProfiles,
+    ReportApplied, Request, RequestId, RevokeDevice, SendInput, ServerFrame, SetSecret, StopNode,
+    Subscribe, Unsubscribe, WatchFleet, Welcome, WireError,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -79,6 +81,25 @@ impl Unary for ReadBlob {}
 impl Unary for WatchFleet {}
 impl Unary for ReportApplied {}
 impl Unary for ListMembers {}
+// Protocol 6. The envelope's reply is its inner call's one reply (only
+// one-reply calls can be forwarded), and `session.read` with `wait` is a
+// long poll like `fleet.watch`.
+impl Unary for Forward {}
+impl Unary for RelayCall {}
+impl Unary for Deliver {}
+impl Unary for GrantHome {}
+impl Unary for ListPeers {}
+impl Unary for ListNodes {}
+impl Unary for ExportSession {}
+impl Unary for ImportSession {}
+impl Unary for ExportMemory {}
+impl Unary for ImportMemory {}
+impl Unary for ReadTransfer {}
+impl Unary for CloseTransfer {}
+impl Unary for SetSecret {}
+impl Unary for ListSecrets {}
+impl Unary for DeleteSecret {}
+impl Unary for CopySecret {}
 
 /// `n` as a `NonZeroUsize` for constants.
 const fn at_least_one(n: usize) -> NonZeroUsize {
