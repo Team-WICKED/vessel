@@ -31,13 +31,24 @@
 //!   owner's `forget` too.
 //! - After a forget (round 3, finding 2), the id and the name are known
 //!   and free, and the node is seen leaving the fleet's list: the next
-//!   grant for them is taken only from a member device paired after the
+//!   grant for them is taken only by a member device paired after the
 //!   forget. A reinstalled node joins again with a new invitation anyway
 //!   (its credential went with its data), so this costs the owner nothing,
 //!   while every device that existed before cannot take them. (Pinning
 //!   the new key instead, `forget --key`, would need the owner to find and
-//!   type the reinstalled node's key.) An invitation made before the
-//!   forget and used after it counts as after: invite after forgetting.
+//!   type the reinstalled node's key.)
+//! - "After" is an order, not a time (round 4): the forget is the home
+//!   node's own call (`fleet.forget`), which withdraws every invitation
+//!   outstanding and records the devices that exist; a device in that set
+//!   counts as old, and no device stored later comes from an invitation
+//!   made before (`Devices::withdraw_all`). Comparing pairing times let an
+//!   invitation made before the forget and used after it through, and
+//!   trusted the home's clock. A forget recorded before this kept no
+//!   devices; for it alone the time still decides.
+//! - Names from before names were recorded (round 4): a record written
+//!   then has none, so a revoked member's name was not reserved. Reading
+//!   fills every node without a name from the grants the home keeps,
+//!   revoked devices' included, and the home saves that once at start.
 //! - What it leaves open: a node's very first grant still claims an id
 //!   nobody has bound (trust on first grant), until ids come from keys.
 
@@ -91,6 +102,10 @@ struct Forgotten {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     at: DateTime<Utc>,
+    /// The devices that existed then: none of them takes the id or the
+    /// name. Absent in a forget recorded before devices were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    before: Option<Vec<DeviceId>>,
 }
 
 impl Bindings {
@@ -126,18 +141,48 @@ impl Bindings {
             .map(|binding| binding.node)
     }
 
-    /// When the owner last forgot node `node`, or a node named `name`: a
-    /// grant for that id or name is then taken only from a member device
-    /// paired after it.
-    pub(crate) fn forgotten_at(&self, node: NodeId, name: Option<&str>) -> Option<DateTime<Utc>> {
+    /// Whether a forget of node `node`, or of a node named `name`, keeps
+    /// member device `device` (paired at `paired`) from taking them: it
+    /// existed when the node was forgotten (for a forget recorded before
+    /// devices were, it was paired at or before it).
+    pub(crate) fn forgotten_for(
+        &self,
+        node: NodeId,
+        name: Option<&str>,
+        device: DeviceId,
+        paired: Option<DateTime<Utc>>,
+    ) -> bool {
         self.forgotten
             .iter()
             .filter(|forgotten| {
                 forgotten.node == node
                     || name.is_some_and(|name| forgotten.name.as_deref() == Some(name))
             })
-            .map(|forgotten| forgotten.at)
-            .max()
+            .any(|forgotten| match &forgotten.before {
+                Some(before) => before.contains(&device),
+                None => paired.is_none_or(|paired| paired <= forgotten.at),
+            })
+    }
+
+    /// Give every node without a recorded name the name of a kept grant
+    /// for it, unless another node holds that name; whether any changed.
+    fn name_from(&mut self, kept: &[KeptGrant]) -> bool {
+        let mut changed = false;
+        for grant in kept {
+            let unnamed = self
+                .nodes
+                .iter()
+                .any(|binding| binding.node == grant.node && binding.name.is_none());
+            if unnamed && self.node_named(&grant.name).is_none() {
+                for binding in &mut self.nodes {
+                    if binding.node == grant.node {
+                        binding.name = Some(grant.name.clone());
+                    }
+                }
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// The node member device `device` granted for.
@@ -194,17 +239,12 @@ pub(crate) fn grants_dir(files: &FleetFiles) -> PathBuf {
     files.dir().join("grants")
 }
 
-/// Read the record; a home from before it starts it from the grants it
-/// keeps. Blocks; the caller holds the fleet lock.
-pub(crate) fn read(files: &FleetFiles) -> Result<Bindings, FileError> {
-    if let Some(bindings) = files::read_json(&path(files))? {
-        return Ok(bindings);
-    }
-    let mut bindings = Bindings::default();
+/// The grants the home keeps, every device's (revoked ones included).
+fn kept_grants(files: &FleetFiles) -> Result<Vec<KeptGrant>, FileError> {
     let dir = grants_dir(files);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(bindings),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(FileError::io(&dir, error)),
     };
     let mut kept = Vec::new();
@@ -219,8 +259,19 @@ pub(crate) fn read(files: &FleetFiles) -> Result<Bindings, FileError> {
             kept.push(grant);
         }
     }
-    // Oldest first would be better, but a kept grant has one binding per
-    // device and its node's key; any order gives the same record.
+    Ok(kept)
+}
+
+/// Read the record: a home from before it starts it from the grants it
+/// keeps, and a record from before names fills them in from those grants.
+/// Blocks.
+pub(crate) fn read(files: &FleetFiles) -> Result<Bindings, FileError> {
+    let kept = kept_grants(files)?;
+    if let Some(mut bindings) = files::read_json::<Bindings>(&path(files))? {
+        let _named = bindings.name_from(&kept);
+        return Ok(bindings);
+    }
+    let mut bindings = Bindings::default();
     for grant in kept {
         if bindings
             .key_of(grant.node)
@@ -240,34 +291,56 @@ pub(crate) fn read(files: &FleetFiles) -> Result<Bindings, FileError> {
     Ok(bindings)
 }
 
+/// Save the names a record from before names lacks (`read` fills them in
+/// memory); whether it did. Run once by the home at start. Blocks.
+///
+/// # Errors
+/// The record or a grant could not be read or written.
+pub(crate) fn upgrade(files: &FleetFiles) -> Result<bool, FileError> {
+    let _lock = FleetLock::acquire(files)?;
+    let Some(mut bindings) = files::read_json::<Bindings>(&path(files))? else {
+        return Ok(false);
+    };
+    if !bindings.name_from(&kept_grants(files)?) {
+        return Ok(false);
+    }
+    write(files, &bindings)?;
+    Ok(true)
+}
+
 /// Write the record. Blocks; the caller holds the fleet lock.
 pub(crate) fn write(files: &FleetFiles, bindings: &Bindings) -> Result<(), FileError> {
     files::write_json(&path(files), bindings)
 }
 
-/// What `vessel fleet forget` did.
+/// What [`forget`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Forgot {
+pub(crate) struct Forgot {
     /// The key the node was bound to.
-    pub key: NodePublicKey,
+    pub(crate) key: NodePublicKey,
     /// The name it was known by, now released.
-    pub name: Option<String>,
+    pub(crate) name: Option<String>,
     /// The member devices that granted for it; their grants are deleted.
     /// A device that should not sync any more is revoked separately.
-    pub devices: Vec<DeviceId>,
+    pub(crate) devices: Vec<DeviceId>,
 }
 
-/// `vessel fleet forget <node>` (the home's owner, on its data directory):
-/// let `node` be bound to another key (a node reinstalled with a new one)
-/// or name. Its grants are deleted, so the home stops calling it; its id
-/// and name go next to a member device paired after this, which the node
-/// gets by being invited and joining again. Recorded in the file, with the
-/// time. `None` if the home has no binding for it. Blocks (takes the fleet
-/// lock).
+/// `fleet.forget` on the home (`vessel fleet forget <node>`): let `node`
+/// be bound to another key (a node reinstalled with a new one) or name.
+/// Its grants are deleted, so the home stops calling it; its id and name
+/// go next only to a member device not in `before`, the devices that
+/// exist now (the caller withdrew the invitations outstanding, so every
+/// later device comes from a later one). Recorded in the file, with the
+/// time. `None` if the home has no binding for it. Blocks (takes the
+/// fleet lock).
 ///
 /// # Errors
 /// The record or a grant could not be read or written.
-pub fn forget(files: &FleetFiles, node: NodeId) -> Result<Option<Forgot>, FileError> {
+pub(crate) fn forget(
+    files: &FleetFiles,
+    node: NodeId,
+    before: Vec<DeviceId>,
+) -> Result<Option<Forgot>, FileError> {
     let _lock = FleetLock::acquire(files)?;
     let mut bindings = read(files)?;
     let Some(at) = bindings
@@ -294,6 +367,7 @@ pub fn forget(files: &FleetFiles, node: NodeId) -> Result<Option<Forgot>, FileEr
         key: forgotten.key,
         name: forgotten.name.clone(),
         at: Utc::now(),
+        before: Some(before),
     });
     write(files, &bindings)?;
     tracing::info!(%node, devices = ?devices, "forgot a fleet node's binding; it may grant again under a new key");
@@ -310,48 +384,100 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn the_record_starts_from_the_grants_kept_and_forgets_only_on_purpose() {
-        let dir = tempfile::tempdir().unwrap();
-        let files = FleetFiles::new(&DataDir::new(dir.path()));
-        let grants = grants_dir(&files);
+    /// A kept grant of `device` for `node` (key 7), named `name`.
+    fn keep(files: &FleetFiles, device: DeviceId, node: NodeId, name: &str) {
+        let grants = grants_dir(files);
         std::fs::create_dir_all(&grants).unwrap();
-        let (device, node) = (DeviceId::random(), NodeId::random());
         let key = NodePublicKey::from_bytes([7; 32]);
         std::fs::write(
             grants.join(format!("{device}.json")),
-            serde_json::json!({ "member": device, "node": node, "key": key, "name": "desktop" })
+            serde_json::json!({ "member": device, "node": node, "key": key, "name": name })
                 .to_string(),
         )
         .unwrap();
         std::fs::write(grants.join(format!("{device}.credential")), "kept").unwrap();
+    }
+
+    #[test]
+    fn the_record_starts_from_the_grants_kept_and_forgets_only_on_purpose() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = FleetFiles::new(&DataDir::new(dir.path()));
+        let (device, node) = (DeviceId::random(), NodeId::random());
+        let key = NodePublicKey::from_bytes([7; 32]);
+        keep(&files, device, node, "desktop");
 
         // A home from before the record: started from the grants it keeps.
         let seeded = read(&files).unwrap();
         assert_eq!(seeded.key_of(node), Some(&key));
-        assert_eq!(seeded.name_of(node), Some("desktop"));
-        assert_eq!(seeded.node_named("desktop"), Some(node));
         assert_eq!(seeded.node_with(&key), Some(node));
         assert_eq!(seeded.node_of(device), Some(node));
+        assert_eq!(seeded.name_of(node), Some("desktop"));
+        assert_eq!(seeded.node_named("desktop"), Some(node));
         write(&files, &seeded).unwrap();
 
-        assert_eq!(forget(&files, NodeId::random()).unwrap(), None);
-        let forgot = forget(&files, node).unwrap().unwrap();
+        let existing = DeviceId::random();
+        assert_eq!(
+            forget(&files, NodeId::random(), vec![existing]).unwrap(),
+            None
+        );
+        let forgot = forget(&files, node, vec![device, existing])
+            .unwrap()
+            .unwrap();
         assert_eq!(forgot.key, key);
+        assert_eq!(forgot.name.as_deref(), Some("desktop"));
         assert_eq!(forgot.devices, vec![device]);
-        assert!(!grants.join(format!("{device}.json")).exists());
-        assert!(!grants.join(format!("{device}.credential")).exists());
+        assert!(!grants_dir(&files).join(format!("{device}.json")).exists());
         let after = read(&files).unwrap();
         assert_eq!(after.key_of(node), None, "free for a new key");
         assert_eq!(after.node_named("desktop"), None, "and its name");
-        assert_eq!(forgot.name.as_deref(), Some("desktop"));
-        assert!(after.forgotten_at(node, None).is_some());
-        assert!(
-            after
-                .forgotten_at(NodeId::random(), Some("desktop"))
-                .is_some()
-        );
         assert_eq!(after.node_of(device), Some(node), "a device keeps its node");
-        assert_eq!(after.forgotten.len(), 1, "and the forgetting is on record");
+        // ... but only for a device that did not exist at the forget.
+        for old in [device, existing] {
+            assert!(after.forgotten_for(node, None, old, None));
+            assert!(after.forgotten_for(NodeId::random(), Some("desktop"), old, None));
+        }
+        let new = DeviceId::random();
+        assert!(!after.forgotten_for(node, Some("desktop"), new, None));
+    }
+
+    /// Round 4: a record 5dd51d3 wrote has no names, so a revoked member's
+    /// name was not reserved. Reading fills them from the kept grants
+    /// (revoked devices' included), and `upgrade` saves that.
+    #[test]
+    fn a_record_from_before_names_gets_them_from_the_grants_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = FleetFiles::new(&DataDir::new(dir.path()));
+        let (device, node) = (DeviceId::random(), NodeId::random());
+        keep(&files, device, node, "desktop");
+        let key = NodePublicKey::from_bytes([7; 32]);
+        std::fs::write(
+            path(&files),
+            serde_json::json!({
+                "nodes": [{ "node": node, "key": key, "since": Utc::now() }],
+                "devices": [{ "device": device, "node": node }],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(read(&files).unwrap().node_named("desktop"), Some(node));
+        assert!(upgrade(&files).unwrap());
+        let saved: Bindings = files::read_json(&path(&files)).unwrap().unwrap();
+        assert_eq!(saved.name_of(node), Some("desktop"));
+        assert!(!upgrade(&files).unwrap(), "once");
+    }
+
+    /// A forget recorded before devices were (f3ca416) is decided by time.
+    #[test]
+    fn a_forget_from_before_devices_were_recorded_goes_by_time() {
+        let (node, at) = (NodeId::random(), Utc::now());
+        let bindings: Bindings = serde_json::from_value(serde_json::json!({
+            "forgotten": [{ "node": node, "key": NodePublicKey::from_bytes([7; 32]), "at": at }],
+        }))
+        .unwrap();
+        let device = DeviceId::random();
+        assert!(bindings.forgotten_for(node, None, device, Some(at)));
+        assert!(bindings.forgotten_for(node, None, device, None));
+        let later = at.checked_add_signed(chrono::TimeDelta::seconds(1));
+        assert!(!bindings.forgotten_for(node, None, device, later));
     }
 }

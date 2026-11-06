@@ -637,15 +637,48 @@ reproduced problems, fixed in this order:
     forget. A reinstalled node has to be invited and join again anyway
     (its credential went with its data), so this costs the owner nothing
     and shuts out every device that existed before; (a), `forget --key`,
-    would have the owner find and type the new node's key. An invitation
-    made before the forget and used after it passes, so the owner invites
-    after forgetting (`forget` says so). The trust-on-first-use window
+    would have the owner find and type the new node's key. (As first
+    built, "after" was the device's pairing time against the forget's,
+    and an invitation made before the forget and used after it passed;
+    round 4 below made it an order.) The trust-on-first-use window
     for an id nobody has seen stays as accepted (ids are random, and
     usually seen only after the grant); it and this window are where
     `secret.copy` could reach an impostor that answers its probe, which
     is why both matter (`e2e/grants.rs`:
     `after_a_forget_no_earlier_device_takes_the_id_or_the_name`, and the
     reinstalled node is granted only once invited again).
+- **Round 4 (the reviewer on 136e62d).** Three more, in the same area:
+  - **A record from before names.** A home that kept `bindings.json` in
+    5dd51d3's format (no names) seeded names only for a new record, so a
+    member whose device was revoked had no reserved name and a `sync`
+    device's own node took it. Reading the record now fills every node
+    with no name from the grants kept, revoked devices' included, and the
+    node saves it when it starts (`bindings::upgrade`; `fleet::bindings`
+    unit test on a record in that format, and `e2e/grants.rs`:
+    `a_record_from_before_names_still_reserves_a_revoked_members_name`).
+  - **The forget window ordered by wall clock.** "Paired after the
+    forget" compared the device's `created_at` with the forget's time, so
+    an invitation made before and redeemed after passed, and a clock step
+    moved the line. Forgetting is now the home node's own call,
+    `fleet.forget` (admin, not forwardable; `vessel fleet forget` against
+    the home): under the grant lock it withdraws every outstanding
+    invitation, then records the devices that exist as the ones that may
+    not take the id or name. A pairing that redeemed an invitation before
+    the withdrawal and stores its device after it is revoked and refused
+    (a withdrawal generation read at redemption). No clock is compared;
+    only a record from round 3, with no device list, still goes by time
+    (`e2e/grants.rs`: `an_invitation_made_before_a_forget_is_withdrawn_with_it`,
+    which fails with either the withdrawal or the generation check taken
+    out). `forget` prints the node's key and name, the devices whose
+    grants went, and how many invitations were withdrawn, and says to
+    invite again.
+  - **The refusal said too much.** A `sync` device was told the id and
+    the time of a node that was revoked or forgotten. Over a revoked or
+    forgotten node a refusal now says only that the name is reserved for,
+    or the key bound to, another node; the clash with a live member's
+    name keeps naming it (that member is on `fleet.peers` anyway, and the
+    operator needs the fix), and the home's log keeps the details
+    (`fleet::links` unit tests, `e2e/grants.rs`).
 - **Names stay unique (coordinator's decision, 2026-11-06).** Names pick
   nodes (`--to`, `vessel mcp`'s `node`), so a duplicate is ambiguous and
   the home keeps refusing it (fail closed). The operator's path is
@@ -722,6 +755,7 @@ Envelope (Track X):
 | `fleet.relay` | Relay | `RelayCall { node, call, origin: Origin }` → `Forwarded` | A member asks the home to pass a call on. The home refuses an `origin.node` other than the member's own node (a member speaks only for its own principals), then sends `fleet.deliver` to `node` with its credential there, or, when `node` is the home itself, runs the call as `fleet.deliver` would. |
 | `fleet.deliver` | Read | `Deliver { call, origin }` → `Forwarded` | The home asks a member to run a call on behalf of `origin`. The member runs it as a delegated principal (below), and accepts it only from its home's device (the one `fleet.grant` made). Never passed on: delivering is the last hop, so there are no loops and at most two hops. |
 | `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member until the member joins again (a member grants once per join). |
+| `fleet.forget` | Admin | `ForgetNode { node: NodeId }` → `NodeForgotten { key, name?, devices, withdrawn }` | On the home, forget a member node's binding (its key and name), for a node reinstalled with a new key or to be renamed. Withdraws the invitations outstanding on the home and deletes the node's grants; the id and name go next only to a member device paired after it (review rounds 3 and 4, above). Not forwardable: it is the home's administration. |
 | `fleet.peers` | Sync | `ListPeers` → `Vec<FleetNode>` | The home's view of the fleet for members: `FleetNode { node, name, protocol, reachable }`, the home included. |
 | `fleet.nodes` | Read | `ListNodes` → `Vec<FleetNode>` | What any node knows of its fleet (a member asks its home with `fleet.peers`); the agents' `list_nodes`. |
 

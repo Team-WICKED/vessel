@@ -2,11 +2,14 @@
 //! joining members, and showing where the fleet stands.
 //!
 //! [Decision Log]
-//! - Local and remote: `init`, `join`, `leave`, `status`, `restore` and
-//!   `forget` act on this machine's node through its data directory
+//! - Local and remote: `init`, `join`, `leave`, `status` and `restore`
+//!   act on this machine's node through its data directory
 //!   (`vessel_node::fleet`), so they work whether the node runs or not,
-//!   and a running node picks the change up within seconds. `invite` and
-//!   `members` are calls to a node (`--node`), normally the home.
+//!   and a running node picks the change up within seconds. `invite`,
+//!   `members` and `forget` are calls to a node (`--node`), the home.
+//!   `forget` is the home's own act: it withdraws the invitations
+//!   outstanding and records the devices that exist at that moment, which
+//!   a change to its files alone could not do.
 //! - `join` reads the link from standard input and confirms the home's
 //!   key fingerprint, exactly as `vessel nodes add --pair` does (shared in
 //!   `pair`): the link is a single-use secret.
@@ -17,7 +20,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use vessel_node::fleet::{self, ConflictWhy, FleetFiles, FleetInit, FleetStatus, Role, SkipGlob};
-use vessel_proto::{FleetMember, NodeId, Scope};
+use vessel_proto::{FleetMember, ForgetNode, NodeId, Scope};
 
 use crate::args::{FleetCommand, MemoryCommand, Target};
 use crate::connect::{connect, data_dir};
@@ -57,7 +60,7 @@ pub(crate) async fn command(target: &Target, command: FleetCommand) -> Result<()
             .await?;
             Ok(())
         }
-        FleetCommand::Forget { node } => forget(files, node).await,
+        FleetCommand::Forget { node } => forget(target, node).await,
         FleetCommand::Status => {
             let status = blocking(move || fleet::status(&files).map_err(CliError::from)).await?;
             io::out(render_status(&status).as_bytes()).await?;
@@ -315,32 +318,33 @@ fn render_members(members: &[FleetMember]) -> String {
     text
 }
 
-/// `vessel fleet forget <node>` (the home): its binding and grants.
-async fn forget(files: FleetFiles, node: NodeId) -> Result<(), CliError> {
-    let forgot = blocking(move || fleet::forget(&files, node).map_err(CliError::from)).await?;
-    let said = match forgot {
-        None => format!("this home has no binding for node {node}\n"),
-        Some(forgot) => {
-            let mut said = format!(
-                "forgot node {node}'s key {}{}; invite it again (`vessel fleet invite`) and \
-                 join it from there: only a device paired from now on may take its id and \
-                 name\n",
-                forgot.key,
-                forgot
-                    .name
-                    .as_deref()
-                    .map_or_else(String::new, |name| format!(" and its name `{name}`"))
-            );
-            for device in &forgot.devices {
-                let _ok = writeln!(
-                    said,
-                    "  member device {device} granted for it: its grant is deleted; revoke the \
-                     device if it should not sync any more"
-                );
-            }
-            said
-        }
-    };
+/// `vessel fleet forget <node>`: `fleet.forget` on the home.
+async fn forget(target: &Target, node: NodeId) -> Result<(), CliError> {
+    let client = connect(target).await?.client;
+    let forgot = client.call(ForgetNode { node }).await?;
+    let mut said = format!(
+        "forgot node {node}'s key {}{}; invite it again (`vessel fleet invite`) and join it \
+         from there: only a device paired from now on may take its id and name\n",
+        forgot.key,
+        forgot
+            .name
+            .as_deref()
+            .map_or_else(String::new, |name| format!(" and its name `{name}`"))
+    );
+    if forgot.withdrawn > 0 {
+        let _ok = writeln!(
+            said,
+            "  {} invitations outstanding on the home were withdrawn; make new ones",
+            forgot.withdrawn
+        );
+    }
+    for device in &forgot.devices {
+        let _ok = writeln!(
+            said,
+            "  member device {device} granted for it: its grant is deleted; revoke the device \
+             if it should not sync any more"
+        );
+    }
     io::note(&said).await?;
     Ok(())
 }

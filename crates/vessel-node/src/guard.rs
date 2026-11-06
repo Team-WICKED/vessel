@@ -32,14 +32,14 @@
 
 use vessel_proto::{
     Ack, BlobChunk, CloseTransfer, CopySecret, CreateSession, DeleteSecret, Deliver, DeviceInfo,
-    EventPage, ExportMemory, ExportSession, FleetMember, FleetNode, Forward, Forwarded, Generation,
-    GetManifest, GetNode, GetSession, GrantHome, Handler, Harness, ImportMemory, ImportSession,
-    Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers, ListNodes,
-    ListPeers, ListProfiles, ListSecrets, ListSessions, Manifest, MemoryImported, MoveProfile,
-    NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReadTransfer, RelayCall, ReloadProfiles,
-    ReportApplied, Request, RevokeDevice, SecretName, SendInput, SessionId, SessionImported,
-    SessionInfo, SetSecret, StopNode, Subscribe, Subscribed, TransferManifest, Unsubscribe,
-    WatchFleet, WireError,
+    EventPage, ExportMemory, ExportSession, FleetMember, FleetNode, ForgetNode, Forward, Forwarded,
+    Generation, GetManifest, GetNode, GetSession, GrantHome, Handler, Harness, ImportMemory,
+    ImportSession, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers,
+    ListNodes, ListPeers, ListProfiles, ListSecrets, ListSessions, Manifest, MemoryImported,
+    MoveProfile, NodeForgotten, NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReadTransfer,
+    RelayCall, ReloadProfiles, ReportApplied, Request, RevokeDevice, SecretName, SendInput,
+    SessionId, SessionImported, SessionInfo, SetSecret, StopNode, Subscribe, Subscribed,
+    TransferManifest, Unsubscribe, WatchFleet, WireError,
 };
 
 use crate::service::{Connection, NodeService};
@@ -153,6 +153,7 @@ untargeted!(
     RelayCall,
     Deliver,
     GrantHome,
+    ForgetNode,
     ListPeers,
     ListNodes,
     ImportSession,
@@ -190,6 +191,7 @@ guarded! {
     report_applied: ReportApplied => Ack;
     list_members: ListMembers => Vec<FleetMember>;
     grant_home: GrantHome => Ack;
+    forget_node: ForgetNode => NodeForgotten;
     list_peers: ListPeers => Vec<FleetNode>;
     list_nodes: ListNodes => Vec<FleetNode>;
     export_session: ExportSession => TransferManifest;
