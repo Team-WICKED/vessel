@@ -18,8 +18,10 @@ pub enum AgentOutput {
 
 /// The outputs of an agent session, in order.
 ///
-/// Bounded: when the consumer stops reading, the driver stops reading the
-/// agent's stdout, and the agent blocks. Nothing is dropped.
+/// Bounded: when the consumer stops reading, the driver stops, its
+/// transport stops reading the agent's stdout, and the agent blocks on its
+/// writes. Nothing is dropped. (What the SDK reads regardless is listed in
+/// the `transport` module and ADR 0003.)
 #[derive(Debug)]
 pub struct AgentOutputs(mpsc::Receiver<AgentOutput>);
 

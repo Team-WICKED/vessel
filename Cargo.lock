@@ -2115,11 +2115,11 @@ name = "vessel-agent"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "futures-util",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "tokio-util",
  "tracing",
  "vessel-proc",
  "vessel-proto",
