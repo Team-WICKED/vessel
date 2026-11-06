@@ -36,3 +36,5 @@ mod terminal;
 mod transfers;
 #[cfg(test)]
 mod transfers_across;
+#[cfg(test)]
+mod waiting;
