@@ -46,7 +46,7 @@ pub struct Origin {
 }
 
 /// The principal a call started with, on its own node.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OriginBy {
     /// That node's token or local socket.

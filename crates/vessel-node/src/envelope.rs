@@ -38,7 +38,7 @@
 
 use vessel_proto::{
     Ack, Call, Deliver, ErrorCode, FleetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers,
-    Method, Origin, OriginBy, RelayCall, Reply, Scope, WireError,
+    Method, NodeId, Origin, OriginBy, RelayCall, Reply, Scope, WireError,
 };
 
 use crate::guard::Guarded;
@@ -78,12 +78,28 @@ impl NodeService {
         guard: &Guarded,
     ) -> Result<Forwarded, WireError> {
         let Forward { node, call } = request;
-        forwardable(call.method())?;
-        let principal = connection.principal();
-        principal.permit(call.method())?;
         if node == self.links.node() {
+            forwardable(call.method())?;
+            connection.principal().permit(call.method())?;
             return forwarded(run_here(guard, connection, *call).await);
         }
+        self.pass_on(connection.principal(), node, call).await
+    }
+
+    /// Run `call` on fleet node `node` (another node) for `principal`: the
+    /// route `fleet.forward` takes, checks included (forwardable, the
+    /// caller's own scope for it). For node code that acts on another node
+    /// for its caller, such as an import pulling a transfer (F4): the
+    /// source node sees the caller's origin, so its ownership rules and
+    /// its grant to the home apply there.
+    pub(crate) async fn pass_on(
+        &self,
+        principal: &Principal,
+        node: NodeId,
+        call: Box<Call>,
+    ) -> Result<Forwarded, WireError> {
+        forwardable(call.method())?;
+        principal.permit(call.method())?;
         let origin = self.origin_of(principal)?;
         if self.links.is_home() {
             self.links.call_member(node, Deliver { call, origin }).await

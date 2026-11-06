@@ -170,6 +170,40 @@ pub(crate) enum SessionCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Copy a structured session's conversation to a node (this one by
+    /// default) and one of its profiles, for a working directory there.
+    /// The session goes on here; with --start the copy resumes there as a
+    /// new session. Between turns only.
+    Copy {
+        #[command(flatten)]
+        to: CopyTo,
+        /// Resume the copy there as a new session.
+        #[arg(long)]
+        start: bool,
+    },
+    /// Move a structured session's conversation: copy it, resume it there
+    /// as a new session, then stop it here. Between turns only.
+    Move {
+        #[command(flatten)]
+        to: CopyTo,
+    },
+}
+
+/// Where `vessel session copy|move` takes a conversation.
+#[derive(Debug, Args)]
+pub(crate) struct CopyTo {
+    /// Session id, or a unique prefix of one.
+    pub(crate) session: SessionSelector,
+    /// The node to copy it to (as for --node); default: the session's own.
+    #[arg(long)]
+    pub(crate) to: Option<String>,
+    /// The profile there (`vessel profiles`); default: the harness's
+    /// default profile.
+    #[arg(long)]
+    pub(crate) profile: Option<ProfileName>,
+    /// The working directory there, absolute; default: the session's own.
+    #[arg(long)]
+    pub(crate) cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -267,6 +301,11 @@ pub(crate) enum FleetCommand {
         /// The deleted file, or a directory.
         path: PathBuf,
     },
+    /// Profiles' memory, copied between profiles and nodes on demand.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
     /// This node's secrets, which fill the fleet's MCP servers here
     /// (`secrets.toml`); they never leave this node.
     Secret {
@@ -296,6 +335,35 @@ fn grant_scopes(text: &str) -> Result<GrantScopes, String> {
         }
     }
     Ok(GrantScopes(scopes))
+}
+
+/// `vessel fleet memory ...`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum MemoryCommand {
+    /// Copy a profile's memory to another profile or node (needs `admin`
+    /// there). Files that differ are written beside the existing ones
+    /// (`<name>.vessel-incoming`); nothing is overwritten.
+    Copy {
+        /// The node it comes from (as for --node); default: --node.
+        #[arg(long)]
+        from: Option<String>,
+        /// The profile it comes from; default: Claude Code's default.
+        #[arg(long)]
+        from_profile: Option<ProfileName>,
+        /// One project's memory (its working directory on that node);
+        /// default: all of the profile's memory.
+        #[arg(long)]
+        from_project: Option<PathBuf>,
+        /// The node it goes to (as for --node); default: --node.
+        #[arg(long)]
+        to: Option<String>,
+        /// The profile it goes to; default: its harness's default profile.
+        #[arg(long)]
+        profile: Option<ProfileName>,
+        /// The project it goes to, absolute; default: the same directory.
+        #[arg(long, requires = "from_project")]
+        project: Option<PathBuf>,
+    },
 }
 
 /// `vessel fleet secret ...`.
@@ -543,6 +611,70 @@ mod tests {
         };
         assert_eq!(harness, Some(HarnessKind::Codex));
         assert!(reload);
+    }
+
+    #[test]
+    fn copy_and_move_take_a_node_a_profile_and_a_directory() {
+        let Cli {
+            command:
+                Command::Session {
+                    command: SessionCommand::Copy { to, start },
+                },
+            ..
+        } = Cli::try_parse_from([
+            "vessel",
+            "session",
+            "copy",
+            "3f2a",
+            "--to",
+            "laptop",
+            "--profile",
+            "claude-alt",
+            "--cwd",
+            "/srv/app",
+            "--start",
+        ])
+        .unwrap()
+        else {
+            panic!("expected session copy");
+        };
+        assert_eq!(to.to.as_deref(), Some("laptop"));
+        assert_eq!(to.profile.unwrap().as_str(), "claude-alt");
+        assert_eq!(to.cwd, Some(PathBuf::from("/srv/app")));
+        assert!(start);
+        assert!(matches!(
+            Cli::try_parse_from(["vessel", "session", "move", "3f2a"])
+                .unwrap()
+                .command,
+            Command::Session {
+                command: SessionCommand::Move { .. }
+            }
+        ));
+        // A move always resumes the copy: no --start.
+        assert!(Cli::try_parse_from(["vessel", "session", "move", "3f2a", "--start"]).is_err());
+    }
+
+    #[test]
+    fn memory_copy_needs_a_source_project_for_a_target_one() {
+        let parsed = Cli::try_parse_from([
+            "vessel",
+            "fleet",
+            "memory",
+            "copy",
+            "--from-profile",
+            "claude-alt",
+            "--from-project",
+            "/srv/a",
+            "--profile",
+            "claude-work",
+            "--project",
+            "/srv/b",
+        ]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+        assert!(
+            Cli::try_parse_from(["vessel", "fleet", "memory", "copy", "--project", "/srv/b"])
+                .is_err()
+        );
     }
 
     #[test]

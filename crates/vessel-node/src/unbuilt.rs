@@ -19,11 +19,7 @@
 //! - Constraint: a stub changes nothing and holds nothing; the error code
 //!   is `unsupported`, what a client gets for any method a node lacks.
 
-use vessel_proto::{
-    Ack, BlobChunk, CloseTransfer, CopySecret, DeleteSecret, ErrorCode, ExportMemory,
-    ExportSession, ImportMemory, ImportSession, ListSecrets, MemoryImported, Method, ReadTransfer,
-    Request as _, SecretName, SessionImported, SetSecret, TransferManifest, WireError,
-};
+use vessel_proto::{Ack, CopySecret, ErrorCode, Method, Request as _, WireError};
 
 use crate::service::{Connection, NodeService};
 
@@ -55,14 +51,5 @@ macro_rules! unbuilt {
 }
 
 unbuilt! {
-    export_session: ExportSession => TransferManifest, "F4";
-    import_session: ImportSession => SessionImported, "F4";
-    export_memory: ExportMemory => TransferManifest, "F4";
-    import_memory: ImportMemory => MemoryImported, "F4";
-    read_transfer: ReadTransfer => BlobChunk, "F4";
-    close_transfer: CloseTransfer => Ack, "F4";
-    set_secret: SetSecret => Ack, "F3";
-    list_secrets: ListSecrets => Vec<SecretName>, "F3";
-    delete_secret: DeleteSecret => Ack, "F3";
-    copy_secret: CopySecret => Ack, "F3";
+    copy_secret: CopySecret => Ack, "F3, with Track X's envelope";
 }

@@ -312,6 +312,9 @@ async fn a_turn_with_a_permission_round_trip() {
                 option: PermissionOptionId::new("allow-once"),
             },
         };
+        // Waiting on a permission is the middle of a turn (what
+        // `session.export` refuses without `force`).
+        assert!(handle.turn_running().await.unwrap());
         handle.send(allow.clone()).await.unwrap();
         assert_eq!(
             handle.send(allow).await.unwrap_err().code(),
@@ -335,6 +338,8 @@ async fn a_turn_with_a_permission_round_trip() {
                     }
                 }
             }));
+
+        assert!(!handle.turn_running().await.unwrap(), "between turns");
 
         let keys = SessionInput::Terminal {
             input: TerminalInput::Resize {
