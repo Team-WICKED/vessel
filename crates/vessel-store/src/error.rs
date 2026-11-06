@@ -67,7 +67,7 @@ pub enum StoreError {
         holder: Option<Box<crate::lock::NodeOwner>>,
     },
     /// The operating system's random source failed.
-    #[error("no randomness available for the node token")]
+    #[error("no randomness available")]
     Random(#[source] getrandom::Error),
     /// `node.id` does not hold a node id.
     #[error("{} does not hold a node id", path.display())]
@@ -77,6 +77,19 @@ pub enum StoreError {
         /// Why it did not parse.
         #[source]
         source: <NodeId as FromStr>::Err,
+    },
+    /// `node.key` does not hold a key. It is never replaced automatically:
+    /// a new key would unpair every device (ADR 0009).
+    #[error(
+        "{} does not hold a node key (expected 32 bytes, found {len}); restore it from a \
+         backup, or delete it to make a new key (every paired device must then pair again)",
+        path.display()
+    )]
+    InvalidNodeKey {
+        /// The file.
+        path: PathBuf,
+        /// Its size.
+        len: usize,
     },
     /// The token file does not hold a token this node could have written.
     #[error("{} does not hold a valid token", path.display())]
@@ -166,6 +179,7 @@ impl StoreError {
             | Self::Random(_)
             | Self::InvalidNodeId { .. }
             | Self::InvalidToken { .. }
+            | Self::InvalidNodeKey { .. }
             | Self::NewerSchema { .. }
             | Self::Sqlite(_)
             | Self::Commit(_)

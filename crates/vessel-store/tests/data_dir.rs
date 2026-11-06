@@ -57,6 +57,37 @@ fn secrets_are_owner_only() {
     assert_eq!(mode(&dir.token_path()), 0o600);
     let _id = dir.load_or_create_node_id().unwrap();
     assert_eq!(mode(&dir.root().join("node.id")), 0o600);
+    let _key = dir.load_or_create_node_key().unwrap();
+    assert_eq!(mode(&dir.node_key_path()), 0o600);
+}
+
+#[test]
+fn the_node_key_is_created_once_and_then_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = DataDir::new(temp.path());
+    dir.prepare().unwrap();
+    let key = dir.load_or_create_node_key().unwrap();
+    assert_eq!(std::fs::read(dir.node_key_path()).unwrap(), key.expose());
+    assert_eq!(
+        dir.load_or_create_node_key().unwrap().expose(),
+        key.expose()
+    );
+    assert_eq!(dir.read_node_key().unwrap().expose(), key.expose());
+    assert_eq!(format!("{key:?}"), "NodeKeySecret(<redacted>)");
+}
+
+/// A key of the wrong size is reported, never replaced: a new key would
+/// unpair every device without anyone deciding to.
+#[test]
+fn a_damaged_node_key_is_an_error_not_a_new_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = DataDir::new(temp.path());
+    std::fs::write(dir.node_key_path(), [7_u8; 31]).unwrap();
+    assert!(matches!(
+        dir.load_or_create_node_key(),
+        Err(StoreError::InvalidNodeKey { len: 31, .. })
+    ));
+    assert_eq!(std::fs::read(dir.node_key_path()).unwrap(), [7_u8; 31]);
 }
 
 /// A data directory that already exists with group or other access (one
