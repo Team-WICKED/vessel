@@ -243,9 +243,10 @@ pub(crate) enum NodeCommand {
     },
 }
 
-/// `vessel fleet ...`. `init`, `join`, `leave`, `status` and `restore` act
-/// on the node of this machine's data directory (`--data-dir`), running or
-/// not; `invite` and `members` talk to a node (`--node`, the home).
+/// `vessel fleet ...`. `init`, `join`, `leave`, `status`, `restore` and
+/// `forget` act on the node of this machine's data directory
+/// (`--data-dir`), running or not; `invite` and `members` talk to a node
+/// (`--node`, the home).
 #[derive(Debug, Subcommand)]
 pub(crate) enum FleetCommand {
     /// Make this node the fleet's home: write `fleet.toml`, naming the
@@ -295,6 +296,15 @@ pub(crate) enum FleetCommand {
     Status,
     /// The home's members and what each last applied (needs `admin`).
     Members,
+    /// On the home: let a member node grant again under a new key (it was
+    /// reinstalled). The home binds each node id to the key of its first
+    /// grant for good; this forgets that binding and the node's grants,
+    /// and records that it did. Revoke any of the node's devices that
+    /// should not sync any more separately.
+    Forget {
+        /// The node's id (`vessel fleet members`, `list_nodes`).
+        node: NodeId,
+    },
     /// Bring back fleet files deleted here: one file, or every one below a
     /// directory. The node writes them again within a few seconds.
     Restore {
