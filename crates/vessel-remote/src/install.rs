@@ -443,6 +443,19 @@ impl<'a> Installer<'a> {
     /// does not touch what was installed before.
     pub async fn install(&self, build: &Build) -> Result<Installed, InstallError> {
         let platform = Platform::detect(self.ssh).await?;
+        self.install_on(platform, build).await
+    }
+
+    /// [`install`](Self::install) on a machine whose platform is already
+    /// known (detected by the caller, to choose the build).
+    ///
+    /// # Errors
+    /// As [`install`](Self::install).
+    pub async fn install_on(
+        &self,
+        platform: Platform,
+        build: &Build,
+    ) -> Result<Installed, InstallError> {
         if !build.runs_on(platform) {
             return Err(InstallError::WrongTarget {
                 build: build.target.clone(),

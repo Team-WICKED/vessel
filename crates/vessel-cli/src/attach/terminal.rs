@@ -30,10 +30,9 @@ use tokio::sync::mpsc;
 #[cfg(unix)]
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::Instant;
-use vessel_client::NodeClient;
-use vessel_proto::{EventSeq, SessionEvent, SessionId, TerminalSize};
+use vessel_proto::{SessionEvent, SessionId, TerminalSize};
 
-use super::Ended;
+use super::{Ended, Stream, notice};
 use crate::error::CliError;
 use crate::io;
 use detach::{ESCAPE_WAIT, Scanner};
@@ -46,18 +45,13 @@ use signals::Stop;
 /// keep the user from leaving.
 const DETACH_FLUSH: Duration = Duration::from_secs(1);
 
-pub(super) async fn attach(
-    client: &NodeClient,
-    session: SessionId,
-    from: EventSeq,
-) -> Result<Ended, CliError> {
-    let mut stream = client.follow(session, from).await?;
+pub(super) async fn attach(mut stream: Stream, session: SessionId) -> Result<Ended, CliError> {
     let raw = RawMode::enable()?;
     if raw.is_some() {
         io::note("[vessel] attached; Ctrl-] detaches\r\n").await?;
     }
     let mut stop = Stop::listen();
-    let (batches, mut sending) = sender::spawn(client.clone(), session);
+    let (batches, mut sending) = sender::spawn(stream.client(), session);
     let mut pending = Pending::default();
     if let Some(size) = window_size() {
         pending.resize(size);
@@ -75,8 +69,8 @@ pub(super) async fn attach(
         tokio::select! {
             () = stop.requested() => break,
             sent = &mut sending => {
-                // The sender only ends when the connection is lost (the
-                // loop still holds its queue).
+                // The sender only ends on an error it cannot get past, or
+                // when the stream is gone (the loop still holds its queue).
                 sent??;
                 return Ok(Ended::Session(last_status));
             }
@@ -91,9 +85,7 @@ pub(super) async fn attach(
                     }
                     SessionEvent::Agent { .. } => {}
                 },
-                Some(Err(error)) if !error.is_fatal() => {
-                    io::note(&format!("\r\n[vessel] {error}\r\n")).await?;
-                }
+                Some(Err(error)) if !error.is_fatal() => notice(&error, "\r\n").await?,
                 Some(Err(error)) => return Err(error.into()),
             },
             chunk = keys.recv(), if input_open && pending.has_room() => {

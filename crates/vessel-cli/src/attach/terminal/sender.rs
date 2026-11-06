@@ -19,16 +19,22 @@
 //!   into a harness that stopped reading gets there.
 //! - Alternatives: a task per send (reorders keys); an unbounded queue (the
 //!   rules forbid it, and a stuck harness would grow it without end).
+//! - Reconnects (milestone 2): the sender sends on whichever connection the
+//!   resuming stream currently has, waiting while there is none. A send
+//!   that fails because the connection dropped is reported as possibly not
+//!   applied and is not repeated; the sender then waits for the next
+//!   connection, so keys typed during the outage go out once it is back,
+//!   in order.
 
 use std::collections::VecDeque;
 
 use bytes::Bytes;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use vessel_client::NodeClient;
 use vessel_proto::{SessionId, SessionInput, TerminalBytes, TerminalInput, TerminalSize};
 
-use crate::attach::send;
+use crate::attach::{Sent, send};
 use crate::error::CliError;
 
 /// Most bytes of keys queued while a send is in flight.
@@ -90,9 +96,10 @@ impl Pending {
 }
 
 /// Start the sender; returns where to hand batches, and the task, which
-/// ends with an error when the connection is lost.
+/// ends with an error only for a failure other than a lost connection, and
+/// without one once `clients` is closed (the stream is gone).
 pub(super) fn spawn(
-    client: NodeClient,
+    mut clients: watch::Receiver<Option<NodeClient>>,
     session: SessionId,
 ) -> (mpsc::Sender<Vec<Item>>, JoinHandle<Result<(), CliError>>) {
     // Capacity one: a batch waits here only while the previous one is being
@@ -107,14 +114,32 @@ pub(super) fn spawn(
                     },
                     Item::Resize(size) => TerminalInput::Resize { size },
                 };
+                let Some(client) = current(&mut clients).await else {
+                    return Ok(());
+                };
                 // A refusal (the session just ended) is shown by `send`;
                 // the stream then ends the attach.
-                let _accepted = send(&client, session, SessionInput::Terminal { input }).await?;
+                let sent = send(&client, session, SessionInput::Terminal { input }).await?;
+                // A lost send is not repeated. Wait until the stream has
+                // noticed and replaced this connection before sending more.
+                if sent == Sent::Lost && clients.changed().await.is_err() {
+                    return Ok(());
+                }
             }
         }
         Ok(())
     });
     (batches, task)
+}
+
+/// The current connection, waiting while there is none; `None` once the
+/// stream is gone.
+async fn current(clients: &mut watch::Receiver<Option<NodeClient>>) -> Option<NodeClient> {
+    clients
+        .wait_for(Option::is_some)
+        .await
+        .ok()
+        .and_then(|client| client.clone())
 }
 
 #[cfg(test)]

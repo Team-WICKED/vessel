@@ -2247,6 +2247,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
+ "dirs",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -2256,6 +2257,7 @@ dependencies = [
  "vessel-harness",
  "vessel-node",
  "vessel-proto",
+ "vessel-remote",
  "vessel-testkit",
 ]
 

@@ -11,13 +11,14 @@ use vessel_proto::{
     TerminalBytes, TerminalInput,
 };
 
+use vessel_client::book::Resolved;
+
 use crate::args::{Cli, Command, NodeCommand, Run, Target};
 use crate::attach::{self, terminal};
-use crate::connect::{connect, data_dir};
+use crate::connect::{connect, connect_to, data_dir, is_here};
 use crate::error::CliError;
-use crate::io;
-use crate::render;
 use crate::selector::SessionSelector;
+use crate::{io, nodes, remote, render};
 
 pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
     let target = &cli.target;
@@ -25,33 +26,37 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Node {
             command: NodeCommand::Start { bind, name },
         } => node_start(target, bind, name).await,
+        Command::Node {
+            command: NodeCommand::Install(install),
+        } => remote::install(target, install).await,
+        Command::Nodes { command } => nodes::command(target, command).await,
         Command::Status => {
-            let client = connect(target).await?;
+            let client = connect(target).await?.client;
             let node = client.node_info().await?;
             let harnesses = client.harnesses().await?;
             let text = format!("{}\n{}", render::node(&node), render::harnesses(&harnesses));
             Ok(io::out(text.as_bytes()).await?)
         }
         Command::Harnesses => {
-            let client = connect(target).await?;
+            let client = connect(target).await?.client;
             let text = render::harnesses(&client.harnesses().await?);
             Ok(io::out(text.as_bytes()).await?)
         }
         Command::Sessions => {
-            let client = connect(target).await?;
+            let client = connect(target).await?.client;
             let text = render::sessions(&client.sessions().await?);
             Ok(io::out(text.as_bytes()).await?)
         }
         Command::Run(run) => run_session(target, run).await,
         Command::Attach { session, from } => {
-            let client = connect(target).await?;
-            let info = session.resolve(&client).await?;
-            attach::attach(&client, &info, from).await
+            let connected = connect(target).await?;
+            let info = session.resolve(&connected.client).await?;
+            attach::attach(&connected, &info, from).await
         }
         Command::Send { session, text } => send_text(target, &session, text).await,
         Command::Log { session, from } => log(target, &session, from).await,
         Command::Kill { session } => {
-            let client = connect(target).await?;
+            let client = connect(target).await?.client;
             let info = session.resolve(&client).await?;
             Ok(client.kill(info.id).await?)
         }
@@ -96,18 +101,19 @@ async fn run_session(target: &Target, run: Run) -> Result<(), CliError> {
             size: terminal::window_size().unwrap_or_default(),
         }
     };
+    let (resolved, book) = nodes::resolve(target)?;
     let spec = SessionSpec {
         harness: run.harness,
-        cwd: run.cwd.map(|cwd| node_cwd(target, cwd)).transpose()?,
+        cwd: run.cwd.map(|cwd| node_cwd(&resolved, cwd)).transpose()?,
         mode,
     };
-    let client = connect(target).await?;
-    let info = client.create_session(spec).await?;
+    let connected = connect_to(target, &resolved, &book).await?;
+    let info = connected.client.create_session(spec).await?;
     if run.detach {
         return Ok(io::out(format!("{}\n", info.id).as_bytes()).await?);
     }
     io::note(&format!("[vessel] session {}\n", info.id)).await?;
-    attach::attach(&client, &info, EventSeq::ZERO).await
+    attach::attach(&connected, &info, EventSeq::ZERO).await
 }
 
 /// `--cwd` as the node needs it: an absolute path on the node's machine.
@@ -118,16 +124,16 @@ async fn run_session(target: &Target, run: Run) -> Result<(), CliError> {
 /// machine: then it is resolved against this process's current directory.
 /// For a node on another machine there is no such place, so it is refused
 /// here with an error saying so, instead of being sent and failing there
-/// with a less helpful one. "This machine" is a loopback `--node`, as for
-/// the token file (`connect`).
-fn node_cwd(target: &Target, cwd: PathBuf) -> Result<PathBuf, CliError> {
+/// with a less helpful one. "This machine" is a loopback websocket node, as
+/// for the token file (`connect`); an SSH node is another machine.
+fn node_cwd(resolved: &Resolved, cwd: PathBuf) -> Result<PathBuf, CliError> {
     if cwd.is_absolute() {
         return Ok(cwd);
     }
-    if !target.node.is_loopback() {
+    if !is_here(resolved) {
         return Err(CliError::RelativeCwd {
             cwd,
-            node: target.node.clone(),
+            node: nodes::label(resolved),
         });
     }
     Ok(std::path::absolute(&cwd)?)
@@ -141,7 +147,7 @@ async fn send_text(
     session: &SessionSelector,
     text: String,
 ) -> Result<(), CliError> {
-    let client = connect(target).await?;
+    let client = connect(target).await?.client;
     let info = session.resolve(&client).await?;
     let input = match info.spec.mode {
         SessionMode::Terminal { .. } => SessionInput::Terminal {
@@ -158,36 +164,45 @@ async fn send_text(
 
 /// Print a session's log (see `log` for the order of stdout and stderr).
 async fn log(target: &Target, session: &SessionSelector, from: EventSeq) -> Result<(), CliError> {
-    let client = connect(target).await?;
+    let client = connect(target).await?.client;
     let info = session.resolve(&client).await?;
     crate::log::print(&client, info.id, from).await
 }
 
 #[cfg(test)]
 mod tests {
+    use vessel_client::book::Origin;
+
     use super::*;
 
-    fn target(node: &str) -> Target {
-        Target {
-            node: node.parse().unwrap(),
+    fn resolved(node: &str) -> Resolved {
+        Resolved {
+            name: None,
+            address: node.parse().unwrap(),
             token: None,
-            data_dir: None,
+            pinned: None,
+            origin: Origin::Named,
         }
     }
 
     #[test]
     fn a_relative_cwd_is_resolved_here_only_for_a_node_on_this_machine() {
         let here = std::env::current_dir().unwrap();
-        let local = node_cwd(&target("127.0.0.1:7077"), PathBuf::from("project")).unwrap();
+        let local = node_cwd(&resolved("127.0.0.1:7077"), PathBuf::from("project")).unwrap();
         assert_eq!(local, here.join("project"));
         let absolute = here.join("elsewhere");
         assert_eq!(
-            node_cwd(&target("gpu-box"), absolute.clone()).unwrap(),
+            node_cwd(&resolved("gpu-box"), absolute.clone()).unwrap(),
             absolute
         );
-        assert!(matches!(
-            node_cwd(&target("gpu-box"), PathBuf::from("project")),
-            Err(CliError::RelativeCwd { .. })
-        ));
+        for remote in ["gpu-box", "me@127.0.0.1", "ssh://localhost"] {
+            assert!(
+                matches!(
+                    node_cwd(&resolved(remote), PathBuf::from("project")),
+                    Err(CliError::RelativeCwd { .. })
+                ),
+                "{remote}"
+            );
+        }
     }
 }
