@@ -48,7 +48,7 @@ pub use node::{
 pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use relay::{
-    ConnId, EmptyToken, HandshakeMessage, NodeToRelay, RegistrationRefusal, RelayClose,
+    ConnId, EmptyToken, HandshakeMessage, NodeClose, NodeToRelay, RegistrationRefusal, RelayClose,
     RelayToNode, RelayToken,
 };
 pub use rpc::{

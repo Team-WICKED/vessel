@@ -277,6 +277,48 @@ impl RelayClose {
     }
 }
 
+/// Close codes a node sends on a secure-channel websocket (`/secure`, or a
+/// relay data connection), before any frame could carry an error.
+///
+/// [Decision Log]
+/// - Purpose: with Noise NK only the node can tell that a client pinned the
+///   wrong key; the client just sees the connection end, which looks
+///   transient, so it would retry a stale key forever.
+/// - Choice: the node closes with a distinct code after a failed handshake,
+///   and relays forward a node's close code unchanged. Clients treat it as
+///   final ("re-pair this node").
+/// - Cost: the code is not authenticated. A forged one can only make a
+///   client stop retrying, a denial of service any relay or network path can
+///   cause anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NodeClose {
+    /// The secure handshake failed: most likely the client pinned another
+    /// key (the node was re-keyed or it is a different node).
+    HandshakeFailed,
+}
+
+impl NodeClose {
+    /// Every variant, for exhaustive tests.
+    pub const ALL: [Self; 1] = [Self::HandshakeFailed];
+
+    /// The websocket close code.
+    #[must_use]
+    pub const fn code(self) -> u16 {
+        match self {
+            Self::HandshakeFailed => 4401,
+        }
+    }
+
+    /// The variant for a close code, if it is one of the node's.
+    #[must_use]
+    pub const fn from_code(code: u16) -> Option<Self> {
+        match code {
+            4401 => Some(Self::HandshakeFailed),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +330,10 @@ mod tests {
             assert!((4000..5000).contains(&close.code()));
         }
         assert_eq!(RelayClose::from_code(1000), None);
+        for close in NodeClose::ALL {
+            assert_eq!(NodeClose::from_code(close.code()), Some(close));
+            assert_eq!(RelayClose::from_code(close.code()), None);
+        }
     }
 
     #[test]
