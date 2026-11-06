@@ -41,7 +41,7 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     Call, ClientFrame, ClientInfo, CreateSession, GetNode, GetSession, Hello, KillSession,
     ListHarnesses, ListSessions, Outcome, ProtocolRange, ReadEvents, Request, RequestId, SendInput,
-    ServerFrame, StopNode, Subscribe, Unsubscribe, Welcome,
+    ServerFrame, StopNode, Subscribe, Unsubscribe, Welcome, WireError,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -127,6 +127,25 @@ impl RequestIds {
     }
 }
 
+/// The node's `Rejected` error, if that is what the handshake's answer is.
+fn refusal<E>(
+    answer: &Result<Option<Result<String, E>>, tokio::time::error::Elapsed>,
+) -> Option<WireError> {
+    let Ok(Some(Ok(text))) = answer else {
+        return None;
+    };
+    match serde_json::from_str::<ServerFrame>(text) {
+        Ok(ServerFrame::Rejected { error }) => Some(error),
+        Ok(
+            ServerFrame::Welcome(_)
+            | ServerFrame::Response { .. }
+            | ServerFrame::Event { .. }
+            | ServerFrame::SubscriptionEnded { .. },
+        )
+        | Err(_) => None,
+    }
+}
+
 impl Connection {
     /// Say hello over `transport` and start the connection's driver task.
     ///
@@ -145,10 +164,18 @@ impl Connection {
             client,
         });
         let text = serde_json::to_string(&hello).map_err(ConnectError::Encode)?;
-        sink.send(text).await.map_err(ConnectError::Transport)?;
-
-        let answer = tokio::time::timeout(config.handshake_timeout, stream.next())
-            .await
+        let sent = sink.send(text).await;
+        let answer = tokio::time::timeout(config.handshake_timeout, stream.next()).await;
+        if let Err(error) = sent {
+            // A node may refuse before reading `Hello` and close at once (a
+            // wrong token on the local socket, ADR 0007), which breaks the
+            // send. Its refusal can still be waiting to be read, and says
+            // why; otherwise the send's own error does.
+            return Err(
+                refusal(&answer).map_or(ConnectError::Transport(error), ConnectError::Rejected)
+            );
+        }
+        let answer = answer
             .map_err(|_elapsed| ConnectError::Timeout)?
             .ok_or(ConnectError::Closed)?
             .map_err(ConnectError::Transport)?;

@@ -45,6 +45,27 @@ async fn client_reports_rejection() {
     node_side.await.unwrap();
 }
 
+/// A node may refuse before reading `Hello` and close at once (a wrong
+/// token on the local socket, ADR 0007), so sending `Hello` fails. The
+/// refusal already on its way says why; it wins over the broken pipe.
+#[tokio::test]
+async fn a_refusal_is_reported_even_when_hello_cannot_be_sent() {
+    let (client_end, mut server_end) = pair();
+    let rejected = ServerFrame::Rejected {
+        error: WireError::new(ErrorCode::Unauthorized, "missing or wrong token"),
+    };
+    server_end
+        .send(serde_json::to_string(&rejected).unwrap())
+        .await
+        .unwrap();
+    drop(server_end);
+    let result = Connection::connect(client_end, client_info(), &ClientConfig::default()).await;
+    let Err(ConnectError::Rejected(error)) = result else {
+        panic!("expected a rejection, got {result:?}");
+    };
+    assert_eq!(error.code, ErrorCode::Unauthorized);
+}
+
 /// A call still running when the server begins shutting down is answered
 /// before the connection closes: `node.stop{now}` starts the shutdown from
 /// inside its own call, and its client must still get the `Ack`.
