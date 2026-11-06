@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use vessel_node::fleet::{self, ConflictWhy, FleetFiles, FleetInit, FleetStatus, Role, SkipGlob};
-use vessel_proto::{FleetMember, ForgetNode, NodeId, Scope};
+use vessel_proto::{FleetMember, ForgetNode, NodeForgotten, NodeId, Scope};
 
 use crate::args::{FleetCommand, MemoryCommand, Target};
 use crate::connect::{connect, data_dir};
@@ -322,9 +322,20 @@ fn render_members(members: &[FleetMember]) -> String {
 async fn forget(target: &Target, node: NodeId) -> Result<(), CliError> {
     let client = connect(target).await?.client;
     let forgot = client.call(ForgetNode { node }).await?;
+    io::note(&render_forgot(node, &forgot)).await?;
+    Ok(())
+}
+
+/// What `forget` did, and the one thing the owner must do next: after a
+/// forget, the first member device invited that claims the id and name
+/// keeps them (review round 5, accepted by design), so the node is invited
+/// before anything else.
+fn render_forgot(node: NodeId, forgot: &NodeForgotten) -> String {
     let mut said = format!(
-        "forgot node {node}'s key {}{}; invite it again (`vessel fleet invite`) and join it \
-         from there: only a device paired from now on may take its id and name\n",
+        "forgot node {node}'s key {}{}\n\
+         any member device invited from now on may take that id and name, and the first to \
+         claim them keeps them: invite only that node next (`vessel fleet invite`), join it \
+         from there, and invite others after it has joined\n",
         forgot.key,
         forgot
             .name
@@ -332,9 +343,15 @@ async fn forget(target: &Target, node: NodeId) -> Result<(), CliError> {
             .map_or_else(String::new, |name| format!(" and its name `{name}`"))
     );
     if forgot.withdrawn > 0 {
+        let (invitations, were) = if forgot.withdrawn == 1 {
+            ("invitation", "was")
+        } else {
+            ("invitations", "were")
+        };
         let _ok = writeln!(
             said,
-            "  {} invitations outstanding on the home were withdrawn; make new ones",
+            "  {} {invitations} outstanding on the home {were} withdrawn, whoever they were \
+             for; make new ones once that node has joined",
             forgot.withdrawn
         );
     }
@@ -345,8 +362,7 @@ async fn forget(target: &Target, node: NodeId) -> Result<(), CliError> {
              if it should not sync any more"
         );
     }
-    io::note(&said).await?;
-    Ok(())
+    said
 }
 
 #[cfg(test)]
@@ -393,6 +409,52 @@ mod tests {
         assert!(
             text.contains("(vessel fleet secret set DOCS_TOKEN)"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn forget_says_to_invite_only_that_node_next() {
+        let node = NodeId::random();
+        let device = vessel_proto::DeviceId::random();
+        let forgot = NodeForgotten {
+            key: vessel_proto::NodePublicKey::from_bytes([7; 32]),
+            name: Some("desktop".to_owned()),
+            devices: vec![device],
+            withdrawn: 2,
+        };
+        let text = render_forgot(node, &forgot);
+        assert!(
+            text.contains(&format!("forgot node {node}'s key ")),
+            "{text}"
+        );
+        assert!(text.contains("and its name `desktop`"), "{text}");
+        assert!(
+            text.contains("any member device invited from now on may take that id and name"),
+            "{text}"
+        );
+        assert!(text.contains("invite only that node next"), "{text}");
+        assert!(
+            text.contains("2 invitations outstanding on the home were withdrawn"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("member device {device} granted")),
+            "{text}"
+        );
+
+        let quiet = render_forgot(
+            node,
+            &NodeForgotten {
+                name: None,
+                devices: Vec::new(),
+                withdrawn: 1,
+                ..forgot
+            },
+        );
+        assert!(!quiet.contains("its name"), "{quiet}");
+        assert!(
+            quiet.contains("1 invitation outstanding on the home was withdrawn"),
+            "{quiet}"
         );
     }
 }

@@ -679,6 +679,27 @@ reproduced problems, fixed in this order:
     name keeps naming it (that member is on `fleet.peers` anyway, and the
     operator needs the fix), and the home's log keeps the details
     (`fleet::links` unit tests, `e2e/grants.rs`).
+- **Round 5 (the reviewer on ba517ea).** Every finding is closed and
+  nothing new turned up. The reviewer raced `withdraw_all()` and the
+  device list against pairings (150 rounds of 12): devices stored after
+  the list appeared in 25 rounds, and each was revoked with its pairing
+  refused. That race is now a regression test,
+  `devices::tests::no_pairing_that_raced_a_withdrawal_outlives_it`, which
+  fails within a dozen rounds with `pair`'s generation check taken out.
+  Crash and restart safety, the not-forwardable boundary, and the test
+  logging (no secrets) were confirmed. Accepted by design:
+  - **After a forget, any member device invited may take the id and
+    name**, and the first to claim them keeps them. So the owner invites
+    only the forgotten node next, joins it, and invites others after;
+    `vessel fleet forget` says so in its help and its output.
+  - **A forget withdraws every outstanding invitation** and refuses every
+    pairing in progress, not only the forgotten node's; `forget` prints
+    how many and says to make new ones.
+  - **"is known as `X`"** (the rename refusal) tells a claim with a node's
+    id and bound key that node's recorded name; the check also runs
+    before pairing proves the key, so whoever knows both learns it. Low
+    risk: the operator needs the fix, and a live node's name is on
+    `fleet.peers` for every member device.
 - **Names stay unique (coordinator's decision, 2026-11-06).** Names pick
   nodes (`--to`, `vessel mcp`'s `node`), so a duplicate is ambiguous and
   the home keeps refusing it (fail closed). The operator's path is
