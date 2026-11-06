@@ -17,6 +17,9 @@
 //! - `session/prompt`, by prompt text:
 //!   - `plain`: one message chunk `echo: plain`, then `end_turn`;
 //!   - `wait`: nothing until `session/cancel`, then `cancelled`;
+//!   - `flood`: message chunks `flood`, ten a millisecond (faster than a
+//!     slow client reads) until `session/cancel`, then `cancelled`; it
+//!     gives up with `end_turn` after a minute;
 //!   - anything else: a thought chunk, a message chunk
 //!     `echo: <text> (model <model>)`, tool call `call-1` (pending, with raw
 //!     input), a plan, an update to `in_progress`, then a permission request
@@ -241,6 +244,20 @@ async fn run_turn(
         "wait" => {
             turn.cancelled().await;
             return Ok(StopReason::Cancelled);
+        }
+        "flood" => {
+            for _ in 0..60_000_u32 {
+                if turn.is_cancelled() {
+                    return Ok(StopReason::Cancelled);
+                }
+                for _ in 0..10 {
+                    say(SessionUpdate::AgentMessageChunk(ContentChunk::new(text(
+                        "flood",
+                    ))))?;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            return Ok(StopReason::EndTurn);
         }
         _ => {}
     }

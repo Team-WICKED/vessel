@@ -471,3 +471,40 @@ async fn an_agent_stuck_in_the_handshake_fails_at_the_deadline() {
     })
     .await;
 }
+
+/// A client that reads slowly while the agent streams fast keeps the
+/// driver's inbound queue full; a cancel must still get through at once
+/// rather than after the stream (which here would be a minute).
+#[tokio::test]
+async fn cancel_gets_through_a_flood_of_updates() {
+    within(async {
+        let mut agent = Agent::start(setup(None));
+        drop(agent.until(ready).await);
+        agent.input.prompt(text("flood")).await.unwrap();
+        drop(
+            agent
+                .until(|event| matches!(event, AgentEvent::MessageChunk { .. }))
+                .await,
+        );
+        let input = agent.input.clone();
+        let cancelled = tokio::spawn(async move { input.cancel_turn().await });
+        let end = loop {
+            let event = agent.next().await.unwrap();
+            if turn_over(&event) {
+                break event;
+            }
+            // A deliberately slow client (pacing, not waiting for
+            // anything): about a thousand events a second, a tenth of
+            // what the fake sends.
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        };
+        assert_eq!(
+            end,
+            AgentEvent::TurnEnded {
+                reason: StopReason::Cancelled
+            }
+        );
+        cancelled.await.unwrap().unwrap();
+    })
+    .await;
+}

@@ -150,8 +150,23 @@ impl Driver {
             }
         })?;
         loop {
+            // Order matters. Commands first: they are few (the queue holds
+            // 16 and every caller waits for its reply) and cheap, while the
+            // agent can stream updates faster than a slow client reads them,
+            // keeping `inbound` ready on every turn of the loop; polled
+            // second, a `CancelTurn` or a permission answer would wait for
+            // the stream to end. Taking a command before queued updates is
+            // safe: a turn's end (`TurnEnded`) comes only from its
+            // `TurnDone`, which is handled in order with the updates. The
+            // close is last, so everything queued is handled before it.
             tokio::select! {
                 biased;
+                command = self.commands.recv(), if self.session.is_some() && self.commands_open => {
+                    match command {
+                        Some(command) => self.command(&cx, command).await,
+                        None => self.commands_open = false,
+                    }
+                }
                 item = self.inbound_receiver.recv() => {
                     // The loop holds a sender itself, so this never ends
                     // while it runs.
@@ -160,12 +175,6 @@ impl Driver {
                     };
                     if let Some(end) = self.handle(item).await {
                         return Ok(end);
-                    }
-                }
-                command = self.commands.recv(), if self.session.is_some() && self.commands_open => {
-                    match command {
-                        Some(command) => self.command(&cx, command).await,
-                        None => self.commands_open = false,
                     }
                 }
                 () = cx.incoming_closed() => {
