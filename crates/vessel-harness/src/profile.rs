@@ -107,12 +107,13 @@ impl Profile {
         self.env.iter().map(|(name, value)| (name, value.as_str()))
     }
 
-    /// The value it gives `name`, if it sets it (names compared exactly).
+    /// The value it gives `name`, if it sets it. Names compare as this
+    /// system's environment does ([`same_variable`]).
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&str> {
+    pub fn get(&self, name: &EnvName) -> Option<&str> {
         self.env
             .iter()
-            .find(|(key, _)| key.as_str() == name)
+            .find(|(key, _)| same_variable(key.as_str(), name.as_str()))
             .map(|(_, value)| value.as_str())
     }
 
@@ -121,10 +122,13 @@ impl Profile {
         self.unset.iter()
     }
 
-    /// Whether it removes `name` (names compared exactly).
+    /// Whether it removes `name`. Names compare as this system's
+    /// environment does ([`same_variable`]).
     #[must_use]
-    pub fn unsets(&self, name: &str) -> bool {
-        self.unset.iter().any(|key| key.as_str() == name)
+    pub fn unsets(&self, name: &EnvName) -> bool {
+        self.unset
+            .iter()
+            .any(|key| same_variable(key.as_str(), name.as_str()))
     }
 
     /// Arguments added before the session's own, in terminal mode only.
@@ -156,6 +160,21 @@ impl fmt::Debug for Profile {
             .field("unset", &self.unset)
             .field("args", &self.args)
             .finish()
+    }
+}
+
+/// Whether two variable names are one variable on this system: ignoring
+/// ASCII case on Windows, as its environment does, and exactly elsewhere.
+/// Every lookup of a profile's variables (its home, its removals, the MCP
+/// check) goes through this, so they agree with what the harness gets.
+/// Parsing is stricter on every system (two names one case apart are
+/// refused), so a file never means different things on two systems.
+#[must_use]
+pub fn same_variable(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
     }
 }
 
@@ -502,6 +521,29 @@ mod tests {
         Some(Path::new("/home/u"))
     }
 
+    fn var(name: &str) -> EnvName {
+        name.parse().unwrap()
+    }
+
+    /// Review finding 5: lookups follow the system's case rule, so a
+    /// profile's `codex_home` is Codex's home on Windows, where the
+    /// environment ignores case, and another variable elsewhere.
+    #[test]
+    fn lookups_follow_the_systems_case_rule() {
+        let text = "[profiles.x]\nharness = \"codex\"\nenv = { codex_home = \"/w\" }\nunset = [\"Path\"]\n";
+        let x = parse_profiles(text, home())
+            .unwrap()
+            .get(&"x".parse().unwrap())
+            .unwrap();
+        let windows = cfg!(windows);
+        assert_eq!(x.get(&var("CODEX_HOME")).is_some(), windows);
+        assert_eq!(x.unsets(&var("PATH")), windows);
+        assert_eq!(x.get(&var("codex_home")), Some("/w"));
+        assert!(x.unsets(&var("Path")));
+        assert_eq!(same_variable("Path", "PATH"), windows);
+        assert!(same_variable("PATH", "PATH"));
+    }
+
     fn problem(text: &str) -> ProfileProblem {
         match parse_profiles(text, home()) {
             Err(ProfilesError::Profile { problem, .. }) => problem,
@@ -528,15 +570,18 @@ mod tests {
         let alt = profiles.get(&"claude-alt".parse().unwrap()).unwrap();
         assert_eq!(alt.harness(), HarnessKind::ClaudeCode);
         assert_eq!(alt.label(), Some("Claude (Alt)"));
-        assert_eq!(alt.get("CLAUDE_CONFIG_DIR"), Some("/home/u/.claude-alt"));
-        assert!(alt.unsets("ANTHROPIC_API_KEY"));
+        assert_eq!(
+            alt.get(&var("CLAUDE_CONFIG_DIR")),
+            Some("/home/u/.claude-alt")
+        );
+        assert!(alt.unsets(&var("ANTHROPIC_API_KEY")));
         assert_eq!(
             alt.args(),
             ["--model", "opus", "--settings", "/home/u/s.json"]
         );
         assert!(!alt.is_default());
         let work = profiles.get(&"codex-work".parse().unwrap()).unwrap();
-        assert_eq!(work.get("CODEX_HOME"), Some("/home/u"));
+        assert_eq!(work.get(&var("CODEX_HOME")), Some("/home/u"));
         let names: Vec<_> = profiles
             .all()
             .iter()
@@ -761,7 +806,7 @@ mod tests {
             "[profiles.x]\nharness = \"claude\"\nenv = { A = \"~user/x\" }\nargs = [\"a~/b\"]\n";
         let profiles = parse_profiles(plain, None).unwrap();
         let x = profiles.get(&"x".parse().unwrap()).unwrap();
-        assert_eq!(x.get("A"), Some("~user/x"));
+        assert_eq!(x.get(&var("A")), Some("~user/x"));
         assert_eq!(x.args(), ["a~/b"]);
         assert_eq!(expand("~/a", Some("/h/")), Some("/h/a".to_owned()));
         assert_eq!(expand("~", Some("/h")), Some("/h".to_owned()));

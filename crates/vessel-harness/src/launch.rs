@@ -11,7 +11,7 @@ use crate::error::HarnessError;
 use crate::harnesses::{Structured, descriptor};
 use crate::lookup::Lookup;
 use crate::mcp::{McpError, McpFile, TerminalMcp};
-use crate::profile::Profile;
+use crate::profile::{Profile, same_variable};
 
 /// What [`launch`] decided: the command, and what it needs around it.
 /// `Debug` shows no value: `CommandSpec` and `McpFile` hide them.
@@ -185,16 +185,6 @@ pub(crate) fn check_environment(
         }
     }
     Ok(())
-}
-
-/// Whether two variable names are one variable here: ignoring ASCII case
-/// on Windows, as its environment does, and exactly elsewhere.
-pub(crate) fn same_variable(a: &str, b: &str) -> bool {
-    if cfg!(windows) {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
-    }
 }
 
 /// Variables that steer a harness rather than configure an MCP server.

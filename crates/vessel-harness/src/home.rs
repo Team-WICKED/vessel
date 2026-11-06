@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use vessel_proc::CommandSpec;
+use vessel_proto::EnvName;
 
 use crate::error::HarnessError;
 use crate::harnesses::descriptor;
@@ -30,13 +31,18 @@ pub fn home(
     inherited: impl Fn(&str) -> Option<OsString>,
 ) -> Option<PathBuf> {
     let home = &descriptor(profile.harness()).home;
-    let chosen = home.variable.and_then(|variable| {
-        if let Some(value) = profile.get(variable) {
+    // The descriptor's names are constants that parse; one that did not
+    // would mean no variable, as for a harness without one.
+    let variable = home
+        .variable
+        .and_then(|variable| variable.parse::<EnvName>().ok());
+    let chosen = variable.and_then(|variable| {
+        if let Some(value) = profile.get(&variable) {
             Some(PathBuf::from(value))
-        } else if profile.unsets(variable) {
+        } else if profile.unsets(&variable) {
             None
         } else {
-            inherited(variable).map(PathBuf::from)
+            inherited(variable.as_str()).map(PathBuf::from)
         }
     });
     match chosen {
@@ -141,6 +147,26 @@ mod tests {
         );
         let gemini = Profile::default_for(HarnessKind::Gemini);
         assert_eq!(home(&gemini, user, relative), Some(user.join(".gemini")));
+    }
+
+    /// Review finding 5: on Windows a profile's `codex_home` moves Codex's
+    /// home, as the environment Codex gets ignores case; elsewhere it is
+    /// another variable and the home stays.
+    #[test]
+    fn the_home_variable_follows_the_systems_case_rule() {
+        let user = &absolute("home/u");
+        let work = absolute("w");
+        let text = format!(
+            "[profiles.x]\nharness = \"codex\"\nenv = {{ codex_home = '{}' }}\n",
+            work.display()
+        );
+        let x = profile(&text, "x");
+        let expected = if cfg!(windows) {
+            work
+        } else {
+            user.join(".codex")
+        };
+        assert_eq!(home(&x, user, |_| None), Some(expected));
     }
 
     #[test]
