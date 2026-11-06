@@ -3,9 +3,11 @@
 use std::num::NonZeroUsize;
 
 /// Suggested [`RuntimeConfig::ring_capacity`]: enough recent records for a
-/// reconnecting client to catch up without touching the store, small enough
-/// that a session's cache stays in the low megabytes (PTY chunks are at most
-/// 16 KiB).
+/// reconnecting client to catch up without touching the store. The cost is
+/// per session, until the session is removed: PTY chunks are at most
+/// 16 KiB, so a busy terminal session holds up to 16 MiB here (structured
+/// events are usually small, but a tool call with a large input can be
+/// large too).
 pub const DEFAULT_RING_CAPACITY: NonZeroUsize = nonzero(1024);
 
 /// Suggested [`RuntimeConfig::durable_capacity`]: absorbs a store write
