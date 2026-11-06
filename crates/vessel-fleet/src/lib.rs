@@ -83,7 +83,7 @@ mod skill;
 mod target;
 
 pub use apply::{Applied, ApplyError, Conflict, ConflictKind, apply};
-pub use blobs::{BlobStore, BlobWriter, InvalidBlob};
+pub use blobs::{BlobStore, BlobWriter, InvalidBlob, PastEnd};
 pub use bundle::{
     BundleError, Bundled, InvalidSkipGlob, MAX_FILE, SkipGlob, SourceProblem, Sources, bundle,
 };
