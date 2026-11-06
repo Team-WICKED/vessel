@@ -65,6 +65,30 @@ impl SessionFiles {
     pub fn entries(&self) -> &[PathBuf] {
         &self.entries
     }
+
+    /// Every regular file of the session under its home `home`, relative
+    /// to it and sorted: the entries, directories walked, under the rules
+    /// [`link_session`] keeps (plain relative paths that never name
+    /// `memory`, no symbolic link followed; links, special files and
+    /// `memory` directories inside are left out). What protocol 6's
+    /// `session.export` copies, so a copy to another node takes exactly
+    /// what a move to another profile links.
+    ///
+    /// # Errors
+    /// [`LinkError::Refused`], [`LinkError::SymbolicLink`] or
+    /// [`LinkError::Io`].
+    pub fn regular_files(&self, home: &Path) -> Result<Vec<PathBuf>, LinkError> {
+        let mut files = Vec::new();
+        let mut skipped = Vec::new();
+        for relative in &self.entries {
+            check_relative(relative)?;
+            check_no_links(home, relative)?;
+            collect(home, relative, &mut files, &mut skipped)?;
+        }
+        files.sort();
+        files.dedup();
+        Ok(files)
+    }
 }
 
 /// Why a session's files could not be found.
