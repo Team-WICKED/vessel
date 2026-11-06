@@ -8,7 +8,7 @@ use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 
 use super::*;
 use crate::ws::WsTransport;
-use crate::{BearerToken, ConnectError, NodeUrl};
+use crate::{BearerToken, ConnectError, Connector as _, NodeUrl, WsConnector};
 
 const TOKEN: &str = "s3cret-token";
 
@@ -112,4 +112,29 @@ async fn a_node_that_never_answers_times_out() {
         "{result:?}"
     );
     drop(silent);
+}
+
+/// `WsConnector` dials like `connect`, and says which failures are worth
+/// another try: a node that is not there (yet) is; a refused token is not.
+#[tokio::test]
+async fn the_websocket_connector_classifies_its_failures() {
+    let url = serve_one().await;
+    let connector = WsConnector::new(url.clone(), TOKEN.parse().unwrap());
+    assert_eq!(connector.url(), &url);
+    let client = connector.connect(client_info()).await.unwrap();
+    assert_eq!(client.node().name, "fake");
+
+    let refused = WsConnector::new(serve_one().await, "wrong".parse().unwrap());
+    let error = refused.connect(client_info()).await.unwrap_err();
+    assert!(matches!(error, ConnectError::Unauthorized), "{error:?}");
+    assert!(!refused.is_transient(&error));
+
+    // A port nothing listens on: bind one, then close it.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let absent = WsConnector::new(address.to_string().parse().unwrap(), TOKEN.parse().unwrap());
+    let error = absent.connect(client_info()).await.unwrap_err();
+    assert!(matches!(error, ConnectError::Websocket { .. }), "{error:?}");
+    assert!(absent.is_transient(&error));
 }

@@ -157,6 +157,11 @@ depend on the node, so there is no cycle).
   - `vessel-client`: websocket connection with the bearer token, one typed
     method per call, gap-free `SessionStream` (`follow`). `wss://` is
     refused: no TLS stack in milestone 1 (ADR 0005 amendment).
+    Milestone 2 (Track C, in progress): `Connector` (`WsConnector` here,
+    the SSH one in `vessel-remote`), `follow_resuming`/`ResumingStream`
+    (redials with 0.5–30 s jittered backoff and follows again from its
+    cursor; never repeats a call), `NodeClient::stop_node` (protocol 3
+    only), and the plain-data `NodeAddress`/`SshTarget`/`RemotePath`.
   - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
     the `Handler` routing to `sessions` (live runtime sessions plus stored
     ones; a session whose log is complete, final status included, is

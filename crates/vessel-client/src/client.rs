@@ -1,9 +1,9 @@
 //! [`NodeClient`]: one typed method per protocol call.
 
 use vessel_proto::{
-    ClientInfo, CreateSession, EventPage, EventSeq, GetNode, GetSession, Harness, KillSession,
-    ListHarnesses, ListSessions, NodeInfo, ProtocolVersion, ReadEvents, SendInput, SessionId,
-    SessionInfo, SessionInput, SessionSpec, Subscribe,
+    ClientInfo, CreateSession, ErrorCode, EventPage, EventSeq, GetNode, GetSession, Harness,
+    KillSession, ListHarnesses, ListSessions, NodeInfo, ProtocolVersion, ReadEvents, SendInput,
+    SessionId, SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen, Subscribe, WireError,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 
@@ -12,6 +12,9 @@ use crate::stream::SessionStream;
 use crate::token::BearerToken;
 use crate::url::NodeUrl;
 use crate::ws;
+
+/// The first protocol with `node.stop`.
+const STOP_NODE_SINCE: ProtocolVersion = ProtocolVersion::new(3);
 
 /// A connection to one node. Cheap to clone; clones share the connection,
 /// which closes when the last clone (and every stream) is dropped.
@@ -182,6 +185,25 @@ impl NodeClient {
         from: EventSeq,
     ) -> Result<Subscription, CallError> {
         self.connection.subscribe(Subscribe { session, from }).await
+    }
+
+    /// `node.stop` (protocol 3): stop the node now (live sessions end
+    /// `Interrupted`) or once no session is live (it refuses new ones
+    /// meanwhile and reports `NodeState::Draining`). The node closes every
+    /// connection when it stops, this one included.
+    ///
+    /// # Errors
+    /// `Unsupported` if the connection negotiated protocol 2, without
+    /// asking: such a node does not know the method, and protocol 2 clients
+    /// never send it. Otherwise see [`CallError`].
+    pub async fn stop_node(&self, when: StopWhen) -> Result<(), CallError> {
+        if self.protocol() < STOP_NODE_SINCE {
+            return Err(CallError::Remote(WireError::new(
+                ErrorCode::Unsupported,
+                "the node speaks protocol 2; stopping it needs protocol 3",
+            )));
+        }
+        self.connection.call(StopNode { when }).await.map(drop)
     }
 
     /// Every record of a session from `from` on, gap-free, ending when the

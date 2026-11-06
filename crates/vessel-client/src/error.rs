@@ -1,6 +1,8 @@
 //! Errors of this crate. Call failures are `vessel_rpc::CallError`,
 //! re-exported as [`CallError`](crate::CallError).
 
+use std::time::Duration;
+
 use tokio_tungstenite::tungstenite;
 use vessel_proto::EventSeq;
 use vessel_rpc::CallError;
@@ -45,6 +47,33 @@ pub enum ConnectError {
     Handshake(#[source] vessel_rpc::ConnectError<WsTransportError>),
 }
 
+impl ConnectError {
+    /// Whether trying again later may succeed: the node is down or the
+    /// network failed, as opposed to a refusal or a mismatch that the next
+    /// attempt meets again (a wrong token, no common protocol).
+    #[must_use]
+    pub const fn is_transient(&self) -> bool {
+        match self {
+            Self::Websocket { .. }
+            | Self::Timeout { .. }
+            | Self::Handshake(
+                vessel_rpc::ConnectError::Transport(_)
+                | vessel_rpc::ConnectError::Timeout
+                | vessel_rpc::ConnectError::Closed,
+            ) => true,
+            Self::TlsUnsupported
+            | Self::Unauthorized
+            | Self::InvalidToken
+            | Self::Handshake(
+                vessel_rpc::ConnectError::Rejected(_)
+                | vessel_rpc::ConnectError::Violation(_)
+                | vessel_rpc::ConnectError::Decode(_)
+                | vessel_rpc::ConnectError::Encode(_),
+            ) => false,
+        }
+    }
+}
+
 /// Why a [`SessionStream`](crate::SessionStream) yielded an error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StreamError {
@@ -64,6 +93,47 @@ pub enum StreamError {
     /// unsubscribed it). Fatal.
     #[error("the node closed the subscription")]
     Unsubscribed,
+    /// The connection was lost (or a new one could not be opened yet); a
+    /// [`ResumingStream`](crate::ResumingStream) dials again in `retry_in`.
+    /// Not fatal. `attempt` counts from 1 for each loss.
+    #[error("{}", reconnecting(*attempt, *retry_in, reason))]
+    Reconnecting {
+        /// Which attempt comes next, from 1.
+        attempt: u32,
+        /// How long until it.
+        retry_in: Duration,
+        /// Why the connection is down: the loss itself, or why the previous
+        /// attempt failed.
+        reason: String,
+    },
+    /// A [`ResumingStream`](crate::ResumingStream) is connected again and
+    /// continues at `at`, its cursor; nothing before it is repeated. Not
+    /// fatal.
+    #[error("reconnected; resuming at record {at}")]
+    Resumed {
+        /// The next record the stream yields.
+        at: EventSeq,
+    },
+    /// Connecting again failed in a way that waiting does not fix (the node
+    /// refused the token, its identity changed, no common protocol). Fatal.
+    #[error("could not reconnect: {reason}")]
+    Unreachable {
+        /// Why, with its causes.
+        reason: String,
+    },
+}
+
+/// The text of [`StreamError::Reconnecting`]: the first attempt says what
+/// happened; later ones say what went wrong and when the next try is.
+fn reconnecting(attempt: u32, retry_in: Duration, reason: &str) -> String {
+    if attempt <= 1 {
+        "connection lost; reconnecting\u{2026}".to_owned()
+    } else {
+        format!(
+            "still reconnecting (attempt {attempt} in {:.1}s): {reason}",
+            retry_in.as_secs_f64()
+        )
+    }
 }
 
 impl StreamError {
@@ -71,8 +141,8 @@ impl StreamError {
     #[must_use]
     pub const fn is_fatal(&self) -> bool {
         match self {
-            Self::Missing { .. } => false,
-            Self::Call(_) | Self::Unsubscribed => true,
+            Self::Missing { .. } | Self::Reconnecting { .. } | Self::Resumed { .. } => false,
+            Self::Call(_) | Self::Unsubscribed | Self::Unreachable { .. } => true,
         }
     }
 }
