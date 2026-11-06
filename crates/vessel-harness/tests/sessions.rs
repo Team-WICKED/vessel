@@ -356,4 +356,35 @@ fn codex_rollouts_are_found_by_id() {
         matches!(missing, Err(SessionFilesError::NotFound { .. })),
         "{missing:?}"
     );
+
+    // Review finding 4: a suffix of the id is another session, not this
+    // one.
+    let tail = ID.rsplit('-').next().unwrap();
+    for partial in [tail, ID.get(9..).unwrap()] {
+        let found = session_files(HarnessKind::Codex, home.path(), home.path(), &id(partial));
+        assert!(
+            matches!(found, Err(SessionFilesError::NotFound { .. })),
+            "{partial}: {found:?}"
+        );
+    }
+    // A name not in a rollout's shape is not a match either.
+    write(&day.join(format!("rollout-today-{ID}.jsonl")), "{}\n");
+    let files = session_files(HarnessKind::Codex, home.path(), home.path(), &id(ID)).unwrap();
+    assert_eq!(files.entries().len(), 1);
+    // Two rollouts for one id: an error, not the first one found.
+    let other_day = home
+        .path()
+        .join("sessions")
+        .join("2026")
+        .join("11")
+        .join("07");
+    write(
+        &other_day.join(format!("rollout-2026-11-07T08-00-00-{ID}.jsonl")),
+        "{}\n",
+    );
+    let twice = session_files(HarnessKind::Codex, home.path(), home.path(), &id(ID));
+    assert!(
+        matches!(twice, Err(SessionFilesError::Ambiguous { count: 2, .. })),
+        "{twice:?}"
+    );
 }
