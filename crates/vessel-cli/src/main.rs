@@ -22,6 +22,7 @@ mod remote;
 mod render;
 mod secret;
 mod selector;
+mod transfer;
 mod view;
 
 use std::process::ExitCode;

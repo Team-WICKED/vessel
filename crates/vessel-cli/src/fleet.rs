@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use vessel_node::fleet::{self, ConflictWhy, FleetFiles, FleetInit, FleetStatus, Role, SkipGlob};
 use vessel_proto::{FleetMember, Scope};
 
-use crate::args::{FleetCommand, Target};
+use crate::args::{FleetCommand, MemoryCommand, Target};
 use crate::connect::{connect, data_dir};
 use crate::error::CliError;
 use crate::{devices, io, pair, secret};
@@ -64,6 +64,27 @@ pub(crate) async fn command(target: &Target, command: FleetCommand) -> Result<()
             Ok(())
         }
         FleetCommand::Secret { command } => Box::pin(secret::command(files, command)).await,
+        FleetCommand::Memory {
+            command:
+                MemoryCommand::Copy {
+                    from,
+                    from_profile,
+                    from_project,
+                    to,
+                    profile,
+                    project,
+                },
+        } => {
+            let source = crate::transfer::MemorySource {
+                node: from,
+                profile: from_profile,
+                project: from_project,
+            };
+            Box::pin(crate::transfer::copy_memory(
+                target, source, to, profile, project,
+            ))
+            .await
+        }
         FleetCommand::Restore { path } => {
             let path = absolute(&path)?;
             let shown = path.display().to_string();
