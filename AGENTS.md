@@ -157,6 +157,10 @@ ADR 0001 records why; `docs/plans/backend-m1.md` says who owns which crate.
 - A test's safety-net timeout (which only turns a hang into a failure) is
   `vessel_testkit::within`: it builds the fakes first and starts the clock
   after. The first fake build of a run can take a minute on a cold runner.
+- Inside it, a wait that could hang gets a deadline of its own that names it
+  (the node e2e tests' `support::step`, and their output readers, which show
+  what they read): a hang on one CI runner then says where it was. The node
+  e2e tests also keep the node's debug logs, printed only for a failing test.
 
 ## 9. Dependencies
 
