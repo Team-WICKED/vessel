@@ -14,12 +14,13 @@ mod opencode;
 #[cfg(feature = "fakes")]
 pub(crate) use claude::slug as claude_slug;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use vessel_proto::{HarnessKind, HarnessSessionId, ResolvedMcpServers};
 
 use crate::layout::HarnessLayout;
 use crate::mcp::{McpError, TerminalMcp};
+use crate::memory::{MemoryFilesError, RebaseError};
 use crate::sessions::{SessionFiles, SessionFilesError};
 
 /// What Vessel needs to know to run one harness.
@@ -42,6 +43,12 @@ pub(crate) struct Descriptor {
     /// How to find one session's files under the home; `None` if they
     /// cannot be moved between homes.
     pub(crate) sessions: Option<FindSession>,
+    /// Where a profile's memory is under the home (one project's, or
+    /// all); `None` if Vessel does not know.
+    pub(crate) memory: Option<FindMemory>,
+    /// How a home-relative path is named for another working directory;
+    /// `None` when paths do not depend on it.
+    pub(crate) rebase: Option<Rebase>,
     /// How a terminal session is given MCP servers at launch; `None` if the
     /// harness has no launch-time form (structured sessions still get them
     /// over ACP).
@@ -68,6 +75,14 @@ pub(crate) struct Descriptor {
 /// id already checked to be one plain file name.
 pub(crate) type FindSession =
     fn(&Path, &Path, &HarnessSessionId) -> Result<Option<SessionFiles>, SessionFilesError>;
+
+/// Find a profile's memory directories, relative to the home `(home,
+/// project)`: one project's, by its working directory, or every one.
+pub(crate) type FindMemory = fn(&Path, Option<&Path>) -> Result<Vec<PathBuf>, MemoryFilesError>;
+
+/// Rename a home-relative path `(path, from, to)` for working directory
+/// `to` instead of `from`.
+pub(crate) type Rebase = fn(&Path, &Path, &Path) -> Result<PathBuf, RebaseError>;
 
 /// Render MCP servers into the harness's launch-time form.
 pub(crate) type RenderMcp = fn(&ResolvedMcpServers) -> Result<TerminalMcp, McpError>;
