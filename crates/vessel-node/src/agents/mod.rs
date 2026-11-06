@@ -25,8 +25,9 @@
 //!   (`SessionHandle::has_ended`, set before the final status is
 //!   published): CI once saw a client watch a session end, then be refused
 //!   a new one because `retire` (after the actor finishes) had not run yet.
-//! - The credential dies with its session: [`Agents::retire`] removes the
-//!   entry and closes the agent's open connections, as revoking a device
+//! - The credential dies with its session: it is refused once the end is
+//!   visible (`has_ended`, as for the limits), and [`Agents::retire`]
+//!   removes the entry and closes the agent's open connections, as revoking a device
 //!   closes the device's (`devices::Connected`). Checking a credential and
 //!   registering its connection happen under the same lock, so a
 //!   connection is either refused or found and closed.
@@ -213,10 +214,15 @@ impl Agents {
     ) -> Option<(Principal, Registration)> {
         let mut sessions = self.lock();
         let entry = sessions.get_mut(&auth.session)?;
-        if !entry
-            .credentials
-            .iter()
-            .any(|hash| hash.matches_agent(&auth.secret))
+        // Refused as soon as the end is visible, not only after `retire`:
+        // a client that saw the session end must not get its agent in
+        // (macOS CI admitted one in that gap). A connection admitted just
+        // before the end is still closed by `retire`.
+        if entry.session.as_ref().is_some_and(SessionHandle::has_ended)
+            || !entry
+                .credentials
+                .iter()
+                .any(|hash| hash.matches_agent(&auth.secret))
         {
             return None;
         }
