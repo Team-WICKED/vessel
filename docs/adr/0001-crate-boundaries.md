@@ -36,9 +36,16 @@ vessel-session  -> proto, harness, pty, agent
 vessel-store    -> proto
 vessel-node     -> proto, rpc, harness, session, store
 vessel-client   -> proto, rpc
-vessel-cli      -> proto, client, node
+vessel-remote   -> proto, rpc, client      (milestone 2)
+vessel-cli      -> proto, client, node, remote
 vessel-testkit  (fake harness binaries for tests; dev-dependency only)
 ```
+
+Milestone 2 (2026-11-06) added `vessel-remote`, which runs the system
+`ssh`, installs `vesseld` on remote machines and connects to them over SSH
+stdio (ADRs 0007 and 0008), and the edge `vessel-cli -> remote`. It starts
+`ssh` with `tokio::process` directly: one process, no process group, so no
+`vessel-proc` edge.
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.

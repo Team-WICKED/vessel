@@ -114,6 +114,17 @@ What Vessel has today:
   remote's target, the installer can upload the sibling `vesseld` (`--from
   local`), named by content hash. That is how M2 is exercised before the
   first release. A cross build is the developer's job.
+  - "The remote's target" means its OS and architecture (coordinator,
+    2026-11-06). A local `-linux-gnu` build is accepted for a Linux remote
+    of the same architecture, always under its `-dev-<hash>` name; only a
+    verified release archive gets the plain `vesseld-<version>` name.
+  - Safeguard: a gnu build needs a glibc at least as new as the build
+    machine's. The install script therefore runs the uploaded file's
+    `version` on the remote *before* the rename. If it fails to start
+    (non-zero exit, such as "GLIBC_2.xx not found") or reports another
+    version, the file is deleted and the error suggests a musl build
+    (`--target x86_64-unknown-linux-musl`) or a release. An unrunnable
+    binary never has a final name.
 - **Switching versions.** Installing never touches the running node.
   - A client of version B arriving at a node of version A connects through
     `vesseld-B attach`, a byte pump that does not care about the node's
@@ -146,6 +157,34 @@ What Vessel has today:
   updating without interrupting. It is out of M2. When it comes, it reuses
   this layout: the host binary is versioned too, and is updated far less
   often.
+
+## As built in milestone 2
+
+Plan decision 1 replaces steps 3 and 4 for milestone 2: nothing is
+downloaded on the remote.
+
+- `vessel` gets the release archive and `SHA256SUMS` locally through the
+  authenticated GitHub API, or uses a local build. It then streams the
+  bytes into the remote's temporary file over `ssh` stdin.
+- One fixed `sh -c` script does steps 5 and 6 on the remote, with the
+  paths, the expected digest and the expected version as quoted
+  arguments. In order, it:
+  1. writes `bin/.vesseld-<name>.<random>.tmp`;
+  2. checks its SHA-256 (`sha256sum`, else `shasum -a 256`);
+  3. unpacks `vesseld` from a release archive with `tar -xzO`;
+  4. runs `version` (the safeguard above);
+  5. `mv -f`s the file onto the final name in the same directory.
+
+  A trap removes the temporary files on every way out. The script's own
+  exit codes are 90 (no SHA-256 tool), 91 (checksum mismatch), 92 (does
+  not run) and 93 (another version).
+- The script is one line with no `!` and no `\\`. It passes through the
+  user's login shell first, which may be `csh` (no newlines inside quotes)
+  or `fish` (reads `\\` inside single quotes).
+- An existing binary whose `version` already reports the expected version
+  is not uploaded again.
+- Signing (`SHA256SUMS.minisig`) waits for the owner's decision on public
+  releases. Until then the published SHA-256 is the integrity check.
 
 ## Why
 

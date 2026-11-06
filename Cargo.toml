@@ -80,6 +80,7 @@ vessel-node = { path = "crates/vessel-node" }
 vessel-proc = { path = "crates/vessel-proc" }
 vessel-proto = { path = "crates/vessel-proto" }
 vessel-pty = { path = "crates/vessel-pty" }
+vessel-remote = { path = "crates/vessel-remote" }
 vessel-rpc = { path = "crates/vessel-rpc" }
 vessel-session = { path = "crates/vessel-session" }
 vessel-store = { path = "crates/vessel-store" }
@@ -117,6 +118,10 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 rustix = { version = "1", default-features = false, features = ["std", "termios"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# SHA-256 of a vesseld build (vessel-remote): its `-dev-<hash>` name and the
+# checksum the remote verifies before installing it (ADR 0008). RustCrypto,
+# pure Rust, so Windows clients need no system library.
+sha2 = "0.11"
 # Constant-time token comparison (vessel-store, ADR 0005).
 subtle = "2.6"
 # Temporary data directories in tests.
