@@ -1,13 +1,14 @@
 //! Terminal mode: `fake-tui` as `claude`.
 
-use vessel_client::{CallError, NodeClient};
+use vessel_client::{CallError, ClientConfig, NodeClient};
 use vessel_proto::{
-    ContentBlock, ErrorCode, EventSeq, HarnessKind, SessionInput, SessionStatus, TerminalInput,
-    TerminalSize,
+    ContentBlock, ErrorCode, EventRecord, EventSeq, HarnessKind, SessionInput, SessionStatus,
+    TerminalInput, TerminalSize,
 };
 
 use crate::support::{
-    Fixture, collect_until, keys, output_of, read_all, seqs, status_of, terminal_spec, within,
+    Fixture, client as client_info, collect_until, keys, output_of, read_all, seqs, status_of,
+    terminal_spec, url, within,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -190,12 +191,7 @@ async fn connections_need_the_token() {
         let fixture = Fixture::new();
         let node = fixture.start().await;
         let wrong: vessel_client::BearerToken = "not-the-token".parse().unwrap();
-        let refused = NodeClient::connect(
-            &crate::support::url(&node),
-            &wrong,
-            crate::support::client(),
-        )
-        .await;
+        let refused = NodeClient::connect(&url(&node), &wrong, crate::support::client()).await;
         assert!(
             matches!(refused, Err(vessel_client::ConnectError::Unauthorized)),
             "{refused:?}"
@@ -263,6 +259,118 @@ async fn tiny_rings_force_store_gap_fills_and_lag_without_losing_records() {
     .await;
 }
 
+/// A follower that falls behind catches up with `session.read`. When
+/// retention has pruned records from a live session's log that its ring
+/// still holds, the read serves them from the ring: the follower misses
+/// only what the node no longer has at all. (Reading only the store skipped
+/// them, and a follower waiting for that output waited forever: the flake
+/// in `a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows`.)
+///
+/// Returns the follower's records up to "echo: three", and the gap it
+/// reported, if any. The output is produced before the follower reads, so
+/// the catch-up happens with the session already idle.
+async fn catch_up_after_pruning(ring: usize) -> (Vec<EventRecord>, Option<(EventSeq, EventSeq)>) {
+    let fixture = Fixture::new();
+    let node = fixture
+        .start_with(|config| {
+            config.ring_capacity = std::num::NonZeroUsize::new(ring).unwrap();
+            config.store.retention.max_session_bytes = vessel_node::ByteCount::new(1);
+        })
+        .await;
+    let client = fixture.connect(&node).await;
+    // One record of client-side buffer: unread, this follower lags at its
+    // second record.
+    let tight = ClientConfig {
+        subscription_capacity: std::num::NonZeroUsize::MIN,
+        ..ClientConfig::default()
+    };
+    let slow = NodeClient::connect_with(&url(&node), &fixture.token(), client_info(), &tight)
+        .await
+        .unwrap();
+    let id = client
+        .create_session(terminal_spec(&fixture, HarnessKind::ClaudeCode))
+        .await
+        .unwrap()
+        .id;
+    let mut lagging = slow.follow(id, EventSeq::ZERO).await.unwrap();
+    let mut watcher = client.follow(id, EventSeq::ZERO).await.unwrap();
+    let mut progress = Vec::new();
+    collect_until(&mut watcher, &mut progress, "> ").await;
+    for line in ["one\r", "two\r", "three\r"] {
+        client.send(id, keys(line)).await.unwrap();
+    }
+    collect_until(&mut watcher, &mut progress, "echo: three").await;
+
+    let mut seen = Vec::new();
+    let mut gap = None;
+    let caught_up = async {
+        while !output_of(&seen).contains("echo: three") {
+            match lagging.next().await.unwrap() {
+                Ok(record) => seen.push(record),
+                Err(vessel_client::StreamError::Missing {
+                    expected,
+                    resumed_at,
+                }) => {
+                    assert!(gap.is_none(), "a second gap");
+                    gap = Some((expected, resumed_at));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+    };
+    // The session is idle by now: output the follower skipped never comes.
+    tokio::time::timeout(std::time::Duration::from_secs(20), caught_up)
+        .await
+        .expect("the follower skipped output the node still had");
+
+    client.kill(id).await.unwrap();
+    drop((lagging, watcher, slow, client));
+    node.stop().await.unwrap();
+    (seen, gap)
+}
+
+/// The ring holds the whole log: the follower gets every record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lagging_follower_catches_up_from_the_ring_when_the_store_was_pruned() {
+    within(async {
+        let (seen, gap) = catch_up_after_pruning(256).await;
+        assert_eq!(gap, None);
+        let expected: Vec<u64> = (0..u64::try_from(seen.len()).unwrap()).collect();
+        assert_eq!(seqs(&seen), expected);
+    })
+    .await;
+}
+
+/// The ring holds only the newest records: the follower's gap ends where
+/// the ring starts, not at the one record the store kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lagging_follower_skips_only_what_neither_store_nor_ring_has() {
+    within(async {
+        let (seen, gap) = catch_up_after_pruning(4).await;
+        let Some((expected, resumed_at)) = gap else {
+            // Retention had not pruned yet when the follower read: the store
+            // still had everything, and so did the follower.
+            let all: Vec<u64> = (0..u64::try_from(seen.len()).unwrap()).collect();
+            assert_eq!(seqs(&seen), all);
+            return;
+        };
+        // The store kept one record; the ring four. "echo: three" is at most
+        // one record from the end (only "> " follows it), so a gap that ends
+        // at the ring's oldest record leaves at least two records after it.
+        assert!(
+            seen.len() > 2,
+            "the gap ran to the store's last record, past the ring: {:?}",
+            seqs(&seen)
+        );
+        assert_eq!(seqs(&seen[..1]), [expected.get().checked_sub(1).unwrap()]);
+        let after: Vec<u64> = (resumed_at.get()..)
+            .take(seen.len().checked_sub(1).unwrap())
+            .collect();
+        assert_eq!(seqs(&seen[1..]), after);
+    })
+    .await;
+}
+
 /// Regression: with retention pruning the store past the ring, a late
 /// follower from zero used to make the node ask the ring for the same gap
 /// forever. It now gets the pruned range reported once, then the ring and
@@ -286,14 +394,21 @@ async fn a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows() {
         let mut first = client.follow(id, EventSeq::ZERO).await.unwrap();
         let mut seen = Vec::new();
         collect_until(&mut first, &mut seen, "> ").await;
-        for line in ["one\r", "two\r", "three\r"] {
+        // One line at a time, each echo awaited: every line then adds a
+        // record of its own, so the log outgrows the ring of 4 however the
+        // PTY chunks output (all at once, under load).
+        for (line, echo) in [
+            ("one\r", "echo: one"),
+            ("two\r", "echo: two"),
+            ("three\r", "echo: three"),
+        ] {
             client.send(id, keys(line)).await.unwrap();
-        }
-        // The first follower lags too; it only has to see the output.
-        while !output_of(&seen).contains("echo: three") {
-            match first.next().await.unwrap() {
-                Ok(record) => seen.push(record),
-                Err(error) => assert!(!error.is_fatal(), "{error}"),
+            // The first follower lags too; it only has to see the output.
+            while !output_of(&seen).contains(echo) {
+                match first.next().await.unwrap() {
+                    Ok(record) => seen.push(record),
+                    Err(error) => assert!(!error.is_fatal(), "{error}"),
+                }
             }
         }
 

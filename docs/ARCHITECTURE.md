@@ -199,8 +199,10 @@ they started.
     the `Handler` routing to `sessions` (live runtime sessions plus stored
     ones; a session whose log is complete, final status included, is
     removed from the runtime with `SessionRuntime::remove` and served from
-    the store), `persist` (one task per session drains its durable channel
-    into the store and publishes "durable through N"),
+    the store; reading a live session serves records retention already
+    pruned from the store but the ring still holds from the ring), `persist`
+    (one task per session drains its durable channel into the store and
+    publishes "durable through N"),
     `subscribe` (ring, then a durable-gated store gap fill, then live;
     `Lagged` when a subscriber falls behind), and an ordered shutdown in
     which subscribers still receive the final `Interrupted` status. Both

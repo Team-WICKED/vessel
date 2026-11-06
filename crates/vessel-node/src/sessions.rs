@@ -27,8 +27,10 @@ use std::sync::{Arc, PoisonError, RwLock};
 
 use tokio::sync::watch;
 use tokio_util::task::TaskTracker;
-use vessel_proto::{EventPage, EventSeq, SessionId, SessionInfo, SessionInput, SessionSpec};
-use vessel_session::{Created, SessionHandle, SessionRuntime};
+use vessel_proto::{
+    EventPage, EventRecord, EventSeq, SessionId, SessionInfo, SessionInput, SessionSpec,
+};
+use vessel_session::{Created, FollowError, SessionHandle, SessionRuntime};
 use vessel_store::Store;
 
 use crate::error::ServiceError;
@@ -233,22 +235,88 @@ impl Sessions {
     /// A page of the log. For a live session, first waits until everything
     /// the session had produced when the call arrived is committed, so the
     /// page (and `at_end`) reflects the log as of the call, not the store's
-    /// lag.
+    /// lag; and records retention already pruned from the store but still
+    /// in the session's ring come from the ring (see [`with_ring`]).
     pub(crate) async fn read(
         &self,
         id: SessionId,
         from: EventSeq,
         limit: u32,
     ) -> Result<EventPage, ServiceError> {
-        if let Found::Live {
-            handle,
-            mut durability,
-        } = self.find(id).await?
-        {
-            let produced = handle.info().next_seq;
-            persist::wait_until(id, &mut durability, produced).await?;
+        match self.find(id).await? {
+            Found::Live {
+                handle,
+                mut durability,
+            } => {
+                let produced = handle.info().next_seq;
+                persist::wait_until(id, &mut durability, produced).await?;
+                let page = self.store.read_events(id, from, limit).await?;
+                Ok(with_ring(page, &handle, from, limit))
+            }
+            Found::Stored(_) => Ok(self.store.read_events(id, from, limit).await?),
         }
-        Ok(self.store.read_events(id, from, limit).await?)
+    }
+}
+
+/// `page`, read from the store for a live session, unless retention pruned
+/// records at its start that the session's ring still holds: then the page
+/// comes from the ring, starting at `from` or at the ring's oldest record.
+///
+/// [Decision Log]
+/// - Problem: a follower that lags catches up with `session.read`. When the
+///   retention budget is smaller than the ring (`max_session_bytes` under
+///   about 16 MiB with the default ring), the store can have dropped
+///   records the ring still has. A store-only page then jumped over them,
+///   and the follower reported them missing although the node had them. A
+///   test waiting for output in that range waited forever.
+/// - Alternatives: have the client resubscribe instead of reading (the
+///   subscription path already prefers the ring), but paging exists so a
+///   slow client catches up at its own pace without lagging the broadcast
+///   again; or forbid budgets under the ring size, which would make
+///   retention depend on a runtime setting.
+/// - Choice: the read prefers the ring whenever the store's page does not
+///   start at `from` and the ring reaches further back. Retention prunes a
+///   prefix and the ring holds the newest records, so either source alone
+///   is a gap-free suffix; no merge is needed.
+/// - Cost: one ring lookup per read of a live session whose store page has
+///   a gap, which only happens after pruning.
+fn with_ring(page: EventPage, handle: &SessionHandle, from: EventSeq, limit: u32) -> EventPage {
+    let stored_from = page.records.first().map(|record| record.seq);
+    if stored_from == Some(from) {
+        return page;
+    }
+    let follow = match handle.follow(from) {
+        Ok(follow) => follow,
+        Err(FollowError::Gap { oldest_cached }) => {
+            // The ring starts later than `from`: it helps only if it starts
+            // earlier than the store's page.
+            if stored_from.is_some_and(|stored| stored <= oldest_cached) {
+                return page;
+            }
+            match handle.follow(oldest_cached) {
+                Ok(follow) => follow,
+                // The ring moved on meanwhile; the store's page stands.
+                Err(FollowError::Gap { .. } | FollowError::Ahead { .. }) => return page,
+            }
+        }
+        Err(FollowError::Ahead { .. }) => return page,
+    };
+    let cached = follow.cached;
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let records: Vec<EventRecord> = cached
+        .iter()
+        .take(limit)
+        .map(|record| EventRecord::clone(record))
+        .collect();
+    let Some(last) = records.last() else {
+        return page;
+    };
+    EventPage {
+        // `None` only for a log that is full; nothing follows its last
+        // record, so asking for it again is as good an answer as any.
+        next: last.seq.next().unwrap_or(last.seq),
+        at_end: cached.len() <= limit,
+        records,
     }
 }
 
