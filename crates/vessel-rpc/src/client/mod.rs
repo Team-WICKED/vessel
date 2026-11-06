@@ -40,8 +40,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     Call, ClientFrame, ClientInfo, CloseTransfer, CopySecret, CreateSession, DeleteSecret, Deliver,
-    ExportMemory, ExportSession, Forward, GetManifest, GetNode, GetSession, GrantHome, Hello,
-    ImportMemory, ImportSession, InviteDevice, KillSession, ListDevices, ListHarnesses,
+    ExportMemory, ExportSession, ForgetNode, Forward, GetManifest, GetNode, GetSession, GrantHome,
+    Hello, ImportMemory, ImportSession, InviteDevice, KillSession, ListDevices, ListHarnesses,
     ListMembers, ListNodes, ListPeers, ListProfiles, ListSecrets, ListSessions, MoveProfile,
     Outcome, ProtocolRange, ReadBlob, ReadEvents, ReadTransfer, RelayCall, ReloadProfiles,
     ReportApplied, Request, RequestId, RevokeDevice, SendInput, ServerFrame, SetSecret, StopNode,
@@ -88,6 +88,7 @@ impl Unary for Forward {}
 impl Unary for RelayCall {}
 impl Unary for Deliver {}
 impl Unary for GrantHome {}
+impl Unary for ForgetNode {}
 impl Unary for ListPeers {}
 impl Unary for ListNodes {}
 impl Unary for ExportSession {}

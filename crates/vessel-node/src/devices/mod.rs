@@ -15,6 +15,7 @@ mod connected;
 mod invitations;
 pub(crate) mod preamble;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{TimeDelta, Utc};
@@ -54,6 +55,11 @@ pub(crate) struct Devices {
     key: NodePublicKey,
     routes: Routes,
     invitations: Mutex<Invitations>,
+    /// Bumped whenever every pending invitation is withdrawn (a fleet home
+    /// forgetting a node): a pairing whose invitation was redeemed before
+    /// that and whose device was stored after it is undone, so no device
+    /// stored after a forget comes from an invitation made before it.
+    withdrawals: AtomicU64,
     connected: Arc<Connected>,
 }
 
@@ -65,6 +71,7 @@ impl Devices {
             key,
             routes,
             invitations: Mutex::new(Invitations::default()),
+            withdrawals: AtomicU64::new(0),
             connected: Arc::new(Connected::default()),
         }
     }
@@ -86,6 +93,15 @@ impl Devices {
     ) -> Result<(Invitation, oneshot::Receiver<DeviceId>), ServiceError> {
         let (paired, redeemed) = oneshot::channel();
         Ok((self.make_invitation(request, Some(paired))?, redeemed))
+    }
+
+    /// Withdraw every pending invitation; how many there were. For a fleet
+    /// home forgetting a node: no device paired from an invitation made
+    /// before can take the node's id (see `withdrawals`).
+    pub(crate) fn withdraw_all(&self) -> usize {
+        let mut invitations = self.invitations();
+        let _before = self.withdrawals.fetch_add(1, Ordering::AcqRel);
+        invitations.withdraw_all()
     }
 
     /// Withdraw a pending invitation, so it can no longer be redeemed
@@ -200,13 +216,19 @@ impl Devices {
         device_name: &str,
     ) -> Result<(DeviceSecret, Vec<Scope>), RefusalReason> {
         let now = Utc::now();
-        let Redeemed {
-            grant: redeemed,
-            paired,
-        } = self
-            .invitations()
-            .redeem(invite, now)
-            .ok_or(RefusalReason::InvalidInvitation)?;
+        let (
+            Redeemed {
+                grant: redeemed,
+                paired,
+            },
+            withdrawals,
+        ) = {
+            let mut invitations = self.invitations();
+            let redeemed = invitations
+                .redeem(invite, now)
+                .ok_or(RefusalReason::InvalidInvitation)?;
+            (redeemed, self.withdrawals.load(Ordering::Acquire))
+        };
         let mut bytes = [0_u8; 32];
         getrandom::fill(&mut bytes).map_err(|error| {
             tracing::warn!(%error, "no randomness for a device credential");
@@ -232,6 +254,14 @@ impl Devices {
                 tracing::warn!(%error, "could not store a new device");
                 RefusalReason::Unavailable
             })?;
+        if self.withdrawals.load(Ordering::Acquire) != withdrawals {
+            // Every invitation was withdrawn while this one was being used:
+            // it counts as withdrawn.
+            if let Err(error) = self.revoke(id).await {
+                tracing::warn!(device = %id, %error, "cannot undo a pairing whose invitation was withdrawn meanwhile");
+            }
+            return Err(RefusalReason::InvalidInvitation);
+        }
         tracing::info!(device = %id, "paired a device");
         if let Some(paired) = paired
             && paired.send(id).is_err()

@@ -64,7 +64,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_proto::HarnessKind;
 
-pub use bindings::{Forgot, forget};
 pub(crate) use chunks::{fetch, serve};
 pub use config::{FleetInit, InitError, SourcesError, init};
 pub use files::{FileError, FleetFiles};
@@ -121,7 +120,8 @@ impl Default for FleetConfig {
 
 /// Start the fleet loop of the node keeping its state in `files`; the
 /// home's side and the links across nodes, for the service. Blocks briefly
-/// (reads `members.json` and `state.json`).
+/// (reads `members.json` and `state.json`, and brings a home's binding
+/// record up to date).
 pub(crate) fn start(
     files: FleetFiles,
     config: &FleetConfig,
@@ -132,6 +132,13 @@ pub(crate) fn start(
     stop: &CancellationToken,
 ) -> Arc<Home> {
     let home = Arc::new(Home::new(files.clone(), config.watch_limit, stop.clone()));
+    // A home's binding record from before names were kept gets them now,
+    // from the grants it keeps (`bindings.rs`).
+    match bindings::upgrade(&files) {
+        Ok(true) => tracing::info!("filled in the names the fleet's binding record lacked"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(%error, "cannot bring the fleet's binding record up to date"),
+    }
     let state = Arc::new(state::StateFile::open(&files));
     let local = Arc::new(local::Local::new(
         files,
