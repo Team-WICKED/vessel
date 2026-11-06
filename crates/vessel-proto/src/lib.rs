@@ -17,6 +17,7 @@ mod harness;
 mod id;
 mod key;
 mod node;
+mod pairing;
 mod proxy;
 mod raw;
 mod relay;
@@ -30,9 +31,8 @@ pub use agent::{
     ToolCallStatus, ToolCallUpdate, ToolKind, ToolLocation,
 };
 pub use device::{
-    DeviceInfo, DeviceSecret, InvalidRoute, Invitation, InvitationSecret, InviteDevice, LinkError,
-    ListDevices, PairingLink, PairingOffer, Preamble, PreambleReply, RefusalReason, RevokeDevice,
-    RouteUrl, Scope,
+    DeviceInfo, DeviceSecret, Invitation, InvitationSecret, InviteDevice, ListDevices, Preamble,
+    PreambleReply, RefusalReason, RevokeDevice, Scope,
 };
 pub use error::{ErrorCode, WireError};
 pub use event::{EventRecord, SessionEvent};
@@ -45,6 +45,7 @@ pub use key::{KeyTextError, NodePublicKey, RoutingId};
 pub use node::{
     MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,
 };
+pub use pairing::{InvalidRoute, LinkError, PairingLink, PairingOffer, RouteUrl};
 pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use relay::{

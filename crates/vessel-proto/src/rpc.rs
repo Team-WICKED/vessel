@@ -22,11 +22,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::device::{DeviceInfo, Invitation, InviteDevice, ListDevices, RevokeDevice, Scope};
 use crate::error::WireError;
-use crate::event::EventRecord;
 use crate::harness::Harness;
-use crate::id::{EventSeq, RequestId, SessionId, SubscriptionId};
-use crate::node::{NodeInfo, ProtocolRange, ProtocolVersion};
-use crate::session::{SessionInfo, SessionInput, SessionSpec};
+use crate::node::NodeInfo;
+use crate::session::SessionInfo;
+
+mod frames;
+mod requests;
+
+pub use frames::{ClientFrame, ClientInfo, Hello, ServerFrame, SubscriptionEnd, Welcome};
+pub use requests::{
+    Ack, CreateSession, EventPage, GetNode, GetSession, KillSession, ListHarnesses, ListSessions,
+    ReadEvents, SendInput, StopNode, StopWhen, Subscribe, Subscribed, Unsubscribe,
+};
 
 /// A request type, bound to its response type and its method.
 pub trait Request: Serialize + DeserializeOwned + Send + 'static {
@@ -205,120 +212,6 @@ macro_rules! rpc_methods {
     };
 }
 
-/// `node.info`: describe the node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GetNode;
-
-/// `harness.list`: discover installed harnesses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ListHarnesses;
-
-/// `session.list`: every session the node knows, newest first, including
-/// ended sessions restored from disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ListSessions;
-
-/// `session.get`: one session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GetSession {
-    /// Which session.
-    pub session: SessionId,
-}
-
-/// `session.create`: start a harness.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateSession {
-    /// What to run.
-    pub spec: SessionSpec,
-}
-
-/// `session.send`: send input to a live session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SendInput {
-    /// Which session.
-    pub session: SessionId,
-    /// What to send.
-    pub input: SessionInput,
-}
-
-/// `session.kill`: stop a session's process (and its process group).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KillSession {
-    /// Which session.
-    pub session: SessionId,
-}
-
-/// `session.read`: a page of a session's log. The authoritative way to fill
-/// gaps; live subscriptions are an optimisation on top of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReadEvents {
-    /// Which session.
-    pub session: SessionId,
-    /// First sequence number wanted.
-    pub from: EventSeq,
-    /// Maximum number of records; the node may return fewer and caps it.
-    pub limit: u32,
-}
-
-/// Reply to `session.read`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EventPage {
-    /// Records in order, starting at the requested `from` (or the oldest
-    /// retained record if older ones were pruned).
-    pub records: Vec<EventRecord>,
-    /// Sequence number to ask for next.
-    pub next: EventSeq,
-    /// Whether `next` is the end of the log right now.
-    pub at_end: bool,
-}
-
-/// `session.subscribe`: stream a session's events from `from` onwards.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Subscribe {
-    /// Which session.
-    pub session: SessionId,
-    /// First sequence number wanted (zero for the whole history).
-    pub from: EventSeq,
-}
-
-/// Reply to `session.subscribe`. Events follow as `ServerFrame::Event`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Subscribed {
-    /// Id that tags the events of this subscription.
-    pub subscription: SubscriptionId,
-    /// The session at the moment of subscribing.
-    pub info: SessionInfo,
-}
-
-/// `session.unsubscribe`: stop a subscription on this connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Unsubscribe {
-    /// Which subscription.
-    pub subscription: SubscriptionId,
-}
-
-/// When `node.stop` takes effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StopWhen {
-    /// Stop now: live sessions end `Interrupted`, as on a signal.
-    Now,
-    /// Drain: refuse new sessions and stop once none is live.
-    WhenIdle,
-}
-
-/// `node.stop` (protocol 3): stop the node, now or once idle. Used by
-/// remote update; a client that negotiated protocol 2 never sends it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StopNode {
-    /// When to stop.
-    pub when: StopWhen,
-}
-
-/// Empty success.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Ack;
-
 rpc_methods! {
     /// Describe the node.
     NodeInfo / node_info / "node.info" [Read]: GetNode => NodeInfo;
@@ -360,147 +253,5 @@ pub enum Outcome {
     Err(WireError),
 }
 
-/// Who is connecting; for logs and future per-client capabilities.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClientInfo {
-    /// Client program name (`vessel-cli`, `vessel-web`, ...).
-    pub name: String,
-    /// Client program version.
-    pub version: String,
-}
-
-/// First frame a client sends.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Hello {
-    /// Protocols the client speaks.
-    pub protocol: ProtocolRange,
-    /// The client.
-    pub client: ClientInfo,
-}
-
-/// The node's answer to a successful `Hello`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Welcome {
-    /// The negotiated protocol version for this connection.
-    pub protocol: ProtocolVersion,
-    /// The node.
-    pub node: NodeInfo,
-}
-
-/// Why a subscription stopped delivering events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "reason", rename_all = "snake_case")]
-pub enum SubscriptionEnd {
-    /// The session ended and its final event was delivered.
-    SessionEnded,
-    /// The client unsubscribed.
-    Unsubscribed,
-    /// The client fell too far behind the live stream. Nothing was skipped:
-    /// read or resubscribe from `resume_from`.
-    Lagged {
-        /// First sequence number not delivered.
-        resume_from: EventSeq,
-    },
-}
-
-/// A frame from client to node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ClientFrame {
-    /// Handshake; must be the first frame.
-    Hello(Hello),
-    /// A call.
-    Request {
-        /// Correlation id, unique per connection.
-        id: RequestId,
-        /// The call.
-        call: Call,
-    },
-    /// Abandon an in-flight call; the node may still answer it.
-    Cancel {
-        /// The call's id.
-        id: RequestId,
-    },
-}
-
-/// A frame from node to client.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ServerFrame {
-    /// Handshake accepted.
-    Welcome(Welcome),
-    /// Handshake refused (for example `ProtocolMismatch`); the node closes the
-    /// connection after sending this.
-    Rejected {
-        /// Why.
-        error: WireError,
-    },
-    /// The answer to a call.
-    Response {
-        /// The call's id.
-        id: RequestId,
-        /// What happened.
-        outcome: Outcome,
-    },
-    /// A subscribed session event.
-    Event {
-        /// Which subscription.
-        subscription: SubscriptionId,
-        /// The record.
-        record: EventRecord,
-    },
-    /// A subscription stopped; no more events carry its id.
-    SubscriptionEnded {
-        /// Which subscription.
-        subscription: SubscriptionId,
-        /// Why.
-        end: SubscriptionEnd,
-    },
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unit_requests_round_trip() {
-        let frame = ClientFrame::Request {
-            id: RequestId::new(7),
-            call: GetNode.into_call(),
-        };
-        let json = serde_json::to_string(&frame).unwrap();
-        assert_eq!(
-            json,
-            r#"{"type":"request","id":7,"call":{"method":"node.info","params":null}}"#
-        );
-        assert_eq!(serde_json::from_str::<ClientFrame>(&json).unwrap(), frame);
-    }
-
-    #[test]
-    fn every_method_declares_a_scope_and_admin_is_rare() {
-        let admin: Vec<_> = Method::ALL
-            .iter()
-            .filter(|method| method.scope() == Scope::Admin)
-            .map(|method| method.as_str())
-            .collect();
-        assert_eq!(
-            admin,
-            ["node.stop", "device.invite", "device.list", "device.revoke"]
-        );
-        assert_eq!(Method::SendInput.scope(), Scope::Operate);
-        assert_eq!(Method::ReadEvents.scope(), Scope::Read);
-    }
-
-    #[test]
-    fn replies_bind_to_their_request() {
-        let reply = Reply::SendInput(Ack);
-        assert_eq!(SendInput::response_from(reply.clone()), Ok(Ack));
-        assert_eq!(
-            KillSession::response_from(reply),
-            Err(UnexpectedReply {
-                expected: Method::KillSession,
-                got: Method::SendInput,
-            })
-        );
-    }
-}
+mod tests;
