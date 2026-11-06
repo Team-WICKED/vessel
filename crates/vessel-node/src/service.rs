@@ -6,8 +6,8 @@ use std::sync::Arc;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, CreateSession, EventPage, GetNode, GetSession, Handler, Harness, KillSession,
-    ListHarnesses, ListSessions, NodeInfo, ReadEvents, SendInput, SessionInfo, Subscribe,
+    Ack, CreateSession, ErrorCode, EventPage, GetNode, GetSession, Handler, Harness, KillSession,
+    ListHarnesses, ListSessions, NodeInfo, ReadEvents, SendInput, SessionInfo, StopNode, Subscribe,
     Subscribed, Unsubscribe, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
@@ -160,5 +160,20 @@ impl Handler for NodeService {
             .await
             .map(|()| Ack)
             .map_err(|error| wire(&error.into()))
+    }
+
+    /// Protocol 3 added `node.stop` for remote update (ADR 0008). Draining
+    /// and remote stop are milestone 2 work (`docs/plans/backend-m2.md`,
+    /// Track N); until then the node says so with a typed refusal rather
+    /// than guessing at a partial behaviour.
+    async fn stop_node(
+        &self,
+        _connection: &Connection,
+        _request: StopNode,
+    ) -> Result<Ack, WireError> {
+        Err(WireError::new(
+            ErrorCode::Unsupported,
+            "node.stop is not implemented by this node yet (milestone 2)",
+        ))
     }
 }

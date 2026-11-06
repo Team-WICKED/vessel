@@ -14,9 +14,9 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     Ack, ClientInfo, CreateSession, ErrorCode, EventPage, EventRecord, EventSeq, GetNode,
     GetSession, Handler, Harness, HarnessKind, KillSession, ListHarnesses, ListSessions, NodeId,
-    NodeInfo, ProtocolRange, ReadEvents, SendInput, SessionEvent, SessionId, SessionInfo,
-    SessionMode, SessionSpec, SessionStatus, Subscribe, Subscribed, SubscriptionEnd, TerminalSize,
-    Unsubscribe, WireError,
+    NodeInfo, NodeState, ProtocolRange, ReadEvents, SendInput, SessionEvent, SessionId,
+    SessionInfo, SessionMode, SessionSpec, SessionStatus, StopNode, Subscribe, Subscribed,
+    SubscriptionEnd, TerminalSize, Unsubscribe, WireError,
 };
 use vessel_rpc::{ClientConfig, Outbound, OutboundError, Server, ServerConfig};
 
@@ -56,6 +56,7 @@ fn node() -> NodeInfo {
         version: "0".to_owned(),
         protocol: ProtocolRange::CURRENT,
         started_at: DateTime::UNIX_EPOCH,
+        state: NodeState::Serving,
     }
 }
 
@@ -216,6 +217,10 @@ impl Handler for FakeNode {
             .close_subscription(request.subscription)
             .await
             .map_err(OutboundError::to_wire)?;
+        Ok(Ack)
+    }
+
+    async fn stop_node(&self, _context: &Context, _request: StopNode) -> Result<Ack, WireError> {
         Ok(Ack)
     }
 }

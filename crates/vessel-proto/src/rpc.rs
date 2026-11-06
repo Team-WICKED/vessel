@@ -283,6 +283,24 @@ pub struct Unsubscribe {
     pub subscription: SubscriptionId,
 }
 
+/// When `node.stop` takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopWhen {
+    /// Stop now: live sessions end `Interrupted`, as on a signal.
+    Now,
+    /// Drain: refuse new sessions and stop once none is live.
+    WhenIdle,
+}
+
+/// `node.stop` (protocol 3): stop the node, now or once idle. Used by
+/// remote update; a client that negotiated protocol 2 never sends it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopNode {
+    /// When to stop.
+    pub when: StopWhen,
+}
+
 /// Empty success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ack;
@@ -308,6 +326,8 @@ rpc_methods! {
     Subscribe / subscribe / "session.subscribe": Subscribe => Subscribed;
     /// End a subscription.
     Unsubscribe / unsubscribe / "session.unsubscribe": Unsubscribe => Ack;
+    /// Stop the node (protocol 3).
+    StopNode / stop_node / "node.stop": StopNode => Ack;
 }
 
 /// Result of a call.
