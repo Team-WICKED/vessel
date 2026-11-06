@@ -33,6 +33,7 @@ use vessel_proto::{ConnId, RelayClose, RelayToken, RoutingId};
 use vessel_secure::MAX_RECORD;
 
 use self::rate::RateLimiter;
+use crate::carrier::Keepalive;
 use crate::{ACCEPT_PATH, CONNECT_PATH, HEALTH_PATH, NODE_PATH};
 
 /// The relay's limits (ADR 0009). The defaults are the protocol's.
@@ -65,8 +66,8 @@ impl Default for Limits {
             waiting_per_node: 64,
             accept_timeout: Duration::from_secs(10),
             registration_timeout: Duration::from_secs(10),
-            ping_interval: Duration::from_secs(10),
-            idle_timeout: Duration::from_secs(30),
+            ping_interval: Keepalive::DEFAULT.ping,
+            idle_timeout: Keepalive::DEFAULT.silence,
             connect_burst: 30,
             connect_refill: Duration::from_secs(1),
         }
