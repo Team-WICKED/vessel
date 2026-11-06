@@ -471,15 +471,32 @@ Progress (2026-11-06):
   `fleet/grants/`. Leaving revokes that device once the node notices.
   `vessel fleet invite --relay` adds the `relay` scope.
 - **`fleet.peers`, `fleet.nodes` and `session.read` with `wait` (built).**
+  A waiting read follows the session's ring from `from` and wakes at the
+  first record there or when the session ends (the info watch does not
+  notify for `next_seq` alone, so a wait on it slept through a turn).
+- **`vessel mcp` across nodes (built):** every tool but `list_nodes` takes
+  `node` (an id, or a name from `list_nodes`; left out or naming this
+  node, the call stays here) and goes in `fleet.forward` for another node;
+  `list_nodes` is `fleet.nodes`; `wait_turn` and a new session's wait to
+  be ready are loops of `session.read` with `wait` (30 s per poll), the
+  same code path on every node.
+- **Leaving, checked in order:** the fleet loop revokes the home's device
+  only when it reads the membership after the grant and finds it gone or
+  naming another home; a membership it cannot read keeps the grant.
 - **Tests:** an e2e fleet of a home and two members on an in-process relay
   (calls from the home to a member and from member to member through the
   home; the home refusing a member without `relay`; members holding
   nothing on the home but `sync`/`relay`; a long poll across two hops; an
   agent on one member creating and killing its own session on another and
-  refused another's); a member taking deliveries from its home's device
-  only, cut down to the origin.
-- **Next:** `vessel mcp` taking `node`, `list_nodes`, and `wait_turn` as a
-  long poll.
+  refused another's; an agent's `vessel` tools on one member starting a
+  session on another by name and reading its reply through `wait_turn`);
+  a member taking deliveries from its home's device only, cut down to the
+  origin. The long-poll test lets the session run before the wait starts
+  and requires the read to return well before its wait, so only records
+  can wake it.
+- **Done.** Left to Track S: F4's cross-node `Source` over `pass_on`, and
+  `secret.copy` over the envelope. A member's agents reach other members
+  but not the home itself (members hold only `sync`/`relay` there).
 
 ## Protocol 6 (accepted)
 
