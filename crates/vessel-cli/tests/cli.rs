@@ -26,10 +26,17 @@ mod support {
 
     const SAFETY_NET: Duration = Duration::from_secs(60);
 
-    pub(super) async fn within<F: Future>(test: F) -> F::Output {
-        tokio::time::timeout(SAFETY_NET, test)
-            .await
-            .expect("test timed out")
+    /// The safety net starts after the fakes are built: the first build of
+    /// a run can take a minute on a cold machine (see
+    /// `vessel_testkit::within`).
+    /// The test is boxed at once, so the future handed around stays small.
+    pub(super) fn within<F: Future>(test: F) -> impl Future<Output = F::Output> {
+        let test = Box::pin(test);
+        async move {
+            vessel_testkit::within(SAFETY_NET, test)
+                .await
+                .expect("test timed out")
+        }
     }
 
     /// What a CLI run printed.
