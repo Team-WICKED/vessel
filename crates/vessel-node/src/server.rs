@@ -20,7 +20,8 @@ use vessel_rpc::Server;
 use vessel_store::NodeToken;
 
 use crate::auth;
-use crate::service::{Connection, NodeService};
+use crate::guard::Guarded;
+use crate::service::Connection;
 use crate::transport::WsTransport;
 
 /// Largest websocket message accepted from a client. Requests are small;
@@ -31,7 +32,7 @@ const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 /// What every request handler needs.
 #[derive(Debug, Clone)]
 pub(crate) struct Gateway {
-    pub(crate) rpc: Arc<Server<NodeService>>,
+    pub(crate) rpc: Arc<Server<Guarded>>,
     pub(crate) token: Arc<NodeToken>,
     pub(crate) connections: TaskTracker,
 }
@@ -68,7 +69,7 @@ async fn rpc(
             let _tracked = connection;
             if let Err(error) = gateway
                 .rpc
-                .serve(WsTransport::new(socket), Connection::new)
+                .serve(WsTransport::new(socket), Connection::owner)
                 .await
             {
                 tracing::info!(error = %error, "connection ended abnormally");

@@ -36,7 +36,8 @@ use vessel_proto::{ErrorCode, NodeId, ServerFrame, WireError};
 use vessel_rpc::{Framed, MAX_FRAME, Server};
 use vessel_store::{DataDir, NodeToken};
 
-use crate::service::{Connection, NodeService};
+use crate::guard::Guarded;
+use crate::service::Connection;
 
 /// How long a new local connection has to present the token.
 const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -204,7 +205,7 @@ impl LocalListener {
 /// What every local connection needs.
 #[derive(Debug, Clone)]
 pub(crate) struct LocalGateway {
-    pub(crate) rpc: Arc<Server<NodeService>>,
+    pub(crate) rpc: Arc<Server<Guarded>>,
     pub(crate) token: Arc<NodeToken>,
     pub(crate) connections: TaskTracker,
 }
@@ -263,7 +264,7 @@ where
         }
         return;
     }
-    if let Err(error) = gateway.rpc.serve(framed, Connection::new).await {
+    if let Err(error) = gateway.rpc.serve(framed, Connection::owner).await {
         tracing::info!(error = %error, "local connection ended abnormally");
     }
 }

@@ -2,10 +2,11 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use vessel_harness::Lookup;
-use vessel_proto::DEFAULT_PORT;
+use vessel_proto::{DEFAULT_PORT, RouteUrl};
 use vessel_rpc::ServerConfig;
 use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY};
 use vessel_store::{DataDir, StoreConfig};
@@ -38,6 +39,17 @@ pub struct Config {
     pub agent_handshake_timeout: Duration,
     /// Per-connection RPC limits.
     pub rpc: ServerConfig,
+    /// Relays this node registers with, in preference order (`--relay`);
+    /// its pairing links name them (ADR 0009). Needs
+    /// [`relay_token_file`](Self::relay_token_file).
+    pub relays: Vec<RouteUrl>,
+    /// The file holding the relays' registration token
+    /// (`--relay-token-file`): a secret shared with the nodes that may use
+    /// them (plan decision 4).
+    pub relay_token_file: Option<PathBuf>,
+    /// Direct addresses pairing links advertise (`--public`). Nothing is
+    /// guessed: a node behind NAT has none, and is reached through a relay.
+    pub public: Vec<RouteUrl>,
 }
 
 impl Config {
@@ -54,6 +66,9 @@ impl Config {
             durable_capacity: DEFAULT_DURABLE_CAPACITY,
             agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             rpc: ServerConfig::default(),
+            relays: Vec::new(),
+            relay_token_file: None,
+            public: Vec::new(),
         }
     }
 }

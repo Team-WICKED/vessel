@@ -1,20 +1,22 @@
 //! The protocol's `Handler`: routes each call to the module that owns it
-//! and maps its typed error to the wire, once. No logic of its own.
+//! and maps its typed error to the wire, once. No logic of its own. Every
+//! transport serves it behind the scope check (`guard::Guarded`).
 
 use std::sync::Arc;
 
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, CreateSession, DeviceInfo, ErrorCode, EventPage, GetNode, GetSession, Handler, Harness,
-    Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions, NodeInfo,
-    ReadEvents, RevokeDevice, SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe,
-    WireError,
+    Ack, CreateSession, DeviceInfo, EventPage, GetNode, GetSession, Handler, Harness, Invitation,
+    InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions, NodeInfo, ReadEvents,
+    RevokeDevice, SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
+use crate::devices::Devices;
 use crate::error::ServiceError;
 use crate::lifecycle::Lifecycle;
+use crate::principal::Principal;
 use crate::sessions::Sessions;
 use crate::subscribe;
 
@@ -24,6 +26,7 @@ pub(crate) struct NodeService {
     lifecycle: Lifecycle,
     lookup: Lookup,
     sessions: Arc<Sessions>,
+    devices: Arc<Devices>,
     /// Subscription forwarders, so shutdown can let them queue their last
     /// frames.
     forwarders: TaskTracker,
@@ -34,29 +37,49 @@ impl NodeService {
         lifecycle: Lifecycle,
         lookup: Lookup,
         sessions: Arc<Sessions>,
+        devices: Arc<Devices>,
         forwarders: TaskTracker,
     ) -> Self {
         Self {
             lifecycle,
             lookup,
             sessions,
+            devices,
             forwarders,
         }
     }
 }
 
-/// Per-connection state: where this connection's subscriptions go.
+/// Per-connection state: who is calling, and where this connection's
+/// subscriptions go.
 #[derive(Debug)]
 pub(crate) struct Connection {
     outbound: Outbound,
+    principal: Principal,
 }
 
 impl Connection {
-    pub(crate) fn new(peer: Peer) -> Self {
-        tracing::info!(client = %peer.client.name, version = %peer.client.version, "client connected");
+    pub(crate) fn new(peer: Peer, principal: Principal) -> Self {
+        tracing::info!(
+            client = %peer.client.name,
+            version = %peer.client.version,
+            ?principal,
+            "client connected"
+        );
         Self {
             outbound: peer.outbound,
+            principal,
         }
+    }
+
+    /// A connection of the machine's own clients (token or local socket).
+    pub(crate) fn owner(peer: Peer) -> Self {
+        Self::new(peer, Principal::Owner)
+    }
+
+    /// Who is calling.
+    pub(crate) const fn principal(&self) -> &Principal {
+        &self.principal
     }
 }
 
@@ -176,12 +199,13 @@ impl Handler for NodeService {
         Ok(Ack)
     }
 
+    /// `device.invite` (ADR 0010): a single-use pairing link.
     async fn invite_device(
         &self,
         _: &Connection,
-        _: InviteDevice,
+        request: InviteDevice,
     ) -> Result<Invitation, WireError> {
-        Err(devices_not_yet())
+        self.devices.invite(&request).map_err(|error| wire(&error))
     }
 
     async fn list_devices(
@@ -189,21 +213,16 @@ impl Handler for NodeService {
         _: &Connection,
         _: ListDevices,
     ) -> Result<Vec<DeviceInfo>, WireError> {
-        Err(devices_not_yet())
+        self.devices.list().await.map_err(|error| wire(&error))
     }
 
-    async fn revoke_device(&self, _: &Connection, _: RevokeDevice) -> Result<Ack, WireError> {
-        Err(devices_not_yet())
+    /// `device.revoke`: also closes the device's open connections, this
+    /// one included if a device revokes itself (after its `ack`).
+    async fn revoke_device(&self, _: &Connection, request: RevokeDevice) -> Result<Ack, WireError> {
+        self.devices
+            .revoke(request.device)
+            .await
+            .map(|()| Ack)
+            .map_err(|error| wire(&error))
     }
-}
-
-/// Protocol 4 added `device.*` for pairing (ADR 0010). Devices, secure
-/// channels and scope checks are milestone 3 Track P
-/// (`docs/plans/backend-m3.md`); until then the node refuses these calls with
-/// a typed `unsupported` rather than a partial behaviour.
-fn devices_not_yet() -> WireError {
-    WireError::new(
-        ErrorCode::Unsupported,
-        "devices are not implemented by this node yet (milestone 3)",
-    )
 }

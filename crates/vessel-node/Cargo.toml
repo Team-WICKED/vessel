@@ -23,8 +23,13 @@ bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
+# Device credentials and invitation secrets (ADR 0010); already in the
+# workspace through vessel-store.
+getrandom.workspace = true
 hostname.workspace = true
 serde_json.workspace = true
+# Invitations are kept by the hash of their secret (ADR 0010).
+sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
 tokio-util = { workspace = true, features = ["rt"] }
