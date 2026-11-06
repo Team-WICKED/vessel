@@ -68,6 +68,28 @@ pub(crate) fn base64url(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Decode lowercase or uppercase hex into exactly `N` bytes.
+pub(crate) fn hex_array<const N: usize>(text: &str) -> Result<[u8; N], KeyTextError> {
+    let text = text.as_bytes();
+    let mut bytes = [0_u8; N];
+    if text.len() != N.saturating_mul(2) {
+        return Err(KeyTextError::Length {
+            expected: N,
+            found: text.len().div_euclid(2),
+        });
+    }
+    for (byte, pair) in bytes.iter_mut().zip(text.chunks_exact(2)) {
+        let pair = std::str::from_utf8(pair).map_err(|_utf8| KeyTextError::Encoding)?;
+        *byte = u8::from_str_radix(pair, 16).map_err(|_hex| KeyTextError::Encoding)?;
+    }
+    Ok(bytes)
+}
+
+/// Write bytes as lowercase hex.
+pub(crate) fn write_hex(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
+    bytes.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+}
+
 const KEY_PREFIX: &str = "x25519:";
 
 /// A node's static X25519 public key: the identity a client pins at pairing
@@ -135,10 +157,7 @@ impl RoutingId {
 
 impl fmt::Display for RoutingId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
+        write_hex(f, &self.0)
     }
 }
 
@@ -152,19 +171,7 @@ impl FromStr for RoutingId {
     type Err = KeyTextError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let text = s.trim().as_bytes();
-        let mut bytes = [0_u8; 16];
-        if text.len() != bytes.len().saturating_mul(2) {
-            return Err(KeyTextError::Length {
-                expected: bytes.len(),
-                found: text.len().div_euclid(2),
-            });
-        }
-        for (byte, pair) in bytes.iter_mut().zip(text.chunks_exact(2)) {
-            let pair = std::str::from_utf8(pair).map_err(|_utf8| KeyTextError::Encoding)?;
-            *byte = u8::from_str_radix(pair, 16).map_err(|_hex| KeyTextError::Encoding)?;
-        }
-        Ok(Self(bytes))
+        hex_array(s.trim()).map(Self)
     }
 }
 

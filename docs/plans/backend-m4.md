@@ -120,7 +120,30 @@ merged and the session structs (which Track P also touches) change once.
   `PROTOCOL.md` entry, and `PROTOCOL_VERSION = 5`. Both structs move to
   constructor APIs in the same step, so later fields stop breaking every
   literal in the workspace.
-- **Step 2 (before Track F):** the fleet rows and scope `sync`.
+- **Step 2a (2026-11-06, additive types only):** validated names in
+  `vessel_proto::name`, one implementation and one `InvalidName { kind,
+  value }` error: `ProfileName` (moved here; `InvalidProfileName` is gone),
+  `EnvName` and `SecretName` (`[A-Za-z_][A-Za-z0-9_]*`, at most 128),
+  `McpServerName` (`[A-Za-z0-9_-]`, 1-64, no `.` so it stays one key in
+  `codex -c mcp_servers.<name>…`), `HeaderName` (an RFC 9110 token).
+  `ProfileInfo.sets` is `Vec<EnvName>`. `vessel_proto::fleet` has
+  `Generation`, `BlobHash` (SHA-256, hex), `BundlePath` (relative, `/`
+  separated, no `.`/`..`/empty segments, no characters or device names
+  Windows refuses; `under(root)` cannot leave `root`), `BundleFile`,
+  `Manifest { generation, files: BTreeMap<BundlePath, BundleFile>, mcp }`,
+  `HttpUrl`, `ConfigValue` (a string or `{"secret": "NAME"}`),
+  `ResolvedValue` (no serde, redacted `Debug`) and
+  `McpTransport<V>` with the aliases `McpDefinitions` and
+  `ResolvedMcpServers` (maps by `McpServerName`, so duplicates cannot be
+  represented). Track H takes `ResolvedMcpServers` at launch and in
+  `session/new`/`session/load`, so no `vessel-agent -> harness` edge is
+  needed; Track F's resolve is `McpTransport::try_map_values`. The hex
+  helpers (`hex_array`, `write_hex`) moved into `key.rs` and serve
+  `RoutingId`, `ConnId` and `BlobHash`.
+- **Step 2b (with step 1b's version bump):** scope `sync` and the fleet
+  rows (`fleet.manifest`, `fleet.blob`, `fleet.watch`, `fleet.members`,
+  `fleet.push`, `fleet.forward`, `session.export`/`import`,
+  `secret.copy`). One bump to protocol 5 carries steps 1b and 2b.
 
 ## Crates (ADR 0001)
 

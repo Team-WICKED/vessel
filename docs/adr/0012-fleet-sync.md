@@ -108,7 +108,7 @@ This works for one machine. Nothing carries it to a second one.
   [mcp.servers.docs]
   command = "npx"
   args = ["-y", "@example/docs-mcp"]
-  env = { DOCS_TOKEN = "${secret:DOCS_TOKEN}" }
+  env = { DOCS_TOKEN = { secret = "DOCS_TOKEN" } }
   ```
 
 - The home publishes a **bundle**: a manifest of `path → SHA-256, mode`
@@ -155,9 +155,18 @@ This works for one machine. Nothing carries it to a second one.
 
 ### Secrets stay on each node
 
-- The bundle carries references (`${secret:NAME}`), never values. Each node
-  resolves them from its own `<data_dir>/secrets.toml` (owner-only) when it
-  launches a harness.
+- The bundle carries references (`{ secret = "NAME" }`), never values. Each
+  node resolves them from its own `<data_dir>/secrets.toml` (owner-only)
+  when it launches a harness.
+- The types make the rules hold (contract step 2a, 2026-11-06,
+  `vessel_proto::fleet`): one `McpTransport<V>` shape, where `V` is
+  `ConfigValue` (literal text or a secret's name) in definitions and
+  `ResolvedValue` at launch. Only environment variables and headers hold a
+  `V`, so a secret cannot become an argument; `ResolvedValue` has no serde
+  implementation, so a resolved server cannot be serialised onto the wire,
+  and its `Debug` is redacted. A reference is a typed table, not
+  `${secret:NAME}` inside a string, so a mistyped reference is an error
+  rather than a literal.
 - `vessel fleet secret set NAME` stores one on a node (read from a prompt or
   stdin, never an argument). `vessel fleet secret copy NAME --to NODE`
   sends one to another node inside the secure channel, explicitly, with

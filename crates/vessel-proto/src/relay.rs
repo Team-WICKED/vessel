@@ -7,7 +7,9 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::key::{KeyTextError, NodePublicKey, RoutingId, base64url, serde_via_text};
+use crate::key::{
+    KeyTextError, NodePublicKey, RoutingId, base64url, hex_array, serde_via_text, write_hex,
+};
 
 /// The registration token a relay operator gives to nodes allowed to
 /// register there. Clients need none. Never printed.
@@ -80,7 +82,7 @@ impl ConnId {
 
 impl fmt::Display for ConnId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&RoutingId::from_bytes(self.0), f)
+        write_hex(f, &self.0)
     }
 }
 
@@ -94,7 +96,7 @@ impl FromStr for ConnId {
     type Err = KeyTextError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse::<RoutingId>().map(|id| Self(*id.as_bytes()))
+        hex_array(s.trim()).map(Self)
     }
 }
 
