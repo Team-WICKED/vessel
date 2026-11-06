@@ -10,9 +10,7 @@
 
 use std::ffi::OsString;
 
-use tokio::io::AsyncWriteExt as _;
-
-use support::{Machine, within};
+use support::{Captured, Machine, within};
 
 #[cfg(test)]
 mod support {
@@ -172,6 +170,39 @@ mod support {
                 );
             }
             self.node_gone().await;
+        }
+    }
+
+    /// Everything a stream has produced so far, readable while it runs.
+    pub(super) struct Captured(tokio::sync::watch::Receiver<String>);
+
+    impl Captured {
+        pub(super) fn start(stream: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> Self {
+            use tokio::io::AsyncReadExt as _;
+
+            let (sender, receiver) = tokio::sync::watch::channel(String::new());
+            drop(tokio::spawn(async move {
+                let mut stream = stream;
+                let mut buffer = [0_u8; 4096];
+                while let Ok(read) = stream.read(&mut buffer).await {
+                    if read == 0 {
+                        return;
+                    }
+                    let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                    sender.send_modify(|text| text.push_str(&chunk));
+                }
+            }));
+            Self(receiver)
+        }
+
+        /// Wait until the output contains `needle`.
+        pub(super) async fn wait_for(&mut self, needle: &str) {
+            let seen = self.0.wait_for(|text| text.contains(needle)).await.is_ok();
+            assert!(seen, "output ended without {needle:?}: {}", self.text());
+        }
+
+        pub(super) fn text(&self) -> String {
+            self.0.borrow().clone()
         }
     }
 
@@ -363,66 +394,60 @@ async fn update_installs_side_by_side_refuses_then_drains() {
 /// The SSH connection drops in the middle of a terminal attach: the CLI
 /// says so, reconnects (a new `ssh`, a new `attach`), and the screen goes
 /// on with nothing repeated or skipped.
+///
+/// The session's output is produced first, over a connection that does
+/// not drop; the dropping attach then replays it and drops part way. No
+/// input is typed while connections drop: input in flight at a drop may
+/// be lost (it is reported, never resent), which would make the test
+/// depend on timing. The session is ended with `vessel kill`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dropped_ssh_connection_during_attach_resumes() {
-    use tokio::io::AsyncReadExt as _;
-
     within(async {
         let machine = Machine::new();
         let home = machine.home.path().to_str().unwrap().to_owned();
+        let node = ["--node", "me@gpu-box"];
         let run = machine
             .vessel(
-                &[
-                    "--node",
-                    "me@gpu-box",
-                    "run",
-                    "claude",
-                    "--detach",
-                    "--cwd",
-                    &home,
-                ],
+                &[&node[..], &["run", "claude", "--detach", "--cwd", &home]].concat(),
                 b"",
             )
             .await;
         assert!(run.ok, "{}", run.stderr);
         let id = run.stdout.trim().to_owned();
+        for line in 0..4 {
+            let text = format!("big{line}-{}", "x".repeat(4000));
+            let sent = machine
+                .vessel(&[&node[..], &["send", &id, &text]].concat(), b"")
+                .await;
+            assert!(sent.ok, "{}", sent.stderr);
+        }
 
         // Every connection of this attach drops after 24 KiB of node
-        // output: more than one echo's replay, less than four of them.
+        // output: the four echoes are more than that, any one of them
+        // much less.
         let drop_after = [("FAKE_SSH_DROP_AFTER", OsString::from("24576"))];
-        let mut child = machine.spawn(&["--node", "me@gpu-box", "attach", &id], &drop_after);
-        let mut stdin = child.stdin.take().unwrap();
-        let mut input = Vec::new();
+        let mut child = machine.spawn(&[&node[..], &["attach", &id]].concat(), &drop_after);
+        let stdin = child.stdin.take().unwrap();
+        let mut stdout = Captured::start(child.stdout.take().unwrap());
+        let mut stderr = Captured::start(child.stderr.take().unwrap());
         for line in 0..4 {
-            input.extend_from_slice(format!("big{line}-{}\r", "x".repeat(4000)).as_bytes());
+            stdout.wait_for(&format!("echo: big{line}-")).await;
         }
-        input.extend_from_slice(b"exit\r");
-        stdin.write_all(&input).await.unwrap();
+        stderr.wait_for("connection lost; reconnecting").await;
+        stderr.wait_for("reconnected").await;
+
+        let killed = machine
+            .vessel(&[&node[..], &["kill", &id]].concat(), b"")
+            .await;
+        assert!(killed.ok, "{}", killed.stderr);
         drop(stdin);
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
-        let (read_out, read_err, status) = tokio::join!(
-            async {
-                let mut out = out;
-                out.read_to_string(&mut stdout).await
-            },
-            async {
-                let mut err = err;
-                err.read_to_string(&mut stderr).await
-            },
-            child.wait(),
-        );
-        let _read = read_out.unwrap();
-        let _read = read_err.unwrap();
-        assert!(status.unwrap().success(), "{stderr}");
-        assert!(stderr.contains("connection lost; reconnecting"), "{stderr}");
-        assert!(stderr.contains("reconnected"), "{stderr}");
+        let status = child.wait().await.unwrap();
+        assert!(status.success(), "{}", stderr.text());
+        let shown = stdout.text();
         for line in 0..4 {
             let echo = format!("echo: big{line}-");
-            assert_eq!(stdout.matches(&echo).count(), 1, "{echo} in {stdout}");
+            assert_eq!(shown.matches(&echo).count(), 1, "{echo} in {shown}");
         }
-        assert!(stderr.contains("session exited (0)"), "{stderr}");
         machine.stop_node().await;
     })
     .await;
