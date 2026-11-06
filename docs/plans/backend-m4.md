@@ -384,8 +384,8 @@ contract change; tracks start after it.
   the source and logs to `CONFLICTS.log`. Not synced: memory,
   `settings.json`, subagents, Paseo-managed copies, claude.ai account
   skills (the script's README and the global instructions).
-- **Accounts**: four Claude Code logins (`~/.claude`, `~/.claude-alt`,
-  `~/.claude-alalt`, `~/.claude-alalalt`), each a Paseo provider with
+- **Accounts**: four Claude Code logins (`~/.claude` and three more
+  configuration directories), each a Paseo provider with
   `extends: "claude"` and `CLAUDE_CONFIG_DIR` in its `env`. The account-swap
   plugin hard-links one session's transcript files (never `memory/`) into
   the target login, points the agent's `CLAUDE_CONFIG_DIR` at it through a

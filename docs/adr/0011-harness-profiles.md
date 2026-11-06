@@ -13,7 +13,7 @@ therefore chose the account for every session it will ever run.
 The operator's real setup (read 2026-11-06, read-only) runs four Claude Code
 logins side by side on one machine and moves work between them:
 
-- `~/.claude`, `~/.claude-alt`, `~/.claude-alalt`, `~/.claude-alalalt`, one
+- `~/.claude` and three more configuration directories beside it, one
   per login, selected with `CLAUDE_CONFIG_DIR`.
 - In Paseo each is a provider that extends the built-in one:
   `{ "extends": "claude", "label": ..., "env": { "CLAUDE_CONFIG_DIR": ... } }`
