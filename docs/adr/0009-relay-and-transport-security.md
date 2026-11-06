@@ -104,12 +104,16 @@ runs it; it has no data directory and stores nothing.
     ids, windows or buffers of its own.
 - **Routing id.** The relay addresses a node by a routing id derived from
   its static public key: the first 16 bytes of `SHA-256(node public key)`,
-  base32. Not by `NodeId`, so the relay can check that a node registering an
+  as lowercase hex (base32 in the draft; the protocol 4 contract chose
+  hex). Not by `NodeId`, so the relay can check that a node registering an
   id holds its key.
   - On registration the relay runs a Noise NK handshake as initiator
     towards the claimed key, and accepts the registration only if the node
     completes it. Only the holder of the private key can, so nobody can
     take over another node's slot and black-hole its clients.
+  - That handshake has its own prologue, `vessel/relay-proof/1`, so a
+    relay's challenge is no client handshake for the node's `/secure`
+    endpoint, and the node's answer is no channel handshake.
 - **What the relay sees.** Routing ids, IP addresses, timing and message
   sizes. Never a plaintext byte, a session id, a token or a credential. A
   malicious relay can drop, delay, reorder or replay messages, and every one

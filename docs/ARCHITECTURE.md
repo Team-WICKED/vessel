@@ -39,6 +39,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing. | proto, rpc, harness, session, store |
 | `vessel-client` | Typed async client and gap-free session streams. | proto, rpc |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
+| `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node, remote |
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests. | - |
 
@@ -254,6 +255,21 @@ they started.
     `VESSEL_SSH` (the `ssh` program) and `VESSEL_GH` (the GitHub CLI);
     tests set all three so they never touch the user's book, the real
     `ssh`, or GitHub (the README lists them).
+- Milestone 3, Track S (in progress, `backend/m3-secure`):
+  - `vessel-secure` (2026-11-06): `initiate`/`respond` run Noise
+    `NK_25519_ChaChaPoly_SHA256` (prologue `vessel/secure/1`, 48-byte
+    messages with empty payloads, one 10 s deadline) over any `Carrier`
+    (in memory, `u16` length-prefixed bytes; websockets come with
+    `vessel-relay`). `SecureChannel` is a `FrameTransport`: frames are
+    chunked canonically into records of at most 65,535 bytes, sealed only
+    when the carrier can take them, and every size and chunk rule is
+    checked before anything is buffered. Any tampering ends the channel.
+    `NodeKeypair`, `routing_id`, `fingerprint`, and the relay's possession
+    proof (prologue `vessel/relay-proof/1`). Tested with the two published
+    NK vectors, tamper cases (corrupt, replay, reorder, drop, truncate,
+    each chunk rule), a seeded fuzz of the parser, 16 MiB frames, and a
+    `vessel-rpc` connection over the channel. The cipher crates are
+    optimised in dev builds (`Cargo.toml` explains why).
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

@@ -19,9 +19,16 @@ pairing) implements it; until then nodes answer `device.*` with
   `forbidden`. The node token and the local socket hold every scope.
 - `NodeInfo.public_key`: `"x25519:<base64url>"`, absent when unknown.
 - Secure channel (ADR 0009): `Noise_NK_25519_ChaChaPoly_SHA256`, prologue
-  `vessel/secure/1`, empty handshake payloads. Record and chunk format,
-  limits and close rules are specified in `docs/plans/backend-m3.md`
-  ("Seams", `vessel-secure`) and implemented by `vessel-secure`.
+  `vessel/secure/1`, empty handshake payloads (both messages 48 bytes).
+  Each carrier message is one record of at most 65,535 bytes: one sealed
+  chunk, `flags` (`FIRST = 1`, `FINAL = 2`, others refused), the frame's
+  `u32` big-endian length in a `FIRST` chunk, then data. Every chunk but a
+  frame's last is full; frames are UTF-8 and at most 16 MiB. Any failed
+  record or broken rule closes the channel. Details in
+  `docs/plans/backend-m3.md` ("Seams", `vessel-secure`), implemented by
+  `vessel-secure`.
+- Relay possession proof: the same NK handshake, relay as initiator to the
+  registering key, prologue `vessel/relay-proof/1`.
 - Preamble inside the channel, before `hello`: the client sends
   `{"type":"device_auth","device","secret"}` or
   `{"type":"pair_request","invite","device_name"}`; the node answers

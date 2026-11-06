@@ -37,6 +37,7 @@ vessel-store    -> proto
 vessel-node     -> proto, rpc, harness, session, store
 vessel-client   -> proto, rpc
 vessel-remote   -> proto, rpc, client      (milestone 2)
+vessel-secure   -> proto                   (milestone 3)
 vessel-cli      -> proto, client, node, remote
 vessel-testkit  (fake harness binaries for tests; dev-dependency only)
 ```
@@ -46,6 +47,14 @@ Milestone 2 (2026-11-06) added `vessel-remote`, which runs the system
 stdio (ADRs 0007 and 0008), and the edge `vessel-cli -> remote`. It starts
 `ssh` with `tokio::process` directly: one process, no process group, so no
 `vessel-proc` edge.
+
+Milestone 3 (2026-11-06, Track S) adds `vessel-secure`, the end-to-end
+secure channel (ADR 0009). Its one edge, `-> proto`, is for the key types
+that travel on the wire (`NodePublicKey`, `RoutingId`, the relay's
+`HandshakeMessage`); everything computed from them with cryptography stays
+in `vessel-secure`, so `vessel-proto` stays free of it. `vessel-relay`
+(`-> proto, secure`) and the node's and client's edges to both come with
+the changes that add them.
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.
