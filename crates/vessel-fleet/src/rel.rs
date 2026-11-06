@@ -166,7 +166,9 @@ mod tests {
         // An absolute path on every OS (`/home/u` is not one on Windows).
         let home = std::env::current_dir().unwrap();
         assert!(plain_absolute(&home.join(".claude")));
-        assert!(!plain_absolute(&home.join(".claude").join("..").join(".ssh")));
+        assert!(!plain_absolute(
+            &home.join(".claude").join("..").join(".ssh")
+        ));
         assert!(!plain_absolute(Path::new("home")));
     }
 
