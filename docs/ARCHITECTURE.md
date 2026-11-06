@@ -110,7 +110,8 @@ they started.
     `AgentProcess` (own process group), `AgentInput` (prompt, cancel,
     permission answers with typed refusals), `AgentOutputs` (bounded).
     A single driver loop owns the session; handlers forward into one
-    ordered channel. The model is chosen through the `model` config option.
+    ordered channel (`driver/`: the loop, the agent's traffic, the
+    client's commands, settling after a close). The model is chosen through the `model` config option.
     The whole handshake has a deadline (`AgentSetup::handshake_timeout`,
     60 s by default); a stuck adapter fails the session instead of leaving
     it `Starting`. A node sets it through
@@ -178,7 +179,8 @@ they started.
     (one remote script: upload through stdin into a `.vesseld-*.tmp`,
     SHA-256 check, `tar -xzO` for release archives, run its `version`
     there, then `mv -f` onto `vesseld-<version>` or
-    `vesseld-<version>-dev-<hash>`; then `cleanup`), `release` (the
+    `vesseld-<version>-dev-<hash>`; then `cleanup`; what is installed is
+    a `build::Build` with its `digest::Sha256Digest`), `release` (the
     archive and `SHA256SUMS` fetched locally with `gh release download`
     and checked), `provision` (which build a machine gets: `local`,
     `release`, or `auto`, shared by `node install` and the connector) and
@@ -224,7 +226,7 @@ they started.
     attach as a conversation with numbered permission answers; `log` in
     record order across stdout and stderr. The local token file is sent
     only to a loopback `--node`, and a relative `--cwd` is resolved only
-    for one. Tested through the binary (`tests/cli.rs`).
+    for one. Tested through the binary (`tests/cli/`).
     Milestone 2 (Track C, in progress): `--node` is resolved through the
     node book (a name, then `ssh://`/`user@host`, then a websocket
     address; else the project's or the book's `default_node`, else this
@@ -242,7 +244,7 @@ they started.
     then stops the node at once with no live session, lists them and
     changes nothing by default, drains with `--when-idle`, or stops with
     `--now` after confirming. End to end through `fake-ssh` and the real
-    `vesseld` (`tests/remote.rs`, Unix): fresh install and start, run and
+    `vesseld` (`tests/remote/`, Unix): fresh install and start, run and
     attach, a changed pinned id refused, update side by side with
     refuse-then-drain, and an SSH drop during attach resumed. Besides
     `VESSEL_NODE`, `VESSEL_TOKEN` and `VESSEL_DATA_DIR` (milestone 1), the
