@@ -11,28 +11,45 @@ install and update).
 
 ## State (2026-11-06)
 
-- **Track N is done** (N1-N8, merged into `backend/m2` at 609a0c6, CI green
-  on all three OSes). Since then, on `backend/m2-node`:
-  - `session.read` of a live session serves records retention pruned from
-    the store but its ring still holds (the cause of the pruned-gap flake);
-  - the node lock is unlocked explicitly, so a child process being started
-    cannot keep it held past a restart;
-  - `attach` and the rpc writer are split by responsibility.
-- **Track N limits, known and accepted for M2:**
+- **Both tracks are merged** into `backend/m2` (2cd316b, CI green on
+  Linux, macOS and Windows). Details: `ARCHITECTURE.md` "State", ADR 0007,
+  and ADR 0008 "As built".
+- **Track N (node side), N1-N8:** `Framed`; the store layout, `NodeLock`
+  and `StartLock`; the local socket with the token preamble; `vesseld
+  attach` (auto-start through a login shell, start lock, readiness line,
+  `ProxyExit`); `version`, `cleanup` and `--bind none`; `node.stop` and
+  draining; `fake-ssh`; the ACP handshake timeout setting. Then, on
+  `backend/m2-node`: `session.read` of a live session serves records the
+  store pruned but the ring holds (the pruned-gap flake), the node lock is
+  unlocked explicitly (a child process being started kept it held past a
+  restart), and `attach` and the rpc writer are split by responsibility.
+- **Track C (client side), C1-C6 and the C7 workflow:** the `Connector`
+  and `ResumingStream` (attach reconnects without repeats or gaps);
+  `vessel-remote` (the `ssh` runner, platform detection, install by upload
+  of a local build or a `gh`-downloaded release, SHA-256 checked on both
+  sides and `version` checked before the rename); `SshConnector`, which
+  installs on first contact; the node book with pinned node ids; `vessel
+  node install|status|update` (refuse while sessions are live,
+  `--when-idle`, `--now`).
+- **Checked by hand** (coordinator, real OpenSSH on ingwdev1): install by
+  upload, auto-start with `--bind none`, `run` over SSH, `update` refused
+  while a session was live, a clean `SIGTERM` stop.
+- **Known limits, accepted for M2:**
   - A `session.create` already past the draining check when the node
     decides it is idle is interrupted by the stop.
-  - On Windows the named pipe is compiled and tested in process; the SSH
-    tests are Unix-only (Windows remotes are out of M2).
+  - Windows: the named pipe is tested in process only; the SSH tests are
+    Unix-only (Windows remotes are out of M2).
   - A node started by `attach` has no supervisor: after a crash, the next
     `attach` starts it again.
+  - `update` with an unchanged development build restarts the node
+    anyway (ADR 0008 "As built").
 - **Left for the milestone:**
-  - Track C, C1-C7: the `Connector` and resuming follow, the
-    `vessel-remote` ssh runner, platform detection, install, the
-    `SshConnector`, the CLI, and the release workflow with its signing key.
-    Track C also brings `vessel_testkit::vesseld()`.
-  - `README.md` and `ARCHITECTURE.md` describing remote use from the
-    client's side.
-  - The coordinator's manual smoke over real SSH (milestone done criteria).
+  - The first release: a `v<version>` tag, so the release workflow runs
+    for real, then installing from that release.
+  - The owner's decision on public releases; signing
+    (`SHA256SUMS.minisig`) waits for it.
+  - The rest of the manual smoke in the done criteria: a dropped network
+    and resume, an update while draining, and cleanup.
 
 ## Goal
 
