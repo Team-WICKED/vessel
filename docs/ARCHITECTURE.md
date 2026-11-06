@@ -395,9 +395,9 @@ they started.
     symbolic link, conflicts found before anything is linked); `mcp`
     (`McpFile`, the owner-only per-session file, `WrittenMcpFile` removes
     it on drop). `launch(lookup, spec, profile, mcp)` returns `Launch`
-    (command, MCP file, servers the harness cannot take); `launch_in` also
-    takes the directory for the MCP file (the node's own, ADR 0012), and
-    checks the profile against `spec.profile`. `layout(harness)` says where
+    (command, MCP file, servers the harness cannot take); it takes the
+    directory for the MCP file (the node's own, ADR 0012; no shared
+    fallback) and checks the profile against `spec.profile`. `layout(harness)` says where
     shared instructions and skills live in a home (for fleet sync). Descriptors now
     carry the default profile name, home, login check, session finder and
     terminal MCP form. No MCP value is ever an argument: Claude Code reads

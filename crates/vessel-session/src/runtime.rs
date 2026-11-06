@@ -75,9 +75,9 @@ pub struct LaunchOptions {
     /// terminal ones in the harness's launch-time form, when it has one.
     pub mcp_servers: ResolvedMcpServers,
     /// Where a terminal session's MCP configuration file goes: an
-    /// owner-only directory of the node's (ADR 0012); `None` is the
-    /// system's temporary directory. The file itself is owner-only and
-    /// created exclusively either way.
+    /// owner-only directory of the node's (ADR 0012). There is no shared
+    /// fallback: without one, a terminal session whose harness reads its
+    /// servers from a file is refused.
     pub mcp_dir: Option<PathBuf>,
     /// Who asks for the session (ADR 0013), recorded in its
     /// `SessionInfo::created_by`; the owner by default.
@@ -94,7 +94,7 @@ struct Parts {
 /// A terminal session's MCP servers and where their file goes.
 struct TerminalMcp {
     servers: ResolvedMcpServers,
-    dir: PathBuf,
+    dir: Option<PathBuf>,
 }
 
 /// What a structured session starts with besides its process.
@@ -177,7 +177,7 @@ impl SessionRuntime {
             SessionMode::Terminal { size, .. } => {
                 let mcp = TerminalMcp {
                     servers: mcp_servers,
-                    dir: mcp_dir.unwrap_or_else(std::env::temp_dir),
+                    dir: mcp_dir,
                 };
                 self.create_terminal(spec, size, profile, mcp, created_by)
                     .await
@@ -210,12 +210,12 @@ impl SessionRuntime {
         };
         // Lookup, file writes, `fork`/`exec` and thread creation all block.
         let (pty, output, mcp_file) = tokio::task::spawn_blocking(move || {
-            let launch = vessel_harness::launch_in(
+            let launch = vessel_harness::launch(
                 &lookup,
                 &launch_spec,
                 &profile,
                 &mcp.servers,
-                &mcp.dir,
+                mcp.dir.as_deref(),
             )?;
             if !launch.unattached.is_empty() {
                 tracing::warn!(
@@ -266,7 +266,8 @@ impl SessionRuntime {
         let (command, cwd) = tokio::task::spawn_blocking(move || {
             // Structured sessions get their MCP servers over ACP, not here.
             let none = ResolvedMcpServers::new();
-            let command = vessel_harness::launch(&lookup, &launch_spec, &profile, &none)?.command;
+            let command =
+                vessel_harness::launch(&lookup, &launch_spec, &profile, &none, None)?.command;
             // ACP needs an explicit directory; the launch defaults it to
             // the home directory, and the node's own is the last resort.
             let cwd = command

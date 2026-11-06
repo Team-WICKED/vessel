@@ -67,6 +67,10 @@ pub enum HarnessError {
     /// The MCP servers cannot be given to this harness's terminal session.
     #[error(transparent)]
     Mcp(#[from] McpError),
+    /// The harness reads its MCP servers from a file and no owner-only
+    /// directory was given for it (there is no shared fallback).
+    #[error("no directory for the session's MCP configuration file")]
+    NoMcpDirectory,
     /// No name could be chosen for the session's MCP configuration file
     /// (the system's random source failed).
     #[error("cannot name an MCP configuration file: {reason}")]

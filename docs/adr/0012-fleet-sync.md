@@ -254,9 +254,11 @@ It is idempotent: running it again fills gaps and changes nothing else.
   one argument because the option takes several values and would swallow
   the session's own arguments after it. The file is JSON, owner-only,
   created exclusively under a random name in the directory the node gives
-  (`vessel_harness::launch_in`; the system's temporary directory if none),
-  written right before the program starts, and removed when the session
-  ends.
+  (`<data_dir>/mcp`, owner-only and emptied at start, so a crash leaves
+  nothing behind; there is no shared fallback), written right before the
+  program starts, and removed when the session ends. On Windows, where
+  Vessel sets no ACLs, it is written only inside the user's profile
+  directory, whose inherited ACL admits only that user.
 - **Codex** has no file flag that leaves its home alone, so each server is
   one `-c mcp_servers.<name>={...}` override that replaces any server of
   that name whole. Values go into Codex's environment: a stdio server's
