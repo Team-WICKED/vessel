@@ -218,6 +218,6 @@ creator chain) are Track X.
   text), `kill_session`. Every tool but `list_nodes` takes `node` (an id
   or a name from `list_nodes`); a call for another node goes in
   `fleet.forward`, and that node applies its own grant, ownership and
-  limits. Waiting is a long poll of `session.read` with `wait`, on every
+  limits. A name more than one node has is refused, asking for the id. Waiting is a long poll of `session.read` with `wait`, on every
   node alike. The node's refusals come back as tool errors with the
   protocol's code; a wrong call is a JSON-RPC error.
