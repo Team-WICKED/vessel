@@ -48,6 +48,6 @@ mod writer;
 pub use config::{ByteCount, Retention, StoreConfig};
 pub use data_dir::DataDir;
 pub use error::{Column, Quantity, StoreError};
-pub use lock::{NodeLock, NodeOwner};
+pub use lock::{NodeLock, NodeOwner, StartLock};
 pub use store::{Opened, Store};
 pub use token::{InvalidToken, NodeToken};
