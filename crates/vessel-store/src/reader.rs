@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
-use vessel_proto::{EventPage, EventSeq, SessionId, SessionInfo};
+use vessel_proto::{DeviceId, DeviceInfo, EventPage, EventSeq, SessionId, SessionInfo};
 
 use crate::codec::{SESSION_COLUMNS, record_from_row, seq_from_sql, seq_to_sql, session_from_row};
 use crate::config::StoreConfig;
+use crate::devices::{self, StoredDevice};
 use crate::error::StoreError;
 use crate::schema;
 
@@ -70,6 +71,16 @@ impl Reader {
     /// One session, if stored.
     pub(crate) fn session(&self, id: SessionId) -> Result<Option<SessionInfo>, StoreError> {
         self.with(|connection| select_session(connection, id))
+    }
+
+    /// Every paired device, oldest first.
+    pub(crate) fn devices(&self) -> Result<Vec<DeviceInfo>, StoreError> {
+        self.with(devices::list)
+    }
+
+    /// One device, with its credential hash.
+    pub(crate) fn device(&self, id: DeviceId) -> Result<Option<StoredDevice>, StoreError> {
+        self.with(|connection| devices::find(connection, id))
     }
 
     /// Every stored session, newest first.
