@@ -54,7 +54,10 @@ async fn main() -> ExitCode {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
-    match commands::run(cli).await {
+    // Boxed: the future of every command together is large, and the main
+    // thread's stack is 1 MiB on Windows (it overflowed there once the
+    // profile commands were added).
+    match Box::pin(commands::run(cli)).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             if io::note(&format!("error: {}\n", chain(&error)))
