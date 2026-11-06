@@ -38,7 +38,8 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`), SQLite event log, retention, restart recovery. | proto |
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing. | proto, rpc, harness, session, store |
 | `vessel-client` | Typed async client and gap-free session streams. | proto, rpc |
-| `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node |
+| `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
+| `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node, remote |
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests. | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
@@ -167,6 +168,16 @@ depend on the node, so there is no cycle).
     (`<config_dir>/vessel/nodes.toml`, a project's `.vessel/config.toml`
     that may only pick one of the user's nodes, `resolve` for `--node`;
     edited with `toml_edit`, keeping comments).
+  - `vessel-remote` (milestone 2, Track C, in progress): `ssh` (the system
+    client with fixed options, `ControlMaster` sharing on Unix, commands
+    built from fixed words and single-quoted values, the last 64 stderr
+    lines kept), `platform` (`uname -sm` through `sh -s`, four release
+    targets; a local build matches by OS and architecture), `install`
+    (one remote script: upload through stdin into a `.vesseld-*.tmp`,
+    SHA-256 check, `tar -xzO` for release archives, run its `version`
+    there, then `mv -f` onto `vesseld-<version>` or
+    `vesseld-<version>-dev-<hash>`; then `cleanup`). Tested against a
+    temporary home through an `ssh` stand-in (Unix only).
   - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
     the `Handler` routing to `sessions` (live runtime sessions plus stored
     ones; a session whose log is complete, final status included, is

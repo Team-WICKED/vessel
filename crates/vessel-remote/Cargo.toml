@@ -1,0 +1,26 @@
+[package]
+name = "vessel-remote"
+description = "Reaching Vessel nodes over SSH: the ssh runner, platform detection, install and update"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-client.workspace = true
+vessel-proto.workspace = true
+vessel-rpc.workspace = true
+
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+vessel-testkit.workspace = true
+
+[lints]
+workspace = true
