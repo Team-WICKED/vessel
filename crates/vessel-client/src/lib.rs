@@ -8,6 +8,13 @@
 //! `session.read` and subscribes again, so a caller never sees a skipped or
 //! repeated record.
 //!
+//! A [`Connector`] opens connections to one node, again whenever asked:
+//! [`WsConnector`] for a websocket, and `vessel-remote`'s SSH connector
+//! (ADR 0007). [`follow_resuming`] builds on it: a [`ResumingStream`] that
+//! dials again when the connection drops and continues from its cursor,
+//! reporting the loss and the resume as non-fatal items. Where a node is
+//! comes as a [`NodeAddress`]: a websocket URL or an [`SshTarget`].
+//!
 //! No command-line parsing and no printing: the CLI, a web backend or an
 //! editor plugin all build on this the same way.
 //!
@@ -24,8 +31,11 @@
 //!   transport in [`ws`]. Any other transport can be used through
 //!   [`NodeClient::over`].
 
+mod address;
 mod client;
+mod connector;
 mod error;
+mod resume;
 mod stream;
 #[cfg(test)]
 mod tests;
@@ -33,8 +43,13 @@ mod token;
 mod url;
 mod ws;
 
+pub use address::{
+    InvalidAddress, InvalidRemotePath, InvalidSshTarget, NodeAddress, RemotePath, SshTarget,
+};
 pub use client::NodeClient;
+pub use connector::{Connector, WsConnector};
 pub use error::{ConnectError, StreamError};
+pub use resume::{Backoff, ResumingStream, follow_resuming};
 pub use stream::SessionStream;
 pub use token::{BearerToken, InvalidToken};
 pub use url::{InvalidNodeUrl, NodeUrl};

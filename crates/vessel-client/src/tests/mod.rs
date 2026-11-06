@@ -1,13 +1,15 @@
 //! The client against a fake node: over the in-memory transport for stream
 //! logic, and over a loopback websocket for the connection and the token.
 
+mod calls;
+mod resume;
 mod stream;
 mod websocket;
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use chrono::DateTime;
 use tokio_util::sync::CancellationToken;
@@ -15,9 +17,10 @@ use vessel_proto::{
     Ack, ClientInfo, CreateSession, ErrorCode, EventPage, EventRecord, EventSeq, GetNode,
     GetSession, Handler, Harness, HarnessKind, KillSession, ListHarnesses, ListSessions, NodeId,
     NodeInfo, NodeState, ProtocolRange, ReadEvents, SendInput, SessionEvent, SessionId,
-    SessionInfo, SessionMode, SessionSpec, SessionStatus, StopNode, Subscribe, Subscribed,
-    SubscriptionEnd, TerminalSize, Unsubscribe, WireError,
+    SessionInfo, SessionMode, SessionSpec, SessionStatus, StopNode, StopWhen, Subscribe,
+    Subscribed, SubscriptionEnd, TerminalSize, Unsubscribe, WireError,
 };
+use vessel_rpc::memory::Disconnected;
 use vessel_rpc::{ClientConfig, Outbound, OutboundError, Server, ServerConfig};
 
 use crate::NodeClient;
@@ -92,6 +95,12 @@ struct FakeNode {
     oldest: u64,
     subscribes: AtomicUsize,
     reads: AtomicUsize,
+    /// `session.kill` calls received; each one hangs (never answers).
+    kills: AtomicUsize,
+    /// Set: the session is gone (`NotFound`), as after a wiped data dir.
+    forgotten: AtomicBool,
+    /// The last `node.stop`.
+    stopped: Mutex<Option<StopWhen>>,
 }
 
 impl FakeNode {
@@ -100,6 +109,9 @@ impl FakeNode {
             oldest,
             subscribes: AtomicUsize::new(0),
             reads: AtomicUsize::new(0),
+            kills: AtomicUsize::new(0),
+            forgotten: AtomicBool::new(false),
+            stopped: Mutex::new(None),
         }
     }
 }
@@ -160,7 +172,8 @@ impl Handler for FakeNode {
     }
 
     async fn kill_session(&self, _: &Context, _: KillSession) -> Result<Ack, WireError> {
-        Err(unsupported())
+        let _kills = self.kills.fetch_add(1, Ordering::Relaxed);
+        std::future::pending().await
     }
 
     async fn read_events(&self, _: &Context, request: ReadEvents) -> Result<EventPage, WireError> {
@@ -179,7 +192,7 @@ impl Handler for FakeNode {
         context: &Context,
         request: Subscribe,
     ) -> Result<Subscribed, WireError> {
-        if request.session != session_id() {
+        if request.session != session_id() || self.forgotten.load(Ordering::Relaxed) {
             return Err(WireError::new(ErrorCode::NotFound, "no such session"));
         }
         let first = self.subscribes.fetch_add(1, Ordering::Relaxed) == 0;
@@ -220,7 +233,8 @@ impl Handler for FakeNode {
         Ok(Ack)
     }
 
-    async fn stop_node(&self, _context: &Context, _request: StopNode) -> Result<Ack, WireError> {
+    async fn stop_node(&self, _context: &Context, request: StopNode) -> Result<Ack, WireError> {
+        *self.stopped.lock().unwrap() = Some(request.when);
         Ok(Ack)
     }
 }
@@ -236,16 +250,25 @@ fn server(fake: Arc<FakeNode>) -> Arc<Server<FakeNode>> {
 
 /// A client connected to `node` over the in-memory transport.
 async fn connect(node: Arc<FakeNode>) -> NodeClient {
+    let (client, _serving) = open(node).await.unwrap();
+    client
+}
+
+/// A connection to `node` over the in-memory transport, and the task
+/// serving it: aborting the task drops the node's end, as a lost network
+/// would.
+async fn open(
+    node: Arc<FakeNode>,
+) -> Result<(NodeClient, tokio::task::JoinHandle<()>), vessel_rpc::ConnectError<Disconnected>> {
     let (client_end, server_end) = vessel_rpc::memory::pair(NonZeroUsize::new(16).unwrap());
     let server = server(node);
-    drop(tokio::spawn(async move {
-        server
+    let serving = tokio::spawn(async move {
+        let _served = server
             .serve(server_end, |peer| Context {
                 outbound: peer.outbound,
             })
-            .await
-    }));
-    NodeClient::over(client_end, client_info(), &ClientConfig::default())
-        .await
-        .unwrap()
+            .await;
+    });
+    let client = NodeClient::over(client_end, client_info(), &ClientConfig::default()).await?;
+    Ok((client, serving))
 }
