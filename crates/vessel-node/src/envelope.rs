@@ -37,8 +37,9 @@
 //!   each hop.
 
 use vessel_proto::{
-    Ack, Call, Deliver, ErrorCode, FleetNode, ForgetNode, Forward, Forwarded, GrantHome, ListNodes,
-    ListPeers, Method, NodeForgotten, NodeId, Origin, OriginBy, RelayCall, Reply, Scope, WireError,
+    Ack, Call, Callback, Deliver, ErrorCode, FleetNode, ForgetNode, Forward, Forwarded,
+    GetCallback, GrantHome, ListNodes, ListPeers, Method, NodeForgotten, NodeId, Origin, OriginBy,
+    RelayCall, Reply, Scope, WireError,
 };
 
 use crate::guard::Guarded;
@@ -247,6 +248,24 @@ impl NodeService {
             .map(|()| Ack)
     }
 
+    /// `fleet.callback` (the home): its relays, for a member's device.
+    #[expect(
+        clippy::unused_async,
+        reason = "every call has the same async shape, so the guard's rows are uniform"
+    )]
+    pub(crate) async fn get_callback(
+        &self,
+        connection: &Connection,
+        _: GetCallback,
+    ) -> Result<Callback, WireError> {
+        let Principal::Device { .. } = connection.principal() else {
+            return Err(forbidden(
+                "only a fleet member's device asks its home for its relays",
+            ));
+        };
+        self.links.callback()
+    }
+
     /// `fleet.forget` (the home's owner; `admin`).
     pub(crate) async fn forget_node(
         &self,
@@ -368,6 +387,7 @@ async fn run_here(
         | Call::Relay(_)
         | Call::Deliver(_)
         | Call::GrantHome(_)
+        | Call::GetCallback(_)
         | Call::ForgetNode(_)
         | Call::ListPeers(_)
         | Call::ListNodes(_)

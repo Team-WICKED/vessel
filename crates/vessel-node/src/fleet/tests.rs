@@ -192,18 +192,25 @@ impl Member {
             .unwrap()
             .store;
         let node = vessel_proto::NodeId::random();
+        let keypair = Arc::new(vessel_secure::NodeKeypair::generate().unwrap());
         let devices = Arc::new(crate::devices::Devices::new(
             store,
             node,
-            *vessel_secure::NodeKeypair::generate().unwrap().public(),
+            *keypair.public(),
             crate::devices::Routes::default(),
         ));
         let files = FleetFiles::new(&data);
+        let relays = Arc::new(crate::relays::Relays::new(keypair, Arc::clone(&devices)));
         let links = Arc::new(super::Links::new(
             node,
             "member".to_owned(),
             files.clone(),
             devices,
+            relays,
+            vessel_proto::Callback {
+                relays: Vec::new(),
+                token: None,
+            },
         ));
         let state = Arc::new(StateFile::open(&files));
         let local = Arc::new(Local::new(

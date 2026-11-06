@@ -27,8 +27,8 @@ use crate::fleet::{
     ReportApplied, WatchFleet,
 };
 use crate::forward::{
-    Deliver, FleetNode, ForgetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers,
-    NodeForgotten, RelayCall,
+    Callback, Deliver, FleetNode, ForgetNode, Forward, Forwarded, GetCallback, GrantHome,
+    ListNodes, ListPeers, NodeForgotten, RelayCall,
 };
 use crate::harness::Harness;
 use crate::name::SecretName;
@@ -291,6 +291,8 @@ rpc_methods! {
     Deliver / deliver / "fleet.deliver" [Read, 6]: Deliver => Forwarded;
     /// A member grants its home a credential on itself (protocol 6).
     GrantHome / grant_home / "fleet.grant" [Sync, 6]: GrantHome => Ack;
+    /// The home's relays, for a member to be called back through (protocol 6).
+    GetCallback / get_callback / "fleet.callback" [Sync, 6]: GetCallback => Callback;
     /// The home's view of the fleet, for members (protocol 6).
     ListPeers / list_peers / "fleet.peers" [Sync, 6]: ListPeers => Vec<FleetNode>;
     /// The fleet as this node knows it (protocol 6).
@@ -364,6 +366,7 @@ impl Call {
             | Self::Relay(_)
             | Self::Deliver(_)
             | Self::GrantHome(_)
+            | Self::GetCallback(_)
             | Self::ForgetNode(_)
             | Self::ListPeers(_)
             | Self::ListNodes(_)

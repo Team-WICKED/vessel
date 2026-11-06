@@ -418,6 +418,7 @@ impl Handler for Fake {
         relay: vessel_proto::RelayCall => vessel_proto::Forwarded;
         deliver: vessel_proto::Deliver => vessel_proto::Forwarded;
         grant_home: vessel_proto::GrantHome => Ack;
+        get_callback: vessel_proto::GetCallback => vessel_proto::Callback;
         forget_node: vessel_proto::ForgetNode => vessel_proto::NodeForgotten;
         list_peers: vessel_proto::ListPeers => Vec<vessel_proto::FleetNode>;
         list_nodes: vessel_proto::ListNodes => Vec<vessel_proto::FleetNode>;

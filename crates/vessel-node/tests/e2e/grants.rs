@@ -436,7 +436,7 @@ async fn member_node(relay: &Relay, fixture: &Fixture, name: &str) -> vessel_nod
 }
 
 /// Wait until the home reaches node `id` (a call there succeeds).
-async fn reaches(home: &Member, id: vessel_proto::NodeId) -> bool {
+pub(crate) async fn reaches(home: &Member, id: vessel_proto::NodeId) -> bool {
     for _ in 0..800 {
         if home.owner.call_on(id, ListSessions).await.is_ok() {
             return true;

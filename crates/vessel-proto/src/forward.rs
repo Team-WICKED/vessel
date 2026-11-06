@@ -31,7 +31,8 @@ use crate::device::Scope;
 use crate::id::{DeviceId, NodeId, SessionId};
 use crate::key::NodePublicKey;
 use crate::node::ProtocolVersion;
-use crate::pairing::PairingLink;
+use crate::pairing::{PairingLink, RouteUrl};
+use crate::relay::RelayToken;
 use crate::rpc::{Call, Method, Reply};
 
 /// Who a forwarded call speaks for, as the node it started on vouches.
@@ -124,6 +125,28 @@ pub struct Forwarded {
 pub struct GrantHome {
     /// The link, made on the member.
     pub link: PairingLink,
+}
+
+/// `fleet.callback` (protocol 6): how a member makes itself reachable to
+/// its home, for a member with no route of its own (no `--relay`, no
+/// `--public`): the relays the home registers with and their registration
+/// token. The member registers there too and names them in its grant's
+/// link, so the home calls it back through them. Needs `sync`; never
+/// forwarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetCallback;
+
+/// What `fleet.callback` answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Callback {
+    /// The relays the home registers with, in its preference order; none
+    /// when the home has no relay (it is reached directly), and then a
+    /// member needs a route of its own to be called back.
+    pub relays: Vec<RouteUrl>,
+    /// Their registration token, with `relays`. A secret: the member keeps
+    /// it in memory only, and nothing prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<RelayToken>,
 }
 
 /// `fleet.forget` (protocol 6): on the home, forget member node `node`'s
@@ -233,6 +256,7 @@ impl Method {
             | Self::Relay
             | Self::Deliver
             | Self::GrantHome
+            | Self::GetCallback
             | Self::ForgetNode
             | Self::ListPeers
             | Self::ListNodes

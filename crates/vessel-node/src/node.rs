@@ -12,8 +12,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_harness::HarnessEnv;
-use vessel_proto::{NodeId, NodeInfo, NodePublicKey, RelayToken, RouteUrl};
-use vessel_relay::{LinkState, NodeLink, TlsConfig, WsCarrier};
+use vessel_proto::{Callback, NodeId, NodeInfo, RelayToken, RouteUrl};
+use vessel_relay::{LinkState, TlsConfig};
 use vessel_rpc::Server;
 use vessel_secure::NodeKeypair;
 use vessel_session::{RuntimeConfig, SessionRuntime};
@@ -30,6 +30,7 @@ use crate::ipc::{self, AgentGateway, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
 use crate::profiles::NodeProfiles;
 use crate::profiles::launch::{AgentTools, Launcher, McpSource};
+use crate::relays::{self, Relays};
 use crate::secure::{MAX_UNADMITTED, SecureGateway};
 use crate::server::{self, Gateway};
 use crate::service::{NodeService, Parts};
@@ -48,8 +49,8 @@ pub struct Node {
     /// directly with in-memory carriers.
     #[cfg(test)]
     pub(crate) secure: SecureGateway,
-    /// Each relay link's state.
-    relays: Vec<(RouteUrl, watch::Receiver<LinkState>)>,
+    /// Its relay links.
+    relays: Arc<Relays>,
     stop: CancellationToken,
     task: JoinHandle<Result<(), NodeError>>,
 }
@@ -58,8 +59,9 @@ pub struct Node {
 struct Prepared {
     id: NodeId,
     token: NodeToken,
-    /// From `node.key` (ADR 0009).
-    keypair: NodeKeypair,
+    /// From `node.key` (ADR 0009), shared by the gateway and the relay
+    /// links.
+    keypair: Arc<NodeKeypair>,
     lock: NodeLock,
     /// From `profiles.toml` (ADR 0011).
     profiles: NodeProfiles,
@@ -104,7 +106,8 @@ impl Node {
             devices,
             agents,
             service,
-        } = core(&config, id, &store, keypair.public(), session_setup);
+            relays,
+        } = core(&config, id, &store, &keypair, relaying, session_setup);
         let closing = CancellationToken::new();
         let rpc = Arc::new(Server::new(
             Arc::clone(&service),
@@ -120,7 +123,7 @@ impl Node {
         let address = tcp.as_ref().map(|(_, address)| *address);
 
         let secure = SecureGateway {
-            keypair: Arc::new(keypair),
+            keypair,
             channel: vessel_secure::Config::default(),
             service,
             lifecycle: lifecycle.clone(),
@@ -150,7 +153,7 @@ impl Node {
                 }),
             )
         });
-        let relays = link_relays(relaying, &config.relays, &secure, &connections, &stop);
+        relays.serve(secure.clone(), connections.clone(), stop.clone());
         let gateway = LocalGateway {
             rpc,
             token,
@@ -164,12 +167,7 @@ impl Node {
             teardown,
             lock,
         ));
-        tracing::info!(
-            node = %id,
-            address = ?address,
-            local = %local_endpoint.path().display(),
-            "node listening"
-        );
+        listening(id, address, &local_endpoint);
         Ok(Self {
             address,
             local: local_endpoint,
@@ -201,7 +199,7 @@ impl Node {
     /// (connecting, registered, refused), to read or wait on.
     #[must_use]
     pub fn relay_links(&self) -> Vec<(RouteUrl, watch::Receiver<LinkState>)> {
-        self.relays.clone()
+        self.relays.states()
     }
 
     /// The node's current description.
@@ -227,6 +225,16 @@ impl Node {
         self.stop.cancel();
         self.task.await.map_err(NodeError::Task)?
     }
+}
+
+/// Say where the node listens.
+fn listening(id: NodeId, address: Option<SocketAddr>, local: &Endpoint) {
+    tracing::info!(
+        node = %id,
+        address = ?address,
+        local = %local.path().display(),
+        "node listening"
+    );
 }
 
 /// Open the event log, closing sessions a previous run left live.
@@ -258,6 +266,8 @@ struct Core {
     agents: Arc<Agents>,
     /// The service every transport serves, behind the scope check.
     service: Arc<Guarded>,
+    /// The relay links, run once the gateway exists.
+    relays: Arc<Relays>,
 }
 
 /// What sessions are created with: the node's profiles and the launch seam.
@@ -291,9 +301,11 @@ fn core(
     config: &Config,
     id: NodeId,
     store: &Store,
-    key: &NodePublicKey,
+    keypair: &Arc<NodeKeypair>,
+    relaying: Option<(RelayToken, TlsConfig)>,
     setup: SessionSetup,
 ) -> Core {
+    let key = keypair.public();
     let runtime = Arc::new(SessionRuntime::new(
         RuntimeConfig {
             harness_lookup: config.harness_lookup.clone(),
@@ -328,6 +340,22 @@ fn core(
             direct: config.public.clone(),
         },
     ));
+    let relays = Arc::new(Relays::new(Arc::clone(keypair), Arc::clone(&devices)));
+    // What a home tells its members with no route of their own: its relays
+    // and their token (`fleet.callback`).
+    let callback = match relaying {
+        Some((token, tls)) => {
+            let _states = relays.link_with(&config.relays, &token, &tls);
+            Callback {
+                relays: config.relays.clone(),
+                token: Some(token),
+            }
+        }
+        None => Callback {
+            relays: Vec::new(),
+            token: None,
+        },
+    };
     // Fleet sync's tasks are session-adjacent work: shutdown waits for an
     // apply in progress before the data directory is released.
     let links = Arc::new(fleet::Links::new(
@@ -335,6 +363,8 @@ fn core(
         lifecycle.info().name,
         FleetFiles::new(&config.data_dir),
         Arc::clone(&devices),
+        Arc::clone(&relays),
+        callback,
     ));
     let fleet = fleet::start(
         FleetFiles::new(&config.data_dir),
@@ -372,6 +402,7 @@ fn core(
         devices,
         agents,
         service,
+        relays,
     }
 }
 
@@ -403,73 +434,7 @@ fn relaying(config: &Config) -> Result<Option<(RelayToken, TlsConfig)>, NodeErro
         return Ok(None);
     }
     let token = token.ok_or(NodeError::NoRelayToken)?;
-    Ok(Some((token, relay_tls(&config.relays)?)))
-}
-
-/// TLS for `wss://` relays: the system's root certificates (plan, decision
-/// 1). Only a `wss://` relay needs them, so a machine without any can
-/// still use `ws://` relays.
-fn relay_tls(relays: &[RouteUrl]) -> Result<TlsConfig, NodeError> {
-    match TlsConfig::native_roots() {
-        Ok(tls) => Ok(tls),
-        Err(error)
-            if relays
-                .iter()
-                .any(|relay| relay.as_str().starts_with("wss://")) =>
-        {
-            Err(NodeError::RelayTls(error))
-        }
-        Err(error) => {
-            tracing::debug!(%error, "no TLS roots; only ws:// relays are configured");
-            TlsConfig::with_roots(rustls::RootCertStore::empty()).map_err(NodeError::RelayTls)
-        }
-    }
-}
-
-/// One [`NodeLink`] per relay, until the node stops. Each client a relay
-/// splices to the node arrives as a carrier and takes the same path as a
-/// direct `/secure` connection.
-///
-/// [Decision Log]
-/// - Lifetime: the links stop with `stop` (the node was asked to stop), so
-///   no new client arrives while the node shuts down; the connections they
-///   delivered close with the others. Link tasks and their connections
-///   are tracked with the node's connections, so shutdown waits for them.
-/// - Alternatives: one task registering with every relay (a slow relay
-///   would hold the others back); links started lazily on the first
-///   pairing (a node that was paired before a restart would be
-///   unreachable until then).
-fn link_relays(
-    relaying: Option<(RelayToken, TlsConfig)>,
-    relays: &[RouteUrl],
-    gateway: &SecureGateway,
-    connections: &TaskTracker,
-    stop: &CancellationToken,
-) -> Vec<(RouteUrl, watch::Receiver<LinkState>)> {
-    let Some((token, tls)) = relaying else {
-        return Vec::new();
-    };
-    let mut states = Vec::with_capacity(relays.len());
-    for relay in relays {
-        let link = NodeLink::new(
-            relay.clone(),
-            Arc::clone(&gateway.keypair),
-            token.clone(),
-            tls.clone(),
-        );
-        let gateway = gateway.clone();
-        let tracker = connections.clone();
-        let accept = move |carrier: WsCarrier| {
-            let gateway = gateway.clone();
-            drop(tracker.spawn(async move {
-                gateway.accept_logged(carrier, "relay").await;
-            }));
-        };
-        states.push((relay.clone(), link.state()));
-        tracing::info!(%relay, "linking to a relay");
-        drop(connections.spawn(link.run(accept, stop.clone())));
-    }
-    states
+    Ok(Some((token, relays::relay_tls(&config.relays)?)))
 }
 
 /// The blocking part of start-up: directory, identity, token, key, lock.
@@ -498,7 +463,7 @@ fn prepare(dir: &DataDir, env: HarnessEnv) -> Result<Prepared, NodeError> {
     Ok(Prepared {
         id,
         token,
-        keypair,
+        keypair: Arc::new(keypair),
         lock,
         profiles,
         mcp_dir,

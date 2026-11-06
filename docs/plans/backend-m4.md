@@ -712,6 +712,39 @@ reproduced problems, fixed in this order:
   run again; `vessel fleet join` and `vessel init --join` warn at once
   when the machine is named like the home; the README says to name nodes
   cloned from one image.
+- **A member started plainly could not be called (Track S's
+  fresh-machine smoke, 2026-11-06).** A member's routes came only from
+  its own `--relay`/`--public`, which `vessel node start` does not take and
+  the service `vessel init --service` installs does not pass, so its grant
+  named no route, the home refused it ("1 to 8 routes, not 0"), and
+  `--to`, `vessel mcp`'s `node` and `secret.copy` never reached it, while
+  syncing worked. Now a member whose node has no route of its own asks its
+  home on each connection (`fleet.callback`, `sync`, a member device
+  only) for the home's relays and their registration token, registers
+  with them while it runs (`crate::relays`), waits up to 10 s for one to
+  register it, and names them in its grant. A home with no relay answers
+  none; the member then grants nothing and records, for `vessel fleet
+  status`, that the home cannot call it and how to add a route (a relay on
+  the home, or `vesseld --public` here); `vessel init --join` and `vessel
+  fleet join` say the same at once when the invitation names no relay.
+  - Chosen over keeping routes from `vessel init --join` in a file (a
+    second copy of the token on disk, stale once the home changes relays,
+    and nothing for a node that joins while it runs), over the token in
+    the invitation (a long-lived secret in a link shown as a QR code), and
+    over the home relaying for its members or calling them back over the
+    connection they keep to it (larger, for later).
+  - Accepted: every member holds the home's relay token, in memory only.
+    Registering still needs a proof of the node's own key (ADR 0009), so a
+    member can register its own nodes there but not take another's slot.
+    A relay once linked stays linked until the node stops, and the
+    member's own pairing links name it too. A home that later changes
+    relays reaches a member again once the member joins again (its grant
+    names the relays of its time).
+  - Tests: `e2e/callback.rs` (a member joined with the defaults, before
+    its node starts and while it runs, is called by the home through the
+    home's relay; a member of a home without a relay says it has no route
+    and how to add one), both failing without the change; `vessel-cli`'s
+    `joining_a_home_without_a_relay_says_the_home_cannot_call_back`.
 - **Documented, not changed** (ADR 0013, "Known limits"): an agent's
   limits are per node, so 8 live sessions on each node it reaches (8 × N);
   and a relaying member's own scopes on the home do not cap the calls it
@@ -778,6 +811,7 @@ Envelope (Track X):
 | `fleet.relay` | Relay | `RelayCall { node, call, origin: Origin }` → `Forwarded` | A member asks the home to pass a call on. The home refuses an `origin.node` other than the member's own node (a member speaks only for its own principals), then sends `fleet.deliver` to `node` with its credential there, or, when `node` is the home itself, runs the call as `fleet.deliver` would. |
 | `fleet.deliver` | Read | `Deliver { call, origin }` → `Forwarded` | The home asks a member to run a call on behalf of `origin`. The member runs it as a delegated principal (below), and accepts it only from its home's device (the one `fleet.grant` made). Never passed on: delivering is the last hop, so there are no loops and at most two hops. |
 | `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member until the member joins again (a member grants once per join). |
+| `fleet.callback` | Sync | `GetCallback` → `Callback { relays: Vec<RouteUrl>, token: Option<RelayToken> }` | The home's relays and their registration token, for a member device. A member whose node has no route of its own (no `--relay`, no `--public`) asks on each connection until it has one, registers with those relays (`crate::relays`, added while the node runs) and names them in its grant's link, so the home can call it back. A home with no relay answers none, and the member records why it cannot be called and how to add a route instead of granting. Not forwardable. (Track S's fresh-machine smoke, below.) |
 | `fleet.forget` | Admin | `ForgetNode { node: NodeId }` → `NodeForgotten { key, name?, devices, withdrawn }` | On the home, forget a member node's binding (its key and name), for a node reinstalled with a new key or to be renamed. Withdraws the invitations outstanding on the home and deletes the node's grants; the id and name go next only to a member device paired after it (review rounds 3 and 4, above). Not forwardable: it is the home's administration. |
 | `fleet.peers` | Sync | `ListPeers` → `Vec<FleetNode>` | The home's view of the fleet for members: `FleetNode { node, name, protocol, reachable }`, the home included. |
 | `fleet.nodes` | Read | `ListNodes` → `Vec<FleetNode>` | What any node knows of its fleet (a member asks its home with `fleet.peers`); the agents' `list_nodes`. |

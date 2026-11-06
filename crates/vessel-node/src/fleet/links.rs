@@ -83,15 +83,18 @@ use vessel_client::{
     CallError, Connector as _, DeviceCredential, NodeClient, Pinned, SecureTarget,
 };
 use vessel_proto::{
-    ClientInfo, DeviceId, ErrorCode, FleetNode, GrantHome, InviteDevice, NodeForgotten, NodeId,
-    NodePublicKey, PROTOCOL_VERSION, PairingLink, ProtocolVersion, RouteUrl, Scope, WireError,
+    Callback, ClientInfo, DeviceId, ErrorCode, FleetNode, GetCallback, GrantHome, InviteDevice,
+    NodeForgotten, NodeId, NodePublicKey, PROTOCOL_VERSION, PairingLink, ProtocolVersion, RouteUrl,
+    Scope, WireError,
 };
+use vessel_relay::LinkState;
 use vessel_rpc::Unary;
 
 use super::bindings::{self, Bindings};
 use super::files::{self, FileError, FleetFiles, FleetLock};
 use super::member::Membership;
 use crate::devices::Devices;
+use crate::relays::Relays;
 
 /// How long a pairing link for the home is valid: the home redeems it at
 /// once, so this only bounds a link nobody used.
@@ -113,6 +116,21 @@ const PAIR_WITHIN: Duration = Duration::from_secs(30);
 /// How long a member waits for its home to answer a grant: longer than the
 /// home may take to pair ([`PAIR_WITHIN`]).
 const GRANT_ANSWERED_WITHIN: Duration = Duration::from_secs(45);
+
+/// How long a member with no route of its own waits for one of its home's
+/// relays to register it before it grants (the home pairs through them).
+const REGISTERED_WITHIN: Duration = Duration::from_secs(10);
+
+/// Why a member's home cannot call it back, and how to fix it, for its log,
+/// `vessel fleet status` and `vessel init` (the home's own check, "1 to 8
+/// routes, not 0", said neither).
+const NO_ROUTE: &str = "this node has no route its home could call it back on, so the \
+                            home cannot run calls here (`--to`, `vessel mcp`'s `node`, \
+                            `secret.copy`); syncing does not need one. The home has no relay to \
+                            share: run the home with one (`vesseld --relay URL \
+                            --relay-token-file FILE`), and its members register there too when \
+                            they reconnect; or run this node with an address the home reaches \
+                            (`vesseld --public ADDR`)";
 
 /// What the device that sent a grant hears when the home could not pair
 /// with the node its link names.
@@ -193,6 +211,12 @@ pub(crate) struct Links {
     name: String,
     files: FleetFiles,
     devices: Arc<Devices>,
+    /// This node's relay links: a member with no route of its own adds its
+    /// home's (`crate::relays`).
+    relays: Arc<Relays>,
+    /// What this node tells its members as their home (`fleet.callback`):
+    /// its relays and their token, or none.
+    callback: Callback,
     /// A member's connection to its home, while the pull loop has one.
     home: Mutex<Option<NodeClient>>,
     /// The home's open connections to its members.
@@ -458,12 +482,16 @@ impl Links {
         name: String,
         files: FleetFiles,
         devices: Arc<Devices>,
+        relays: Arc<Relays>,
+        callback: Callback,
     ) -> Self {
         Self {
             node,
             name,
             files,
             devices,
+            relays,
+            callback,
             home: Mutex::new(None),
             members: tokio::sync::Mutex::new(HashMap::new()),
             granting: tokio::sync::Mutex::new(()),
@@ -547,6 +575,7 @@ impl Links {
         if membership.grant.is_empty() {
             return Ok(());
         }
+        self.reachable(client, membership.home, stop).await?;
         let previous = {
             let _granting = self.granting.lock().await;
             match self.granted().await {
@@ -581,6 +610,66 @@ impl Links {
                 Err(error)
             }
         }
+    }
+
+    /// Make sure the home can call this node back before granting: a node
+    /// with no route of its own (no `--relay`, no `--public`) registers with
+    /// its home's relays (`fleet.callback`), on every connection until it
+    /// has, and waits a while until one has it. The error says why the home
+    /// cannot, and how to fix it (`vessel fleet status`).
+    async fn reachable(
+        &self,
+        client: &NodeClient,
+        home: NodeId,
+        stop: &CancellationToken,
+    ) -> Result<(), WireError> {
+        let routes = self.devices.routes();
+        if !routes.relays.is_empty() || !routes.direct.is_empty() {
+            return Ok(());
+        }
+        let callback = client
+            .call(GetCallback)
+            .await
+            .map_err(|error| hop_error(home, error))?;
+        let token = match callback.token {
+            Some(token) if !callback.relays.is_empty() => token,
+            Some(_) | None => return Err(unavailable(NO_ROUTE.to_owned())),
+        };
+        let states = self
+            .relays
+            .link(&callback.relays, &token)
+            .map_err(|error| unavailable(format!("cannot link to the home's relays: {error}")))?;
+        tracing::info!(%home, relays = states.len(), "registering with the home's relays, so it can call this node back");
+        let registered = futures_util::future::select_ok(states.into_iter().map(|mut state| {
+            async move {
+                state
+                    .wait_for(|state| *state == LinkState::Registered)
+                    .await
+                    .map(|_registered| ())
+            }
+            .boxed()
+        }));
+        let registered = tokio::select! {
+            registered = tokio::time::timeout(REGISTERED_WITHIN, registered) => registered,
+            () = stop.cancelled() => return Err(unavailable("this node is stopping".to_owned())),
+        };
+        match registered {
+            Ok(Ok(((), _others))) => Ok(()),
+            Ok(Err(_)) | Err(_) => Err(unavailable(
+                "none of the home's relays has registered this node yet (its log says why); \
+                 it keeps trying, and grants on its next connection to the home"
+                    .to_owned(),
+            )),
+        }
+    }
+
+    /// `fleet.callback` (the home): its relays and their token, for a
+    /// member's device with no route of its own.
+    pub(crate) fn callback(&self) -> Result<Callback, WireError> {
+        if !self.is_home() {
+            return Err(unavailable("this node is not a fleet's home".to_owned()));
+        }
+        Ok(self.callback.clone())
     }
 
     /// Make the grant and record it, if `membership` is still this node's

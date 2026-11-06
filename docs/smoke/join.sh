@@ -135,7 +135,11 @@ free_port() {
     done
     die "no free port found"
 }
-if [ "$inside" = 1 ]; then home_port=7177; member_port=7277; else home_port=$(free_port); member_port=$(free_port); fi
+if [ "$inside" = 1 ]; then
+    home_port=7177; member_port=7277; relay_port=7377
+else
+    home_port=$(free_port); member_port=$(free_port); relay_port=$(free_port)
+fi
 
 home_dir=$root/home
 member_dir=$root/member
@@ -169,7 +173,20 @@ until_true() {
 
 started=$(date +%s)
 
-# --- The home: sample sources, two MCP servers, a node with a direct route.
+# --- A relay on loopback, as the home's owner would run one: the fresh
+# machine's node, started plainly, registers there too (`fleet.callback`),
+# so the home can call it back. A throwaway token, never printed.
+say "relay on 127.0.0.1:$relay_port"
+printf 'smoke-relay-%s%s\n' "$RANDOM" "$RANDOM" >"$root/relay.token"
+chmod 600 "$root/relay.token"
+as_home vesseld relay --bind "127.0.0.1:$relay_port" --token-file "$root/relay.token" \
+    >"$root/relay.log" 2>&1 &
+pids+=($!)
+relay_up() { (exec 3<>"/dev/tcp/127.0.0.1/$relay_port") 2>/dev/null; }
+until_true "the relay listening" relay_up
+
+# --- The home: sample sources, two MCP servers, a node with a direct route
+# and the relay.
 say "home: sources, fleet.toml, node on 127.0.0.1:$home_port"
 printf '# Fleet instructions (smoke)\nfirst version\n' >"$sources/AGENTS.md"
 printf -- '---\nname: smoke-skill\ndescription: shared by the smoke test\n---\nUse it.\n' \
@@ -188,6 +205,7 @@ type = "stdio"
 command = "plain-mcp"
 TOML
 as_home vesseld --bind "127.0.0.1:$home_port" --public "ws://127.0.0.1:$home_port" \
+    --relay "ws://127.0.0.1:$relay_port" --relay-token-file "$root/relay.token" \
     >"$root/home.log" 2>&1 &
 pids+=($!)
 until_true "the home node answering" as_home vessel --node "127.0.0.1:$home_port" status
@@ -219,6 +237,17 @@ generation() {
 applied() { [ -n "$(generation)" ]; }
 until_true "the fresh machine applying the fleet" applied
 say "applied generation $(generation), $(( $(date +%s) - joined_at ))s after the join"
+
+# --- The home can call the fresh machine back: it redeemed the grant
+# through the relay, so the fresh machine holds its device, and nothing
+# says the grant was not taken.
+home_device() { member node devices | grep -q "fleet home "; }
+until_true "the home taking the fresh machine's grant through the relay" home_device
+as_member vessel fleet status >"$root/status.txt"
+if grep -q "not taken by the home" "$root/status.txt"; then
+    die "the home did not take the grant: $(cat "$root/status.txt")"
+fi
+say "the home took the fresh machine's grant through the relay, $(( $(date +%s) - joined_at ))s after the join"
 
 # --- Profiles: the defaults and one per other account.
 member profiles >"$root/profiles.txt"
