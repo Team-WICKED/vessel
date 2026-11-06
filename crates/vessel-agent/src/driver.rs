@@ -29,7 +29,6 @@
 //!   reading, and the agent blocks on its writes. (The SDK's own queues are
 //!   unbounded; `transport` is what bounds what reaches them.)
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,6 +47,7 @@ use crate::input::{Command, Reply};
 use crate::mapper::{self, Update};
 use crate::output::AgentOutput;
 use crate::permissions::Permissions;
+use crate::recent::Recent;
 use crate::transport::{self, Gate};
 
 /// Bound of the inbound queue between the SDK's handlers and the loop.
@@ -92,7 +92,7 @@ pub(crate) async fn run(
         turn: false,
         cancelling: false,
         permissions: Permissions::default(),
-        tool_calls: HashSet::new(),
+        tool_calls: Recent::default(),
         gate,
     };
     let ended = Client
@@ -157,7 +157,8 @@ struct Driver {
     cancelling: bool,
     permissions: Permissions,
     /// Tool calls already announced on the timeline.
-    tool_calls: HashSet<ToolCallId>,
+    /// Recent ones only, so a long session does not keep them all.
+    tool_calls: Recent<ToolCallId>,
     /// Holds the agent's lines back while this loop is behind (see
     /// `transport`); each update and permission request taken from
     /// `inbound` returns its permit.

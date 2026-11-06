@@ -6,20 +6,22 @@ use vessel_proto::{PermissionId, PermissionOption, PermissionOptionId, Permissio
 
 use crate::error::InputError;
 use crate::mapper;
+use crate::recent::Recent;
 
 /// The permission requests of one session.
 ///
 /// Each request gets a node-minted [`PermissionId`] so many clients can
 /// answer it; the agent's responder is held until the first answer, a turn
-/// cancellation, the end of the turn, or the end of the connection. Settled
-/// ids are remembered so a late answer is told "already settled", not
-/// "never existed".
+/// cancellation, the end of the turn, or the end of the connection. The
+/// most recently settled ids are remembered so a late answer is told
+/// "already settled", not "never existed".
 #[derive(Debug, Default)]
 pub(crate) struct Permissions {
     /// In arrival order, so cancellation resolves them in a stable order.
     /// A handful at most, so a list beats a map.
     pending: Vec<Pending>,
-    settled: Vec<PermissionId>,
+    /// Bounded: a long session must not keep every id it ever settled.
+    settled: Recent<PermissionId>,
 }
 
 #[derive(Debug)]
@@ -71,7 +73,7 @@ impl Permissions {
         }
         let pending = self.pending.remove(index);
         respond(pending.responder, outcome);
-        self.settled.push(id);
+        let _ = self.settled.insert(id);
         Ok(())
     }
 
@@ -86,7 +88,9 @@ impl Permissions {
                 pending.id
             })
             .collect::<Vec<_>>();
-        self.settled.extend_from_slice(&ids);
+        for id in &ids {
+            let _ = self.settled.insert(*id);
+        }
         ids
     }
 }
