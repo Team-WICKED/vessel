@@ -25,10 +25,12 @@
 //!   (`SessionHandle::has_ended`, set before the final status is
 //!   published): CI once saw a client watch a session end, then be refused
 //!   a new one because `retire` (after the actor finishes) had not run yet.
-//! - The credential dies with its session: it is refused once the end is
-//!   visible (`has_ended`, as for the limits), and [`Agents::retire`]
-//!   removes the entry and closes the agent's open connections, as revoking a device
-//!   closes the device's (`devices::Connected`). Checking a credential and
+//! - The credential dies with its session: once the end is visible
+//!   (`has_ended`, as for the limits) the credential is refused, and an
+//!   agent still connected can neither start a session here nor pass a
+//!   call to another node (`reserve`, `depth`). [`Agents::retire`] then
+//!   removes the entry and closes the agent's open connections, as
+//!   revoking a device closes the device's (`devices::Connected`). Checking a credential and
 //!   registering its connection happen under the same lock, so a
 //!   connection is either refused or found and closed.
 //! - A profile move restarts the agent, and with it `vessel mcp`: the move
@@ -87,6 +89,17 @@ struct Entry {
     session: Option<SessionHandle>,
 }
 
+impl Entry {
+    /// The session's end is visible (`SessionHandle::has_ended`, set before
+    /// the final status is published), even if `retire` has not run yet.
+    /// Everything an agent does checks this, not only whether the entry
+    /// exists: `retire` waits for the actor, and in that gap an ended
+    /// session's agent must already be refused.
+    fn has_ended(&self) -> bool {
+        self.session.as_ref().is_some_and(SessionHandle::has_ended)
+    }
+}
+
 impl Agents {
     pub(crate) fn new(node: NodeId) -> Self {
         Self {
@@ -127,6 +140,7 @@ impl Agents {
             } => {
                 let creator = sessions
                     .get(session)
+                    .filter(|creator| !creator.has_ended())
                     .ok_or(ServiceError::AgentGone(*session))?;
                 let parent = (*node, *session);
                 let depth = deeper(creator.depth)?;
@@ -175,7 +189,10 @@ impl Agents {
     /// How many agents deep a live session is (0 for a user's), for the
     /// `Origin` of a call its agent sends to another node.
     pub(crate) fn depth(&self, id: SessionId) -> Option<u8> {
-        self.lock().get(&id).map(|entry| entry.depth)
+        self.lock()
+            .get(&id)
+            .filter(|entry| !entry.has_ended())
+            .map(|entry| entry.depth)
     }
 
     /// The session `id` reserved a place for has started as `handle`.
@@ -218,7 +235,7 @@ impl Agents {
         // a client that saw the session end must not get its agent in
         // (macOS CI admitted one in that gap). A connection admitted just
         // before the end is still closed by `retire`.
-        if entry.session.as_ref().is_some_and(SessionHandle::has_ended)
+        if entry.has_ended()
             || !entry
                 .credentials
                 .iter()
@@ -336,7 +353,7 @@ fn owns_fewer_than_the_limit(
     let owned = sessions
         .values()
         .filter(|entry| entry.parent == Some(parent))
-        .filter(|entry| !entry.session.as_ref().is_some_and(SessionHandle::has_ended))
+        .filter(|entry| !entry.has_ended())
         .count();
     if owned >= MAX_OWNED {
         return Err(ServiceError::AgentLimit { limit: MAX_OWNED });
