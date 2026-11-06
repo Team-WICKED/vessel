@@ -46,7 +46,7 @@ use vessel_rpc::CallError;
 
 use crate::client::NodeClient;
 use crate::connector::Connector;
-use crate::error::StreamError;
+use crate::error::{StreamError, chain};
 use crate::stream::SessionStream;
 
 /// How long to wait between reconnect attempts: doubling from `first` up
@@ -345,18 +345,6 @@ async fn follow(client: NodeClient, session: SessionId, from: EventSeq) -> Diale
         },
         Err(error) => Dialed::Refused(error),
     }
-}
-
-/// `error` and its causes, `: `-separated, for one line of text.
-fn chain(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut text = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        text.push_str(": ");
-        text.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    text
 }
 
 #[cfg(test)]

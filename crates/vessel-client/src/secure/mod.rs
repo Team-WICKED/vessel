@@ -8,8 +8,9 @@
 //!   carrier is a direct websocket, a relay's spliced connection, or an
 //!   in-memory pair in a test.
 //! - Choice: generic over `vessel_secure::Carrier`. Dialing routes (direct
-//!   addresses first, then relays) belongs to the connector, which comes
-//!   with `vessel-relay`'s websocket carrier and dial; it calls these.
+//!   addresses first, then relays) belongs to [`SecureConnector`], which
+//!   calls these with the carriers a [`Dialer`] opens (`vessel-relay`'s
+//!   websocket dial, or in-memory carriers in tests).
 //! - The key is checked by the handshake before anything is sent, so a
 //!   credential never reaches anyone but the node pinned at pairing.
 //! - Errors say whether trying again could help ([`SecureConnectError::
@@ -17,9 +18,17 @@
 //!   revoked or unknown device, or a used invitation do not pass with time;
 //!   a failed or slow network does.
 
+mod connector;
+mod dial;
+mod route;
+
 use vessel_proto::{ClientInfo, NodePublicKey, PairingOffer};
 use vessel_rpc::ClientConfig;
 use vessel_secure::{Carrier, SecureError};
+
+pub use connector::{RouteTimeouts, SecureConnector};
+pub use dial::{Dialer, PeerClose};
+pub use route::{ReachError, Route, RouteError, RouteFailure};
 
 use crate::client::NodeClient;
 use crate::credential::DeviceCredential;
@@ -42,21 +51,48 @@ pub enum SecureConnectError {
 
 impl SecureConnectError {
     /// Whether another attempt cannot help (re-pair instead): a handshake
-    /// verdict about the key or the path, or a final refusal. A network
-    /// failure or timeout, and a node that cannot authenticate right now,
-    /// may pass.
+    /// verdict about the key or the path, a final refusal, or a hello the
+    /// node rejected (no common protocol version). A network failure or
+    /// timeout, and a node that cannot authenticate right now, may pass.
     ///
     /// NK gives a client that pinned the wrong key no answer: the node just
     /// closes, which looks here like a failed carrier (transient). Over a
     /// websocket the node closes with `NodeClose::HandshakeFailed` (4401);
-    /// the connector reads that code from the carrier's error and treats
-    /// it as final.
+    /// [`SecureConnector`] reads that code from the carrier's error through
+    /// its [`Dialer`] and treats it as final.
     #[must_use]
     pub fn is_final(&self) -> bool {
         match self {
             Self::Channel(error) => !error.is_transient(),
             Self::Preamble(error) => error.is_final(),
-            Self::Handshake(_) => false,
+            Self::Handshake(error) => match error {
+                vessel_rpc::ConnectError::Transport(error) => !error.is_transient(),
+                vessel_rpc::ConnectError::Timeout | vessel_rpc::ConnectError::Closed => false,
+                vessel_rpc::ConnectError::Rejected(_)
+                | vessel_rpc::ConnectError::Violation(_)
+                | vessel_rpc::ConnectError::Decode(_)
+                | vessel_rpc::ConnectError::Encode(_) => true,
+            },
+        }
+    }
+
+    /// Whether the node itself answered, after the handshake proved its
+    /// key: a refusal of the device, or a rejected hello. Any route would
+    /// get the same answer.
+    #[must_use]
+    pub const fn is_answer(&self) -> bool {
+        match self {
+            Self::Channel(_) => false,
+            Self::Preamble(error) => error.is_answer(),
+            Self::Handshake(error) => match error {
+                vessel_rpc::ConnectError::Rejected(_) => true,
+                vessel_rpc::ConnectError::Transport(_)
+                | vessel_rpc::ConnectError::Timeout
+                | vessel_rpc::ConnectError::Closed
+                | vessel_rpc::ConnectError::Violation(_)
+                | vessel_rpc::ConnectError::Decode(_)
+                | vessel_rpc::ConnectError::Encode(_) => false,
+            },
         }
     }
 }
@@ -73,7 +109,23 @@ pub async fn open<C: Carrier>(
     client: ClientInfo,
     config: &ClientConfig,
 ) -> Result<NodeClient, SecureConnectError> {
-    let channel = vessel_secure::initiate(carrier, key)
+    let secure = vessel_secure::Config::default();
+    open_with(carrier, key, credential, client, config, &secure).await
+}
+
+/// [`open`], with explicit secure channel limits.
+///
+/// # Errors
+/// See [`SecureConnectError`].
+pub async fn open_with<C: Carrier>(
+    carrier: C,
+    key: &NodePublicKey,
+    credential: &DeviceCredential,
+    client: ClientInfo,
+    config: &ClientConfig,
+    secure: &vessel_secure::Config,
+) -> Result<NodeClient, SecureConnectError> {
+    let channel = vessel_secure::initiate_with(carrier, key, secure)
         .await
         .map_err(SecureConnectError::Channel)?;
     let channel = pairing::authenticate(channel, credential).await?;
