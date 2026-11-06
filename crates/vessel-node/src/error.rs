@@ -134,6 +134,21 @@ pub(crate) enum ServiceError {
         /// The session's harness.
         harness: HarnessKind,
     },
+    /// A session runs under a profile `profiles.toml` no longer defines, so
+    /// its files cannot be found to move.
+    #[error("the session's profile `{0}` is no longer defined")]
+    ProfileGone(ProfileName),
+    /// The node user has no home directory, so harness homes are unknown.
+    #[error("the node user has no home directory")]
+    NoUserHome,
+    /// A profile's harness home is a relative path, which the harness
+    /// resolves per session.
+    #[error("profile `{0}`'s harness home cannot be known (a relative path)")]
+    HomeUnknown(ProfileName),
+    /// The target profile's account is not logged in (its harness's check
+    /// failed, or did not answer in time).
+    #[error("profile `{0}` is not logged in; log it in first")]
+    NotLoggedIn(ProfileName),
     /// `profile.reload` found a file it cannot use; the profiles in effect
     /// stay.
     #[error("the profiles in effect stay")]
@@ -148,7 +163,12 @@ impl ServiceError {
             Self::NotFound(_) => ErrorCode::NotFound,
             // `Profiles(Parse)`: the call is fine; the node's file is not
             // (and stays unused).
-            Self::Ended(_) | Self::Profiles(ProfilesFileError::Parse(_)) => ErrorCode::Conflict,
+            Self::Ended(_)
+            | Self::Profiles(ProfilesFileError::Parse(_))
+            | Self::ProfileGone(_)
+            | Self::NoUserHome
+            | Self::HomeUnknown(_)
+            | Self::NotLoggedIn(_) => ErrorCode::Conflict,
             Self::Draining | Self::TooManyInvitations => ErrorCode::Unavailable,
             Self::Ahead { .. }
             | Self::InvalidTtl

@@ -59,7 +59,7 @@ impl Launcher {
 /// 0012) resolves its definitions and the node's secrets here; everything
 /// after this point (ACP for structured sessions, the owner-only file or
 /// environment for terminal ones) already carries them.
-const fn mcp_servers(_spec: &SessionSpec) -> ResolvedMcpServers {
+pub(crate) const fn mcp_servers(_spec: &SessionSpec) -> ResolvedMcpServers {
     ResolvedMcpServers::new()
 }
 

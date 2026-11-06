@@ -42,7 +42,8 @@ async fn main() -> ExitCode {
         | Command::Attach { .. }
         | Command::Send { .. }
         | Command::Log { .. }
-        | Command::Kill { .. } => "warn",
+        | Command::Kill { .. }
+        | Command::Session { .. } => "warn",
     };
     tracing_subscriber::fmt()
         .with_env_filter(

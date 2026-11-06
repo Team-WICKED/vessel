@@ -104,6 +104,28 @@ pub(crate) enum Command {
         /// Session id, or a unique prefix of one.
         session: SessionSelector,
     },
+    /// Change a session in place.
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum SessionCommand {
+    /// Continue a structured session's conversation under another profile
+    /// (another account of the same harness), for example at a usage
+    /// limit. The target profile must be logged in.
+    MoveProfile {
+        /// Session id, or a unique prefix of one.
+        session: SessionSelector,
+        /// The profile to move to (`vessel profiles`); the harness's name
+        /// is its default profile.
+        profile: ProfileName,
+        /// Move even in the middle of a turn, cancelling it.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -370,6 +392,29 @@ mod tests {
         };
         assert_eq!(harness, Some(HarnessKind::Codex));
         assert!(reload);
+    }
+
+    #[test]
+    fn move_profile_takes_a_session_a_profile_and_force() {
+        let Cli {
+            command:
+                Command::Session {
+                    command: SessionCommand::MoveProfile { profile, force, .. },
+                },
+            ..
+        } = Cli::try_parse_from(["vessel", "session", "move-profile", "3f2a", "claude-alt"])
+            .unwrap()
+        else {
+            panic!("expected session move-profile");
+        };
+        assert_eq!(profile.as_str(), "claude-alt");
+        assert!(!force);
+        assert!(Cli::try_parse_from(["vessel", "session", "move-profile", "3f2a", "a b"]).is_err());
+        assert!(Cli::try_parse_from(["vessel", "session", "move-profile", "3f2a"]).is_err());
+        assert!(
+            Cli::try_parse_from(["vessel", "session", "move-profile", "3f2a", "x", "--force"])
+                .is_ok()
+        );
     }
 
     /// Review item 3: a pairing link never comes from the command line,

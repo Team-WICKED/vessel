@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use bytes::Bytes;
 use vessel_node::{Config, Node};
 use vessel_proto::{
-    ContentBlock, EventSeq, HarnessKind, HarnessSessionId, ModelId, SessionInput, SessionMode,
-    SessionSpec, TerminalBytes, TerminalInput,
+    ContentBlock, EventSeq, HarnessKind, HarnessSessionId, ModelId, ProfileName, SessionInput,
+    SessionMode, SessionSpec, TerminalBytes, TerminalInput,
 };
 
 use vessel_client::book::Resolved;
 
-use crate::args::{Cli, Command, NodeCommand, Run, Target};
+use crate::args::{Cli, Command, NodeCommand, Run, SessionCommand, Target};
 use crate::attach::{self, terminal};
 use crate::connect::{connect, connect_to, data_dir, is_here};
 use crate::error::CliError;
@@ -79,7 +79,34 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             let info = session.resolve(&client).await?;
             Ok(client.kill(info.id).await?)
         }
+        Command::Session {
+            command:
+                SessionCommand::MoveProfile {
+                    session,
+                    profile,
+                    force,
+                },
+        } => Box::pin(move_profile(target, &session, profile, force)).await,
     }
+}
+
+/// `vessel session move-profile`: the node moves the session; print where
+/// it runs now.
+async fn move_profile(
+    target: &Target,
+    session: &SessionSelector,
+    profile: ProfileName,
+    force: bool,
+) -> Result<(), CliError> {
+    let client = connect(target).await?.client;
+    let info = session.resolve(&client).await?;
+    let moved = client.move_profile(info.id, Some(profile), force).await?;
+    let line = format!(
+        "{} now runs under {}\n",
+        moved.id,
+        render::profile(moved.profile.as_ref())
+    );
+    Ok(io::out(line.as_bytes()).await?)
 }
 
 /// `vessel profiles`: list them, after a reload if asked.

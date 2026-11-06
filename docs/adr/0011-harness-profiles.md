@@ -233,3 +233,24 @@ stands.
   unattached }` rather than a bare command: the caller has to write the MCP
   file and keep it for the session's life, and to know which servers a
   terminal harness could not take.
+- **Moving (H2, 2026-11-06).** `session.move_profile` changes as little
+  as possible when it fails, so its steps run in this order: refuse
+  terminal sessions and resolve the target; run the target's login check
+  with its environment (30 s at most; a check that does not answer counts
+  as not logged in); hold the session's input (`conflict` until the move
+  ends); ask the driver whether a turn runs (it answers after every
+  command sent before, so a prompt already on its way counts) and refuse
+  unless `force`, which cancels the turn and waits up to 10 s for it to
+  end; link the files while the old agent still runs (a refusal or a
+  conflict leaves everything as it was); stop the old agent (`SIGTERM`,
+  `SIGKILL` after 5 s); start the new one with `session/load`, dropping its
+  replay of the conversation (the log has it) until it is ready; publish
+  `ProfileChanged`. If the new agent does not start, the previous command
+  starts again on the same conversation and the move fails with
+  `spawn_failed`. Trade-offs: the links made for a move whose agent did
+  not start stay in the target home (they are the same files; a retry on
+  Unix finds them already linked, on Windows it is a conflict, see
+  Linking), and the target home must exist, as it does once that profile
+  has logged in. Moving back to a profile the session came from works on
+  Unix (the transcript is found already linked) and is a conflict on
+  Windows, for the same reason.

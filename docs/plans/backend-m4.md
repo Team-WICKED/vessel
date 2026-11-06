@@ -309,8 +309,20 @@ member vesseld                         home vesseld
   reload keeps the set on a bad file; a broken file stops the start;
   profile and creator survive a restart; a device's session records the
   device.
-- **Next:** H2 (`session.move_profile` on `login_check`, `session_files`
-  and `link_session`), H3's node side (with Track F's resolve), H4.
+- **H2 (done):** `session.move_profile` end to end: the node resolves the
+  target and both homes and runs the target's login check (`fake-tui`'s
+  `auth status` stands in); the session actor holds input, refuses a
+  running turn unless forced, links the files, restarts the agent with
+  `session/load` (its replay kept out of the log) and publishes
+  `ProfileChanged`, or starts the previous agent again when the new one
+  does not start. `vessel session move-profile`. Tests: one transcript in
+  two homes (same inode on Unix; a write through one name shows through
+  the other elsewhere), `memory/` untouched, `fake-acp` reports the loaded
+  session id and the new home; mid-turn refused, forced cancels; a failed
+  start falls back; terminal sessions, missing transcripts, unknown,
+  other-harness and logged-out profiles refused unchanged; the moved
+  profile survives a restart. Details in ADR 0011, "As built".
+- **Next:** H3's node side (with Track F's resolve), H4.
 
 ## Track F: fleet and first run
 
