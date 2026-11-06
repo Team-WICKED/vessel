@@ -149,14 +149,18 @@ reports=$root/reports
 mkdir -p "$home_dir" "$member_dir" "$sources/skills/smoke-skill" "$work" "$reports"
 
 # Run as the home's or the member's user: nothing but these variables.
-as_home() {
-    env -i HOME="$home_dir" PATH="$path" LANG=C.UTF-8 TMPDIR="$root" \
-        VESSEL_NAME=smoke-home "$@"
-}
-as_member() {
-    env -i HOME="$member_dir" PATH="$path" LANG=C.UTF-8 TMPDIR="$root" \
-        VESSEL_NAME=fresh-machine "$@"
-}
+home_env=(env -i HOME="$home_dir" PATH="$path" LANG=C.UTF-8 TMPDIR="$root"
+    VESSEL_NAME=smoke-home)
+member_env=(env -i HOME="$member_dir" PATH="$path" LANG=C.UTF-8 TMPDIR="$root"
+    VESSEL_NAME=fresh-machine)
+as_home() { "${home_env[@]}" "$@"; }
+as_member() { "${member_env[@]}" "$@"; }
+# Long-running programs start as `( exec "${home_env[@]}" PROGRAM ... ) &`,
+# never `as_home PROGRAM &`: a backgrounded function runs in a subshell
+# that does not exec its last command, so `$!` would be that subshell and
+# cleanup's kill would leave the node running after its directory is gone.
+# With `exec`, the subshell becomes `env`, which execs the program, so `$!`
+# is the program itself.
 
 # `until_true WHAT COMMAND...`: run COMMAND every second until it succeeds,
 # failing after the deadline.
@@ -179,8 +183,8 @@ started=$(date +%s)
 say "relay on 127.0.0.1:$relay_port"
 printf 'smoke-relay-%s%s\n' "$RANDOM" "$RANDOM" >"$root/relay.token"
 chmod 600 "$root/relay.token"
-as_home vesseld relay --bind "127.0.0.1:$relay_port" --token-file "$root/relay.token" \
-    >"$root/relay.log" 2>&1 &
+( exec "${home_env[@]}" vesseld relay --bind "127.0.0.1:$relay_port" \
+    --token-file "$root/relay.token" ) >"$root/relay.log" 2>&1 &
 pids+=($!)
 relay_up() { (exec 3<>"/dev/tcp/127.0.0.1/$relay_port") 2>/dev/null; }
 until_true "the relay listening" relay_up
@@ -204,8 +208,9 @@ env = { DOCS_TOKEN = { secret = "DOCS_TOKEN" } }
 type = "stdio"
 command = "plain-mcp"
 TOML
-as_home vesseld --bind "127.0.0.1:$home_port" --public "ws://127.0.0.1:$home_port" \
-    --relay "ws://127.0.0.1:$relay_port" --relay-token-file "$root/relay.token" \
+( exec "${home_env[@]}" vesseld --bind "127.0.0.1:$home_port" \
+    --public "ws://127.0.0.1:$home_port" \
+    --relay "ws://127.0.0.1:$relay_port" --relay-token-file "$root/relay.token" ) \
     >"$root/home.log" 2>&1 &
 pids+=($!)
 until_true "the home node answering" as_home vessel --node "127.0.0.1:$home_port" status
@@ -226,7 +231,8 @@ sed 's/^/    /' "$root/member-init.log"
 grep -q "joined the fleet" "$root/member-init.log" || die "init did not join the fleet"
 
 # Without --service the node is started by hand, as init's "left to do" says.
-as_member vessel node start --bind "127.0.0.1:$member_port" >"$root/member.log" 2>&1 &
+( exec "${member_env[@]}" vessel node start --bind "127.0.0.1:$member_port" ) \
+    >"$root/member.log" 2>&1 &
 pids+=($!)
 member() { as_member vessel --node "127.0.0.1:$member_port" "$@"; }
 until_true "the fresh machine's node answering" member status
