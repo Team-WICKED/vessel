@@ -28,12 +28,25 @@ impl Lookup {
     ///
     /// Relative entries are dropped: resolving them against whatever the
     /// node's working directory happens to be would make the result depend
-    /// on how the node was started.
+    /// on how the node was started. So is a directory that `PATH` syntax
+    /// cannot express (on Unix one whose name contains `:`; on Windows one
+    /// containing `"`, since `;` is quoted there): the search runs over
+    /// `PATH` syntax, and keeping it would make the whole list unusable, so
+    /// that every harness looked uninstalled.
     #[must_use]
     pub fn new(dirs: impl IntoIterator<Item = PathBuf>) -> Self {
-        let dirs: Arc<[PathBuf]> = dirs.into_iter().filter(|dir| dir.is_absolute()).collect();
-        // `join_paths` only fails for entries containing the separator
-        // itself; such a directory cannot be searched through `PATH` syntax.
+        let dirs: Arc<[PathBuf]> = dirs
+            .into_iter()
+            .filter(|dir| dir.is_absolute())
+            .filter(|dir| {
+                let searchable = std::env::join_paths([dir]).is_ok();
+                if !searchable {
+                    tracing::warn!(dir = %dir.display(), "skipping a search directory PATH syntax cannot express");
+                }
+                searchable
+            })
+            .collect();
+        // Every entry joins on its own, so together they do too.
         let joined = std::env::join_paths(dirs.iter()).ok();
         Self { dirs, joined }
     }
