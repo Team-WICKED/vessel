@@ -336,3 +336,50 @@ way. Now:
   only if its first message names such a node (`full` otherwise).
 - `hyper`, `hyper-util` and `tower` are used directly for the loop; all
   three were in the tree through `axum` already.
+
+## Amendment (2026-11-06): one host must not deny the relay
+
+The review's round 8 found four levers left. One host opening sockets as
+fast as the accept cap allowed, each dropped at the header deadline,
+kept every place of `max_connections` busy, so nodes could not register
+again; an IPv6 `/56` filled every per-address limit by walking its
+`/64`s; silent connections took the places kept for known nodes as well
+as the open ones (a kept place was taken at the upgrade and checked only
+at the first message); and behind a proxy the client-address
+header was believed from anyone who could reach the relay. The bar is now
+explicit: a single host, or a single IPv6 `/48`, must not be able to deny
+the relay, and nodes registered there before must be able to register
+again under such a flood. Many addresses at once (a botnet) are out of
+scope, and the README says so.
+
+- From `accept`, new connections are rate-limited per address with the
+  limiter the handlers used (30 at once, then one a second), and an
+  address may hold 16 sockets not authenticated yet (was 128). Sockets
+  not authenticated yet fill at most `max_unauthenticated` (500) of
+  `max_connections` (1000); a socket moves into the rest once it
+  authenticates (a node registered, a client paired with its node, the
+  node's data connection claimed) and gives its rate token back, so
+  only sockets that never authenticate spend the rate.
+- Every per-address count (accept, registering, clients, rate) holds per
+  IPv4 address and per IPv6 `/64`, `/56` and `/48`, the `/56` with twice
+  the limit and the `/48` four times. A `/48` is what one customer is
+  usually given; one limit per `/48` alone would make one home's devices
+  share a small limit.
+- Registering connections take the open places first. With none left, a
+  connection holds no place until its first message, for at most the 2 s
+  first-message deadline: a key registered there before then takes a kept
+  place if one is free, and anything else is refused `full`. Silence can
+  no longer take a kept place.
+- `--trusted-proxy <address or CIDR>` (repeatable) names the peers whose
+  header is believed; anyone else is counted by their socket address. A
+  relay with `--client-address-header` and no trusted proxy refuses to
+  start. A trusted proxy's sockets are not counted per address at accept
+  (its own per-client limits, nginx's `limit_conn`, stand in); requests
+  through it are rate-limited by the header's address at the upgrade
+  (`4429`). The per-address client limit defaults to 16 (was 32).
+- Cost: a client through a trusted proxy is only counted once its request
+  arrives, so a proxy without its own connection limit is still a lever
+  (the README's nginx example sets one). A known node in a kept place
+  and a new node in an open place are told apart by their first message,
+  so a silent connection costs nothing but its socket, which the accept
+  limits bound.

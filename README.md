@@ -111,7 +111,11 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   (the relay URL is then `wss://relay.example.com/vessel`):
 
   ```nginx
+  # In the http block: connections per client address.
+  limit_conn_zone $binary_remote_addr zone=vessel:10m;
+
   location /vessel/ {
+      limit_conn vessel 16;
       proxy_pass http://127.0.0.1:7078/;
       proxy_http_version 1.1;
       proxy_set_header Upgrade $http_upgrade;
@@ -120,11 +124,20 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   }
   ```
 
-- Behind a proxy every connection comes from the proxy, so the per-client
-  rate limit needs the client's address: `--client-address-header
-  X-Real-IP` (or `CF-Connecting-IP` behind Cloudflare). Set it only if
-  every request goes through that proxy and the proxy overwrites the
-  header; otherwise clients could pick their own address.
+  and run the relay with `--client-address-header X-Real-IP
+  --trusted-proxy 127.0.0.1`.
+- Behind a proxy every connection comes from the proxy, so the
+  per-client limits need the client's address from a header
+  (`--client-address-header X-Real-IP`, or `CF-Connecting-IP` behind
+  Cloudflare). The header is believed only from the peers named with
+  `--trusted-proxy` (an address or a network in CIDR form, repeatable),
+  and the relay refuses to start with a header and no trusted proxy;
+  anyone else is counted by their own address, whatever they send. The
+  proxy must overwrite the header. A trusted proxy's sockets are not
+  counted per address at accept (they would all be the proxy's): the
+  relay counts per client from the header once a request arrives, so
+  the proxy should limit connections per client itself, as `limit_conn`
+  does above.
 - The relay pings every connection every 10 s, so a proxy's idle timeout
   of 60 s (nginx's default) is enough. A connection silent for 30 s, its
   pings unanswered, is dropped.
@@ -141,28 +154,45 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   | `--max-clients-per-node` | relayed connections to one node at once | 128 |
   | `--max-bytes-per-second` | bytes a second each way through one connection, after a one-second burst (0: no limit; at least 64 KiB) | 16 MiB |
   | `--max-connections` | sockets open at once, of every kind, counted from accept | 1000 |
-  | `--max-connections-per-address` | sockets open at once from one address (an IPv6 `/64`), counted from accept; not applied with `--client-address-header` | 128 |
+  | `--max-unauthenticated` | of `--max-connections`, sockets that have not authenticated yet; the rest is kept for registered nodes and paired clients | 500 |
+  | `--max-connections-per-address` | sockets not authenticated yet from one address, counted from accept; not applied to a trusted proxy's sockets | 16 |
   | `--max-registering-per-address` | nodes still registering at once from one address | 8 |
   | `--reserved-registering` | of `--max-registering`, places kept for nodes that registered here before (at most half) | 16 |
-  | `--max-clients-per-address` | relayed connections at once from one address | 32 |
+  | `--max-clients-per-address` | relayed connections at once from one address | 16 |
+  | `--trusted-proxy` | a proxy whose `--client-address-header` is believed (above); repeatable | none |
+
+  Per address means an IPv4 address, or an IPv6 `/64`; a `/56` may hold
+  twice each per-address limit and a `/48` four times, so walking the
+  prefixes of one allocation gains little. New connections from one
+  address are rate-limited from accept (30 at once, then one a second;
+  scaled the same way); a socket that authenticates gives its share of
+  the rate back, so only sockets that never do spend it. A socket has
+  authenticated once its node registered (token or ticket, and proof of
+  its key), once its client was paired with the node, or once the node's
+  data connection was claimed.
 
   A node past `--max-nodes` is told the relay is full and tries again
   every 30 s; a client or a registering node past a connection limit is
-  closed with code `4503`, and a socket past an accept limit is answered
-  `503`, both free to try again. The relay logs each kind of refusal at
-  info, at most once every 10 s with the count in between, and new
-  connections from one address are limited too (30 at once, then one a
-  second).
+  closed with code `4503`, and a socket past an accept limit (or the
+  rate) is answered `503`, both free to try again. The relay logs each
+  kind of refusal at info, at most once every 10 s with the count in
+  between.
 - Deadlines, not configurable: a request's headers within 10 s; a
   registering node's first message, and a client's first record once its
   node answered, within 2 s; and a stopping relay drops what is still open
-  5 s after it was asked to stop. A node registered before (since the
-  relay started) may take one of the places `--reserved-registering`
-  keeps, so it gets back in while strangers hold the others.
-- Behind a proxy, the proxy should limit connections per client itself
-  (nginx's `limit_conn`): every connection reaches the relay from the
-  proxy's address, so the relay counts per client only from the header,
-  once a request arrives.
+  5 s after it was asked to stop. Registering nodes take the open places
+  first; the `--reserved-registering` places are taken only when no open
+  place is left, by a connection whose first message names a node
+  registered here before (since the relay started). Until it speaks such
+  a connection holds no place; anyone else is then refused as full. So a
+  known node gets back in while strangers hold every open place.
+- What the limits hold against: one host, or one IPv6 `/48`, cannot deny
+  the relay to anyone else, and nodes registered here before can register
+  again while it tries. Many hosts at once (a botnet) are out of scope:
+  they can fill the unauthenticated share and the open registering
+  places, so new connections are refused until they stop, though nodes
+  and clients already through keep working. Filtering at the network
+  edge, or a DDoS service in front, is the answer to that.
 - A fleet's home that registers with the relay gives its members, those
   started without `--relay` of their own, tickets for their own keys
   (`fleet.callback`), never the token: a ticket registers that one node,
@@ -383,8 +413,9 @@ start a session on another machine and read its answer.
 | `VESSEL_GH` | the GitHub CLI used to download releases | `gh` on `PATH` |
 | `VESSEL_RELAY_BIND` | `vesseld relay --bind` | `127.0.0.1:7078` |
 | `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
-| `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` | unset: the peer's address |
-| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND`, `VESSEL_RELAY_MAX_CONNECTIONS`, `VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS`, `VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS`, `VESSEL_RELAY_RESERVED_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB, 1000, 128, 8, 16, 32 |
+| `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` (needs a trusted proxy) | unset: the peer's address |
+| `VESSEL_RELAY_TRUSTED_PROXY` | `vesseld relay --trusted-proxy`, comma-separated | none |
+| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND`, `VESSEL_RELAY_MAX_CONNECTIONS`, `VESSEL_RELAY_MAX_UNAUTHENTICATED`, `VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS`, `VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS`, `VESSEL_RELAY_RESERVED_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB, 1000, 500, 16, 8, 16, 16 |
 | `VESSEL_NODE_SOCKET`, `VESSEL_AGENT_SESSION`, `VESSEL_AGENT_SECRET` | `vessel mcp` only: set by the node in each session's `vessel` MCP server | set by the node |
 
 ## Layout

@@ -169,13 +169,21 @@ every method.)
     when the ticket expires. It closes a client or a still-registering
     control connection past its connection limits with `4503` (full,
     transient), and answers a socket past its limits at accept `503`
-    before closing it.
+    before closing it, including one past its address's rate of new
+    connections; through a trusted reverse proxy, where the client's
+    address is known only from the request, that rate is checked at the
+    upgrade and refused with `4429`. A connection that authenticates (a
+    node registered, a client paired with its node, a node's data
+    connection claimed) gives its share of the rate back. An IPv6 peer is
+    counted by its `/64`, `/56` and `/48` (the wider blocks with two and
+    four times each per-address limit).
   - Deadlines a peer must keep: a request's headers within 10 s; a
     node's first control message within 2 s of the upgrade; a client's
     first record (its handshake message) within 2 s of the relay pairing
-    it with the node. A node that names a key not registered at that
-    relay before may be refused `full` at once, when it holds one of the
-    places the relay keeps for known nodes.
+    it with the node. When every open registering place is taken, a
+    control connection holds none until its first message: a key
+    registered at that relay before takes one of the places kept for
+    known nodes, if one is free; any other is refused `full` at once.
   - A node that does not know `full` or `ticket` reads the message as
     malformed and retries; a client that does not know `4503` sees a
     plain close; a relay from before tickets refuses a ticket as
