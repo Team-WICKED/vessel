@@ -83,7 +83,10 @@ pub(super) async fn attach(mut stream: Stream, session: SessionId) -> Result<End
                             last_status = Some(status);
                         }
                     }
-                    SessionEvent::Agent { .. } => {}
+                    // Neither belongs to a terminal session: only
+                    // structured sessions have agent events or move
+                    // between profiles.
+                    SessionEvent::Agent { .. } | SessionEvent::ProfileChanged { .. } => {}
                 },
                 Some(Err(error)) if !error.is_fatal() => notice(&error, "\r\n").await?,
                 Some(Err(error)) => return Err(error.into()),

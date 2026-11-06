@@ -158,7 +158,10 @@ vessel node devices revoke 3fa9       # its open connections close
   with `vessel node status` on the node before confirming. Piped in, the
   link needs `--yes`.
 - A node with a reachable address can advertise it (`vesseld --public
-  203.0.113.5:7077`): devices try it first, for 3 s, then the relays.
+  203.0.113.5:7077`): devices try it first, for 3 s, then the relays. The
+  node pings direct connections every 10 s, as a relay does, so a dropped
+  network is noticed within 30 s and an attach resumes; behind a proxy, an
+  idle timeout of 60 s is enough.
 - The device's credential is a file in `~/.config/vessel/credentials/`
   (0600); the book points to it and never holds the secret. Moving a
   device means pairing it again.

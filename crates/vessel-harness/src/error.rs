@@ -53,6 +53,17 @@ pub enum HarnessError {
         /// The session's harness.
         harness: HarnessKind,
     },
+    /// The profile is not the one the spec asks for (`spec.profile`, or the
+    /// harness's default when it names none). The caller resolves the name;
+    /// launching with another profile would run the session as another
+    /// account than recorded.
+    #[error("the session asks for profile {}, not {given}", requested.as_ref().map_or("(the default)", ProfileName::as_str))]
+    ProfileNotRequested {
+        /// What the spec names.
+        requested: Option<ProfileName>,
+        /// The profile given.
+        given: ProfileName,
+    },
     /// The MCP servers cannot be given to this harness's terminal session.
     #[error(transparent)]
     Mcp(#[from] McpError),

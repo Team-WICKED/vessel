@@ -101,6 +101,9 @@ pub(crate) enum ServiceError {
     /// `device.invite` with a lifetime of zero.
     #[error("an invitation must be valid for at least one second")]
     InvalidTtl,
+    /// `device.invite` naming an empty list of scopes.
+    #[error("an invitation must grant at least one scope")]
+    NoScopes,
     /// Too many invitations are waiting (`devices::invitations`).
     #[error("too many pairing invitations are waiting; let some be used or expire")]
     TooManyInvitations,
@@ -120,7 +123,7 @@ impl ServiceError {
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Ended(_) => ErrorCode::Conflict,
             Self::Draining | Self::TooManyInvitations => ErrorCode::Unavailable,
-            Self::Ahead { .. } | Self::InvalidTtl => ErrorCode::InvalidRequest,
+            Self::Ahead { .. } | Self::InvalidTtl | Self::NoScopes => ErrorCode::InvalidRequest,
             Self::Session(error) => error.code(),
             Self::Store(error) => error.code(),
             Self::Outbound(error) => error.code(),

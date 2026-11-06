@@ -6,7 +6,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tokio::sync::{mpsc, watch};
 use vessel_proto::{
-    AgentEvent, EventRecord, EventSeq, HarnessSessionId, SessionEvent, SessionInfo, SessionStatus,
+    AgentEvent, EventRecord, EventSeq, HarnessSessionId, ProfileName, SessionEvent, SessionInfo,
+    SessionStatus,
 };
 
 use crate::handle::Shared;
@@ -115,6 +116,7 @@ enum InfoChange {
     None,
     Status(SessionStatus),
     HarnessSession(HarnessSessionId),
+    Profile(Option<ProfileName>),
 }
 
 impl InfoChange {
@@ -124,6 +126,7 @@ impl InfoChange {
             SessionEvent::Agent {
                 event: AgentEvent::Ready { harness_session },
             } => Self::HarnessSession(harness_session.clone()),
+            SessionEvent::ProfileChanged { to, .. } => Self::Profile(to.clone()),
             SessionEvent::Terminal(_) | SessionEvent::Agent { .. } => Self::None,
         }
     }
@@ -141,6 +144,10 @@ impl InfoChange {
             }
             Self::HarnessSession(id) => {
                 info.harness_session = Some(id);
+                true
+            }
+            Self::Profile(profile) => {
+                info.profile = profile;
                 true
             }
         }

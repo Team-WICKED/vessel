@@ -1,7 +1,9 @@
 //! Errors of this crate. Transport errors stay generic (`E`) so the caller
 //! keeps the concrete error of whatever transport it used.
 
-use vessel_proto::{ErrorCode, RequestId, SubscriptionId, UnexpectedReply, WireError};
+use vessel_proto::{
+    ErrorCode, Method, ProtocolVersion, RequestId, SubscriptionId, UnexpectedReply, WireError,
+};
 
 /// A peer broke the protocol's flow rules. The connection is closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -93,6 +95,18 @@ pub enum CallError {
     /// This connection has used every request id (2^64 calls).
     #[error("request ids exhausted on this connection")]
     RequestIdsExhausted,
+    /// The call needs a newer protocol than this connection negotiated, so
+    /// it was not sent (the node would refuse it, or ignore a field it does
+    /// not know).
+    #[error("`{}` needs protocol {needs}; the node speaks {negotiated}", method.as_str())]
+    NotInProtocol {
+        /// The method.
+        method: Method,
+        /// The version the call needs.
+        needs: ProtocolVersion,
+        /// The connection's version.
+        negotiated: ProtocolVersion,
+    },
 }
 
 impl CallError {
@@ -101,6 +115,7 @@ impl CallError {
     pub const fn code(&self) -> Option<ErrorCode> {
         match self {
             Self::Remote(error) => Some(error.code),
+            Self::NotInProtocol { .. } => Some(ErrorCode::Unsupported),
             Self::Disconnected | Self::UnexpectedReply(_) | Self::RequestIdsExhausted => None,
         }
     }

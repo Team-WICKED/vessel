@@ -7,9 +7,11 @@ use std::sync::Arc;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, CreateSession, DeviceInfo, EventPage, GetNode, GetSession, Harness, Invitation,
-    InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions, NodeInfo, ReadEvents,
-    RevokeDevice, SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WireError,
+    Ack, BlobChunk, CreateSession, DeviceInfo, ErrorCode, EventPage, FleetMember, Generation,
+    GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession, ListDevices,
+    ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile, NodeInfo,
+    ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, Request, RevokeDevice,
+    SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
@@ -258,4 +260,89 @@ impl NodeService {
             .map(|()| Ack)
             .map_err(|error| wire(&error))
     }
+}
+
+/// Protocol 5 methods whose implementations come with milestone 4's tracks
+/// (profiles and moves: Track H; the fleet: Track F;
+/// docs/plans/backend-m4.md). Until then each answers `Unsupported` naming
+/// the method, so a protocol 5 client gets a clear refusal rather than a
+/// guess. The scope check in `guard` already applies to them.
+#[expect(
+    clippy::unused_async,
+    reason = "every call has the same async shape, so the guard's rows are uniform"
+)]
+impl NodeService {
+    pub(crate) async fn list_profiles(
+        &self,
+        _: &Connection,
+        _: ListProfiles,
+    ) -> Result<Vec<ProfileInfo>, WireError> {
+        Err(not_yet::<ListProfiles>())
+    }
+
+    pub(crate) async fn reload_profiles(
+        &self,
+        _: &Connection,
+        _: ReloadProfiles,
+    ) -> Result<Vec<ProfileInfo>, WireError> {
+        Err(not_yet::<ReloadProfiles>())
+    }
+
+    pub(crate) async fn move_profile(
+        &self,
+        _: &Connection,
+        _: MoveProfile,
+    ) -> Result<SessionInfo, WireError> {
+        Err(not_yet::<MoveProfile>())
+    }
+
+    pub(crate) async fn get_manifest(
+        &self,
+        _: &Connection,
+        _: GetManifest,
+    ) -> Result<Manifest, WireError> {
+        Err(not_yet::<GetManifest>())
+    }
+
+    pub(crate) async fn read_blob(
+        &self,
+        _: &Connection,
+        _: ReadBlob,
+    ) -> Result<BlobChunk, WireError> {
+        Err(not_yet::<ReadBlob>())
+    }
+
+    pub(crate) async fn watch_fleet(
+        &self,
+        _: &Connection,
+        _: WatchFleet,
+    ) -> Result<Generation, WireError> {
+        Err(not_yet::<WatchFleet>())
+    }
+
+    pub(crate) async fn report_applied(
+        &self,
+        _: &Connection,
+        _: ReportApplied,
+    ) -> Result<Ack, WireError> {
+        Err(not_yet::<ReportApplied>())
+    }
+
+    pub(crate) async fn list_members(
+        &self,
+        _: &Connection,
+        _: ListMembers,
+    ) -> Result<Vec<FleetMember>, WireError> {
+        Err(not_yet::<ListMembers>())
+    }
+}
+
+fn not_yet<R: Request>() -> WireError {
+    WireError::new(
+        ErrorCode::Unsupported,
+        format!(
+            "`{}` is not implemented by this node yet",
+            R::METHOD.as_str()
+        ),
+    )
 }

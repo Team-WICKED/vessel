@@ -47,6 +47,10 @@ impl fmt::Debug for Launch {
 
 /// The command that runs `spec` under `profile`, with `mcp` servers.
 ///
+/// `profile` must be the one the spec names (`spec.profile`, or the
+/// harness's default profile when it names none): the caller resolves the
+/// name, this checks the result.
+///
 /// Terminal mode runs the harness binary with, in order: the MCP servers'
 /// launch-time arguments, the profile's arguments, then the spec's.
 /// Structured mode runs whatever speaks ACP for that harness: the binary
@@ -62,7 +66,9 @@ impl fmt::Debug for Launch {
 /// Does filesystem lookups; call it from a blocking context.
 ///
 /// # Errors
-/// [`HarnessError::ProfileMismatch`] for another harness's profile;
+/// [`HarnessError::ProfileMismatch`] for another harness's profile,
+/// [`HarnessError::ProfileNotRequested`] for another profile than the
+/// spec's;
 /// [`HarnessError::NotInstalled`] or [`HarnessError::StructuredUnavailable`]
 /// when the program is missing; [`HarnessError::RelativeDirectory`] or
 /// [`HarnessError::NoSuchDirectory`] for a bad working directory;
@@ -97,6 +103,16 @@ pub fn launch_in(
             profile: profile.name().clone(),
             profile_harness: profile.harness(),
             harness,
+        });
+    }
+    let requested = match &spec.profile {
+        Some(name) => name == profile.name(),
+        None => profile.is_default(),
+    };
+    if !requested {
+        return Err(HarnessError::ProfileNotRequested {
+            requested: spec.profile.clone(),
+            given: profile.name().clone(),
         });
     }
     let descriptor = descriptor(harness);

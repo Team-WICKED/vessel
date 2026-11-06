@@ -78,7 +78,12 @@ impl Projection {
             SessionEvent::Agent {
                 event: AgentEvent::Ready { harness_session },
             } => self.harness_session = Some(harness_session.clone()),
-            SessionEvent::Agent { .. } | SessionEvent::Terminal(_) => {}
+            // The current profile is projected once the sessions table has
+            // a column for it (schema 3, milestone 4 Track H); no node emits
+            // `ProfileChanged` before then.
+            SessionEvent::Agent { .. }
+            | SessionEvent::Terminal(_)
+            | SessionEvent::ProfileChanged { .. } => {}
         }
     }
 }
