@@ -94,6 +94,17 @@ first.
 - A dropped connection during `attach` reconnects by itself and continues
   where it was.
 
+### Environment
+
+| Variable | Means | Default |
+| --- | --- | --- |
+| `VESSEL_NODE` | `--node`: a book name, `ssh://[user@]host[:port]`, `user@host`, or a websocket address | the project's or the book's `default_node`, else `127.0.0.1:7077` |
+| `VESSEL_TOKEN` | `--token`, for a websocket node | the book entry's token file; for a node on this machine, `~/.vessel/token` |
+| `VESSEL_DATA_DIR` | `--data-dir`, this machine's data directory (the node's state; `ssh/` for shared logins) | `~/.vessel` |
+| `VESSEL_CONFIG_DIR` | where the node book lives (`<dir>/vessel/nodes.toml`); tests point it at a temporary directory | the platform's config directory (`~/.config` on Linux) |
+| `VESSEL_SSH` | the `ssh` program to run (tests use `fake-ssh`) | `ssh` on `PATH` |
+| `VESSEL_GH` | the GitHub CLI used to download releases | `gh` on `PATH` |
+
 ## Layout
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for every crate and how they
