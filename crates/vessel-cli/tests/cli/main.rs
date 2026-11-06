@@ -10,6 +10,8 @@
 
 #[cfg(test)]
 mod devices;
+#[cfg(test)]
+mod mcp;
 mod nodes;
 #[cfg(test)]
 mod reconnect;

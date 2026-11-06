@@ -328,7 +328,24 @@ member vesseld                         home vesseld
   definitions and secrets (`vessel_fleet::resolve`). Missing secrets are
   named in the session's log (`LaunchOptions::notices`, `vessel:` log
   lines after `starting`, and after a move) and in the node's log.
-- **Next:** H4.
+- **H4 (done):** agent principals and `vessel mcp`, as ADR 0013 "As built"
+  describes. Decision 8's check (2026-11-06, rmcp 3.9.0): passed (no
+  `unsafe` of ours, the same tokio, features `server` and `transport-io`
+  only, nine crates added), so `vessel-mcp` uses `rmcp`, with hand-written
+  tools and no proc-macros. Tests: registry units (admission, retirement
+  closing connections, grants shrinking, depth and count, move
+  credentials); end to end on the node (an agent lists, creates, sends to
+  and kills its own sessions; the owner's, another agent's and admin calls
+  are forbidden; forged, borrowed and ended credentials refused and the
+  connection closed; depth 3 and 8 owned sessions; the top agent stops a
+  descendant); `vessel-mcp` over a pipe with the node's real environment
+  (create with a prompt, `wait_turn` reads `echo: plain`, refusals as tool
+  errors); the `vessel mcp` binary on stdio. Not built: profile grants
+  (`[profiles.X.agent]`) and other nodes (Track X). A device with only `read` cannot create
+  sessions at all (scope check), so "a device with `read` cannot start a
+  session whose agent operates" holds by the scope table; the unit test
+  checks that a device's grant caps its sessions' agents.
+- **Next:** Track H is done; Track X needs F2.
 
 ## Track F: fleet and first run
 

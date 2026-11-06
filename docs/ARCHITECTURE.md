@@ -36,13 +36,14 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`, `profiles.toml`, `mcp/`), SQLite event log (schema 3: sessions' current profile and creator), retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to) (milestone 4). | proto, rpc, harness, session, store, secure, relay |
-| `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3). | proto, rpc, secure, relay |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to) and agent principals (`agents`: a credential per session, grants, limits, ownership) (milestone 4). | proto, rpc, harness, session, store, secure, relay |
+| `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
 | `vessel-fleet` | Fleet bundles (milestone 4, ADR 0012): the home's sources into a manifest and a content-addressed blob store; plan and apply into harness homes with recorded hashes (`managed.json`), local edits kept with the incoming version beside them, symlinks never followed, targets linked to the sources left alone; skills named by `SKILL.md`; MCP secret references resolved at launch. | proto, harness |
-| `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node, remote |
+| `vessel-mcp` | `vessel mcp` (milestone 4, ADR 0013): the MCP server (stdio, on `rmcp`) a node attaches to every session as `vessel`; each tool is one call through the session's agent principal. | proto, client |
+| `vessel-cli` | `vessel` binary: commands, interactive attach, `vessel mcp`. | proto, client, node, remote, mcp |
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. The fakes report the environment, arguments, MCP servers and loaded session id they got (milestone 4). | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
@@ -85,6 +86,14 @@ they started.
    files into the target home, stops the agent and starts it again under
    the new profile with `session/load`, then publishes `ProfileChanged`.
    The session keeps its id, log and subscribers.
+7. Agents (ADR 0013): `session.create` gives the new session's agent a
+   place in `agents` (its creator's scopes, at most `read` and `operate`;
+   its depth) and, when the node runs `vessel mcp`, a credential, which
+   goes only into the session's `vessel` MCP server definition. That
+   server connects to the node's local socket with the credential as its
+   first frame; its calls run as `Principal::Agent`, and `operate` calls on
+   a session need the session to descend from the agent's. The credential
+   and the agent's connections end with the session.
 6. On shutdown the node kills each session's process group, waits for final
    statuses, and flushes the store. On the next start, sessions that were live
    are marked `Interrupted`. Their logs stay readable, and structured ones can
@@ -474,6 +483,19 @@ they started.
     `session.create`'s.
   - `vessel-client`: `move_profile`; `vessel-cli`: `vessel session
     move-profile <session> <profile> [--force]`.
+  - H4, agent principals: `vessel-node`'s `agents` registry (credential
+    hashes in memory, scopes, depth, the agent's connections; limits of 8
+    live sessions an agent created and depth 3, checked under one lock),
+    the agent preamble on the local socket (`ipc`), the ownership rule in
+    the guard (each request type declares the session an `operate` call
+    acts on), and the `vessel` server in `profiles::launch` from
+    `Config::vessel_mcp` (`vessel node start` sets its own executable,
+    `vesseld` a `vessel` beside it). `vessel-session` takes the session id
+    from `LaunchOptions::id`, so the credential is bound before the agent
+    starts. `vessel-client`: `NodeClient::connect_local`. `vessel-mcp`:
+    the tools (`list_nodes`, `list_sessions`, `create_session`,
+    `send_input`, `answer_permission`, `read_events`, `wait_turn`,
+    `kill_session`); `vessel mcp` runs them on stdio.
 
 ## Later
 

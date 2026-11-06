@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use vessel_node::{Config, Node};
+use vessel_node::{Config, Node, VesselMcp};
 use vessel_proto::{
     ContentBlock, EventSeq, HarnessKind, HarnessSessionId, ModelId, ProfileName, SessionInput,
     SessionMode, SessionSpec, TerminalBytes, TerminalInput,
@@ -79,6 +79,7 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             let info = session.resolve(&client).await?;
             Ok(client.kill(info.id).await?)
         }
+        Command::Mcp => Ok(Box::pin(vessel_mcp::run_stdio()).await?),
         Command::Session {
             command:
                 SessionCommand::MoveProfile {
@@ -139,6 +140,9 @@ async fn node_start(
     let mut config = Config::new(data_dir(target)?);
     config.bind = Some(bind);
     config.name = name;
+    // Sessions' agents reach this node through this executable's `mcp`
+    // command (ADR 0013).
+    config.vessel_mcp = std::env::current_exe().ok().map(VesselMcp::vessel);
     let node = Node::start(config).await?;
     let address = node.address().unwrap_or(bind);
     let started = format!(
