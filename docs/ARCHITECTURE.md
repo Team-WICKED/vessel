@@ -403,7 +403,11 @@ In the crate table's order.
   buffering), then both directions are forwarded a message at a time; a
   sender's close frame goes through unchanged. Limits: one record per
   message, 64 waiting clients per node, 10 s to accept, a per-address
-  token bucket. `NodeLink` keeps a node registered (jittered backoff,
+  token bucket, and resource caps (ADR 0009's amendment): registered nodes
+  (refused `full`), nodes still registering and relayed clients per node
+  and in all (closed `4503`), and a byte rate per direction of a relayed
+  connection (`server::throttle`); refusals logged at info, throttled,
+  never with a token. `NodeLink` keeps a node registered (jittered backoff,
   `LinkState` on a watch). One `Keepalive` (a ping every 10 s, a drop after
   30 s of silence) covers relayed and direct connections. `respond` runs
   the node's handshake on a websocket and closes with `4401` when it

@@ -79,6 +79,70 @@ async fn vesseld_relay_serves_health_and_stops_on_a_signal() {
     stop(&mut child).await;
 }
 
+#[tokio::test]
+async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let token = dir.path().join("relay.token");
+    std::fs::write(&token, "a-relay-token\n").unwrap();
+    let mut child = vesseld()
+        .args(["relay", "--bind", "127.0.0.1:0", "--token-file"])
+        .arg(&token)
+        .args([
+            "--max-nodes",
+            "7",
+            "--max-registering",
+            "3",
+            "--max-clients",
+            "21",
+        ])
+        .args(["--max-clients-per-node", "5", "--max-bytes-per-second", "0"])
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let mut lines = BufReader::new(stderr).lines();
+    let limits = tokio::time::timeout(SAFETY, async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.contains("relay limits") {
+                return line;
+            }
+        }
+        panic!("vesseld relay ended before logging its limits");
+    })
+    .await
+    .unwrap();
+    for field in [
+        "max_nodes=7",
+        "max_registering=3",
+        "max_clients=21",
+        "max_clients_per_node=5",
+        "max_bytes_per_second=0",
+    ] {
+        assert!(limits.contains(field), "{field}: {limits}");
+    }
+    child.kill().await.unwrap();
+
+    let output = tokio::time::timeout(
+        SAFETY,
+        vesseld()
+            .args([
+                "relay",
+                "--bind",
+                "127.0.0.1:0",
+                "--max-clients",
+                "0",
+                "--token-file",
+            ])
+            .arg(&token)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("must be at least 1"), "{stderr}");
+}
+
 #[cfg(unix)]
 #[cfg(test)]
 async fn stop(child: &mut Child) {

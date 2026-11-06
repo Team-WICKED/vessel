@@ -196,6 +196,11 @@ pub enum RegistrationRefusal {
     Proof,
     /// The message was malformed or out of order.
     Protocol,
+    /// The relay holds as many nodes as it is configured to; another may
+    /// register once one leaves (try again later). Relays before this
+    /// variant never send it; a node that does not know it reads the
+    /// message as malformed and retries.
+    Full,
 }
 
 /// A message from a relay on a node's control connection.
@@ -234,15 +239,20 @@ pub enum RelayClose {
     TooLarge,
     /// Rate limited.
     RateLimited,
+    /// The relay carries as many connections as it is configured to, to
+    /// this node or in all (transient: a slot frees when one ends). A
+    /// client that does not know the code sees a plain close.
+    Full,
 }
 
 impl RelayClose {
     /// Every variant, for exhaustive tests.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::NoSuchNode,
         Self::NotAccepted,
         Self::TooLarge,
         Self::RateLimited,
+        Self::Full,
     ];
 
     /// The websocket close code.
@@ -253,6 +263,7 @@ impl RelayClose {
             Self::NotAccepted => 4408,
             Self::TooLarge => 4413,
             Self::RateLimited => 4429,
+            Self::Full => 4503,
         }
     }
 
@@ -264,6 +275,7 @@ impl RelayClose {
             4408 => Some(Self::NotAccepted),
             4413 => Some(Self::TooLarge),
             4429 => Some(Self::RateLimited),
+            4503 => Some(Self::Full),
             _ => None,
         }
     }
@@ -273,7 +285,7 @@ impl RelayClose {
     #[must_use]
     pub const fn is_transient(self) -> bool {
         match self {
-            Self::NoSuchNode | Self::NotAccepted | Self::RateLimited => true,
+            Self::NoSuchNode | Self::NotAccepted | Self::RateLimited | Self::Full => true,
             Self::TooLarge => false,
         }
     }

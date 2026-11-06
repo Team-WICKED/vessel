@@ -41,10 +41,17 @@ pub(super) async fn upgrade(
                 close_with(&mut socket, RelayClose::RateLimited).await;
                 return;
             }
+            // A connection that has not registered yet holds a place among
+            // those registering (`Limits::max_registering`) until it has.
+            let Some(registering) = relay.registering() else {
+                close_with(&mut socket, RelayClose::Full).await;
+                return;
+            };
             let registered = tokio::select! {
                 registered = register(&relay, &mut socket) => registered,
                 () = relay.shutdown.cancelled() => None,
             };
+            drop(registering);
             if let Some(node) = registered {
                 serve(&relay, socket, node).await;
             }
@@ -185,15 +192,21 @@ async fn serve(relay: &Relay, mut socket: WebSocket, node: RoutingId) {
     // As many announcements as clients may wait; at least one.
     let (incoming, mut announce) = mpsc::channel::<ConnId>(relay.limits.waiting_per_node.max(1));
     let replaced = CancellationToken::new();
-    relay.register(
-        node,
-        Registration {
-            generation,
-            incoming,
-            waiting: Arc::new(AtomicUsize::new(0)),
-            replaced: replaced.clone(),
-        },
-    );
+    let registration = Registration {
+        generation,
+        incoming,
+        waiting: Arc::new(AtomicUsize::new(0)),
+        replaced: replaced.clone(),
+    };
+    if relay.register(node, registration).is_err() {
+        // The relay holds its most nodes (`Limits::max_nodes`); logged there.
+        let refusal = RelayToNode::Rejected {
+            reason: RegistrationRefusal::Full,
+        };
+        let _sent = send(&mut socket, &refusal).await;
+        let _closed = socket.send(Message::Close(None)).await;
+        return;
+    }
     tracing::info!(%node, "node registered");
     if send(&mut socket, &RelayToNode::Registered).await {
         announce_until_gone(relay, &mut socket, &mut announce, &replaced).await;

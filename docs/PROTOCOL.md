@@ -139,6 +139,15 @@ every method.)
   of this node's own, so older clients see nothing new; `created_by` uses
   only the variants protocol 5 has.
 
+- Relay limits (the relay's own wire, not negotiated; 2026-11-06): a
+  relay holding its most nodes answers a registration `rejected {reason:
+  "full"}` (after the token and the proof), and closes a client or a
+  still-registering control connection past its connection limits with
+  `4503` (full, transient). A node that does not know `full` reads the
+  message as malformed and retries; a client that does not know `4503`
+  sees a plain close. The limits themselves are the relay's configuration
+  (`vesseld relay --max-*`, README).
+
 ## Version 5 (2026-11-06)
 
 Nodes speak 2..=5; version 5 only adds, and older connections keep working

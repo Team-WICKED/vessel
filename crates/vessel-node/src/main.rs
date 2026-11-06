@@ -115,6 +115,39 @@ struct RelayArgs {
     /// with a proxy that every request passes and that overwrites it.
     #[arg(long, env = "VESSEL_RELAY_CLIENT_ADDRESS_HEADER")]
     client_address_header: Option<axum::http::HeaderName>,
+    /// Nodes registered at once; another is refused until one leaves.
+    #[arg(long, env = "VESSEL_RELAY_MAX_NODES", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_nodes)]
+    max_nodes: usize,
+    /// Connections from nodes that are still registering, at once.
+    #[arg(long, env = "VESSEL_RELAY_MAX_REGISTERING", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_registering)]
+    max_registering: usize,
+    /// Relayed client connections at once, in all. Each holds two sockets
+    /// here: keep `max-nodes + 2 x max-clients` under the open-file limit.
+    #[arg(long, env = "VESSEL_RELAY_MAX_CLIENTS", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_clients)]
+    max_clients: usize,
+    /// Relayed client connections to one node at once.
+    #[arg(long, env = "VESSEL_RELAY_MAX_CLIENTS_PER_NODE", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_clients_per_node)]
+    max_clients_per_node: usize,
+    /// Bytes a second through each direction of one relayed connection,
+    /// after a burst of one second's worth; 0 for no limit. At least
+    /// 64 KiB (one record): a smaller value is raised to it.
+    #[arg(long, env = "VESSEL_RELAY_MAX_BYTES_PER_SECOND",
+        default_value_t = vessel_relay::Limits::default().max_bytes_per_second)]
+    max_bytes_per_second: u64,
+}
+
+/// A count of at least one: a relay with no room for anything would only
+/// refuse.
+fn at_least_one(text: &str) -> Result<usize, String> {
+    match text.parse::<usize>() {
+        Ok(0) => Err("must be at least 1".to_owned()),
+        Ok(count) => Ok(count),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// `--bind`: an address, or `none`.
@@ -190,6 +223,20 @@ async fn relay(args: RelayArgs) -> ExitCode {
     };
     let mut config = vessel_relay::RelayConfig::new(token);
     config.client_address_header = args.client_address_header;
+    let limits = &mut config.limits;
+    limits.max_nodes = args.max_nodes;
+    limits.max_registering = args.max_registering;
+    limits.max_clients = args.max_clients;
+    limits.max_clients_per_node = args.max_clients_per_node;
+    limits.max_bytes_per_second = args.max_bytes_per_second;
+    tracing::info!(
+        max_nodes = limits.max_nodes,
+        max_registering = limits.max_registering,
+        max_clients = limits.max_clients,
+        max_clients_per_node = limits.max_clients_per_node,
+        max_bytes_per_second = limits.max_bytes_per_second,
+        "relay limits"
+    );
     let listener = match tokio::net::TcpListener::bind(args.bind).await {
         Ok(listener) => listener,
         Err(error) => {

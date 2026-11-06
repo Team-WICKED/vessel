@@ -12,6 +12,12 @@
 //!   writer, end to end.
 //! - Every refusal is a close code (`RelayClose`); refusals by the node
 //!   travel inside the channel.
+//! - Resource caps (`Limits`): a client holds a place, to its node and in
+//!   all, from the moment its node is found until the splice ends
+//!   (`RelayClose::Full` past either), and each direction of a splice is
+//!   held to `max_bytes_per_second` (`ByteRate`, waiting before a message
+//!   is forwarded, so the sender is pushed back by TCP). A splice silent
+//!   in one direction past the idle timeout ends (pongs count).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,6 +36,7 @@ use tokio::time::sleep;
 use vessel_proto::{ConnId, RelayClose, RoutingId};
 
 use super::control::after;
+use super::throttle::ByteRate;
 use super::{Limits, Relay, close_with, lock, too_large};
 
 #[derive(Debug, Deserialize)]
@@ -118,6 +125,11 @@ async fn pair(relay: &Relay, node: RoutingId, mut client: WebSocket) {
         close_with(&mut client, RelayClose::NoSuchNode).await;
         return;
     };
+    // Held until this function returns: through the wait and the splice.
+    let Some(_client) = relay.client(node) else {
+        close_with(&mut client, RelayClose::Full).await;
+        return;
+    };
     let Some(place) = Waiting::enter(&waiting, relay.limits.waiting_per_node) else {
         close_with(&mut client, RelayClose::RateLimited).await;
         return;
@@ -196,12 +208,18 @@ async fn splice(relay: &Relay, client: WebSocket, node: WebSocket) {
 }
 
 /// Forward `from`'s records to `to`, pinging `to` and watching `from`'s
-/// silence, until something ends it.
+/// silence, at most `max_bytes_per_second`, until something ends it.
 async fn forward(
     from: &mut SplitStream<WebSocket>,
     to: &mut SplitSink<WebSocket, Message>,
     limits: &Limits,
 ) -> End {
+    let largest = u64::try_from(limits.max_message).unwrap_or(u64::MAX);
+    let mut rate = ByteRate::new(
+        limits.max_bytes_per_second,
+        largest,
+        tokio::time::Instant::now(),
+    );
     let mut ping = tokio::time::interval_at(after(limits.ping_interval), limits.ping_interval);
     let idle = sleep(limits.idle_timeout);
     tokio::pin!(idle);
@@ -220,6 +238,13 @@ async fn forward(
                     Some(Err(error)) if too_large(&error) => return End::TooLarge,
                     Some(Err(_)) => return End::Gone,
                 };
+                if let Some(rate) = rate.as_mut() {
+                    let length = u64::try_from(record.len()).unwrap_or(u64::MAX);
+                    let wait = rate.take(length, tokio::time::Instant::now());
+                    if !wait.is_zero() {
+                        sleep(wait).await;
+                    }
+                }
                 if to.send(Message::Binary(record)).await.is_err() {
                     return End::Gone;
                 }

@@ -71,6 +71,7 @@ fn describe_relay(close: RelayClose) -> &'static str {
         RelayClose::NotAccepted => "the node did not accept in time",
         RelayClose::TooLarge => "a message was too large",
         RelayClose::RateLimited => "rate limited",
+        RelayClose::Full => "the relay is at its limit of connections",
     }
 }
 
