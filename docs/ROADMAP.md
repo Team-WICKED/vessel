@@ -18,6 +18,10 @@ Plan: `docs/plans/backend-m1.md`.
 
 ## Phase 1: many nodes
 
+Milestone 2 (SSH transport, remote install and update, named nodes) is
+drafted in `docs/plans/backend-m2.md`, with proposed ADRs 0007 and 0008;
+the relay follows in milestone 3.
+
 - [ ] SSH stdio transport (`vesseld attach`, Zed's proxy/daemon split).
 - [ ] Versioned side-by-side `vesseld` install and update on a remote.
 - [ ] Peer list and node identity exchange.
