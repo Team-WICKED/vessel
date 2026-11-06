@@ -2,19 +2,20 @@
 
 use std::path::PathBuf;
 use vessel_proto::{
-    BlobChunk, BlobHash, BundleFile, BundlePath, ClientInfo, CloseTransfer, CreateSession,
-    DeleteSecret, DeviceId, DeviceInfo, EventPage, EventSeq, ExportMemory, ExportSession,
-    FleetMember, Forward, Generation, GetManifest, GetNode, GetSession, Harness, HarnessKind,
-    ImportMemory, ImportSession, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
-    ListMembers, ListProfiles, ListSecrets, ListSessions, MAX_TRANSFER_FILE, Manifest,
-    MemoryImported, MoveProfile, NodeId, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion,
-    ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, ReportApplied, RevokeDevice, Scope,
-    SecretName, SecretValue, SendInput, SessionId, SessionImported, SessionInfo, SessionInput,
-    SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, TransferId, TransferManifest,
-    WatchFleet,
+    BlobChunk, BlobHash, BundleFile, BundlePath, ClientInfo, CloseTransfer, CopySecret,
+    CreateSession, DeleteSecret, DeviceId, DeviceInfo, EventPage, EventSeq, ExportMemory,
+    ExportSession, FleetMember, Forward, Generation, GetManifest, GetNode, GetSession, Harness,
+    HarnessKind, ImportMemory, ImportSession, Invitation, InviteDevice, KillSession, ListDevices,
+    ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions, MAX_TRANSFER_FILE,
+    Manifest, MemoryImported, MoveProfile, NodeId, NodeInfo, ProfileInfo, ProfileName,
+    ProtocolVersion, ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, ReportApplied,
+    RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId, SessionImported,
+    SessionInfo, SessionInput, SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, TransferId,
+    TransferManifest, WatchFleet,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription, Unary};
 
+use crate::chunks::{ChunkSink, FetchError, fetch_chunks};
 use crate::error::ConnectError;
 use crate::stream::SessionStream;
 use crate::token::BearerToken;
@@ -397,6 +398,22 @@ impl NodeClient {
         self.connection.call(DeleteSecret { name }).await.map(drop)
     }
 
+    /// `secret.copy` (protocol 6): the node sends its value of secret
+    /// `name` to fleet node `to`, which stores it under the same name.
+    /// Needs `admin` here, and `to` must have granted the fleet's home
+    /// `admin`.
+    ///
+    /// # Errors
+    /// `NotFound` when the secret is not set here; `Forbidden` when `to`
+    /// has not granted the home `admin` (the message says how to); otherwise
+    /// see [`CallError`].
+    pub async fn secret_copy(&self, name: SecretName, to: NodeId) -> Result<(), CallError> {
+        self.connection
+            .call(CopySecret { name, to })
+            .await
+            .map(drop)
+    }
+
     /// `session.export` (protocol 6): snapshot a structured session's
     /// files into a transfer only this caller may read. Needs `operate`
     /// (an agent: a session it started).
@@ -452,45 +469,27 @@ impl NodeClient {
             .await
     }
 
-    /// One file of a transfer this caller opened, read whole and checked
-    /// against its hash: the transfer reader. Held in memory, so at most
-    /// `MAX_TRANSFER_FILE` bytes.
+    /// One file of a transfer this caller opened, fetched chunk by chunk
+    /// into `sink`, which writes each chunk as it arrives and checks the
+    /// whole (a fleet blob writer, `vessel_fleet::BlobStore::writer`,
+    /// behind [`ChunkSink`]); nothing is held in memory. At most
+    /// `MAX_TRANSFER_FILE` bytes, and never more than the manifest says.
     ///
     /// # Errors
-    /// See [`TransferReadError`].
-    pub async fn read_transfer_file(
+    /// See [`FetchError`]; a call's failure is [`FetchError::Read`].
+    pub async fn fetch_transfer_file<S: ChunkSink>(
         &self,
         transfer: TransferId,
         file: &BundleFile,
-    ) -> Result<Vec<u8>, TransferReadError> {
-        use sha2::Digest as _;
+        sink: S,
+    ) -> Result<(), FetchError<CallError>> {
         if file.size > MAX_TRANSFER_FILE {
-            return Err(TransferReadError::Oversized(file.size));
+            return Err(FetchError::Oversized(file.size));
         }
-        let mut data = Vec::new();
-        let mut hasher = sha2::Sha256::new();
-        loop {
-            let offset = u64::try_from(data.len()).unwrap_or(u64::MAX);
-            let chunk = self.read_transfer(transfer, file.hash, offset).await?;
-            let received =
-                offset.saturating_add(u64::try_from(chunk.data.len()).unwrap_or(u64::MAX));
-            if received > file.size {
-                return Err(TransferReadError::Oversized(received));
-            }
-            hasher.update(&chunk.data);
-            data.extend_from_slice(&chunk.data);
-            if received >= chunk.total || chunk.data.is_empty() {
-                break;
-            }
-        }
-        let found = BlobHash::from_bytes(hasher.finalize().into());
-        if found != file.hash {
-            return Err(TransferReadError::Mismatch {
-                expected: file.hash,
-                found,
-            });
-        }
-        Ok(data)
+        fetch_chunks(file, sink, |offset| {
+            self.read_transfer(transfer, file.hash, offset)
+        })
+        .await
     }
 
     /// `transfer.close` (protocol 6): drop a transfer this caller opened.
@@ -599,25 +598,4 @@ impl NodeClient {
             subscription,
         ))
     }
-}
-
-/// Why a transfer's file could not be read whole
-/// ([`NodeClient::read_transfer_file`]).
-#[derive(Debug, thiserror::Error)]
-pub enum TransferReadError {
-    /// A call failed.
-    #[error(transparent)]
-    Call(#[from] CallError),
-    /// More arrived than the manifest says, or the manifest says more than
-    /// a transfer may hold.
-    #[error("the file is {0} bytes, more than its manifest or the limit allows")]
-    Oversized(u64),
-    /// What arrived is not the file the manifest names.
-    #[error("the file arrived hashing to {found}, not {expected}")]
-    Mismatch {
-        /// The manifest's hash.
-        expected: BlobHash,
-        /// What arrived hashes to.
-        found: BlobHash,
-    },
 }

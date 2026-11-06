@@ -1,12 +1,14 @@
 //! Blobs moved between nodes chunk by chunk: serving one ([`serve`]) and
-//! fetching a set into a store, checked ([`fetch`]). What the home does
+//! fetching a set into a store, checked ([`fetch`], over the client's
+//! per-file loop with the store's writer, `Blob`). What the home does
 //! for `fleet.blob` and a member with its answers, and what a transfer's
 //! source does for `transfer.read` and an import with its answers
 //! (protocol 6, plan F4): the same shapes, so the same code.
 
 use std::io;
 
-use vessel_fleet::{BlobStore, PastEnd};
+use vessel_client::{ChunkSink, FetchError, fetch_chunks};
+use vessel_fleet::{BlobStore, BlobWriter, PastEnd};
 use vessel_proto::{BlobChunk, BlobHash, BundleFile, ErrorCode, WireError};
 
 /// Up to [`BlobChunk::MAX_LEN`] bytes of blob `hash` in `blobs` from
@@ -40,26 +42,25 @@ pub(crate) async fn serve(
     }
 }
 
-/// Why fetching blobs failed.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum FetchError<E> {
-    /// Asking for a chunk failed.
-    #[error(transparent)]
-    Read(E),
-    /// A blob arrived longer than the manifest said.
-    #[error("a blob arrived longer than its manifest said ({0} bytes)")]
-    Oversized(u64),
-    /// The store could not be written, or a blob did not hash to its name.
-    #[error("a blob: {0}")]
-    Blob(#[source] io::Error),
-    /// A blocking task failed.
-    #[error("a blocking task failed: {0}")]
-    Task(#[from] tokio::task::JoinError),
+/// A blob being fetched: the store's writer, which hashes it as it is
+/// written and puts it in the store only if the hash is right, as the
+/// client's chunk loop wants it.
+struct Blob(BlobWriter);
+
+impl ChunkSink for Blob {
+    fn write(&mut self, data: &[u8]) -> io::Result<()> {
+        io::Write::write_all(&mut self.0, data)
+    }
+
+    fn finish(self) -> io::Result<()> {
+        self.0.finish().map(drop)
+    }
 }
 
 /// Fetch each of `files` that `blobs` lacks, chunk by chunk through `read`
 /// (a blob and an offset), each checked against its hash before it counts
-/// as present, and none taken longer than its manifest says.
+/// as present, and none taken longer than its manifest says (the client's
+/// loop, `vessel_client::fetch_chunks`).
 ///
 /// `read` is a plain `FnMut` returning a future rather than an async
 /// closure: a future of an async closure that borrows the client is not
@@ -80,32 +81,8 @@ where
         if blobs.contains(&file.hash) {
             continue;
         }
-        let mut writer = Some(blobs.writer(file.hash).map_err(FetchError::Blob)?);
-        let mut offset = 0_u64;
-        loop {
-            let BlobChunk { data, total } =
-                read(file.hash, offset).await.map_err(FetchError::Read)?;
-            let length = u64::try_from(data.len()).unwrap_or(u64::MAX);
-            offset = offset.saturating_add(length);
-            if offset > file.size || offset > total {
-                return Err(FetchError::Oversized(offset));
-            }
-            let mut chunk_writer = writer.take().ok_or(FetchError::Oversized(offset))?;
-            chunk_writer = tokio::task::spawn_blocking(move || {
-                io::Write::write_all(&mut chunk_writer, &data).map(|()| chunk_writer)
-            })
-            .await?
-            .map_err(FetchError::Blob)?;
-            if offset >= total || length == 0 {
-                // All of it arrived, or the source sent an empty chunk
-                // (nothing more will come): the hash decides.
-                let _stored = tokio::task::spawn_blocking(move || chunk_writer.finish())
-                    .await?
-                    .map_err(FetchError::Blob)?;
-                break;
-            }
-            writer = Some(chunk_writer);
-        }
+        let writer = Blob(blobs.writer(file.hash).map_err(FetchError::Sink)?);
+        fetch_chunks(file, writer, |offset| read(file.hash, offset)).await?;
     }
     Ok(())
 }

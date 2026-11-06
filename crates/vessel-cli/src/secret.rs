@@ -1,5 +1,5 @@
-//! `vessel fleet secret set|list|delete` (ADR 0012, plan F3): this node's
-//! secrets for the fleet's MCP servers.
+//! `vessel fleet secret set|list|delete|copy` (ADR 0012, plan F3): this
+//! node's secrets for the fleet's MCP servers.
 //!
 //! [Decision Log]
 //! - A value never comes from the command line, which every user of the
@@ -13,12 +13,19 @@
 //!   and Ctrl-D cancel; anything else is part of the value as typed.
 //! - Nothing prints a value: `list` prints names, `set` and `delete` say
 //!   what happened by name.
+//! - `copy` asks the running node to send its value to another fleet node
+//!   (`secret.copy`); the value goes node to node through the home and
+//!   never through this command. The target is a whole node id, never a
+//!   name or a prefix: a value must not reach a node that merely matched.
 
 use std::io::{IsTerminal as _, Read as _};
 
 use vessel_node::fleet::{self, FleetFiles};
 
-use crate::args::SecretCommand;
+use vessel_proto::{NodeId, SecretName};
+
+use crate::args::{SecretCommand, Target};
+use crate::connect::connect;
 use crate::error::CliError;
 use crate::io;
 
@@ -26,7 +33,11 @@ use crate::io;
 const MAX_VALUE: u64 = 64 * 1024;
 
 /// `vessel fleet secret <command>`.
-pub(crate) async fn command(files: FleetFiles, command: SecretCommand) -> Result<(), CliError> {
+pub(crate) async fn command(
+    target: &Target,
+    files: FleetFiles,
+    command: SecretCommand,
+) -> Result<(), CliError> {
     match command {
         SecretCommand::Set { name } => {
             let at_terminal = std::io::stdin().is_terminal();
@@ -78,7 +89,18 @@ pub(crate) async fn command(files: FleetFiles, command: SecretCommand) -> Result
             })
             .await?;
         }
+        SecretCommand::Copy { name, to } => copy(target, name, to).await?,
     }
+    Ok(())
+}
+
+/// `vessel fleet secret copy NAME --to NODE_ID`: the node sends its value
+/// to the fleet node with exactly that id, through the fleet's home. The
+/// value never passes through this command.
+async fn copy(target: &Target, name: SecretName, to: NodeId) -> Result<(), CliError> {
+    let client = connect(target).await?.client;
+    client.secret_copy(name.clone(), to).await?;
+    io::note(&format!("copied {name} to node {to}\n")).await?;
     Ok(())
 }
 

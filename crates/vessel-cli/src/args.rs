@@ -7,7 +7,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use vessel_client::book::NodeName;
 use vessel_client::{BearerToken, RemotePath};
 use vessel_node::fleet::SkipGlob;
-use vessel_proto::{EventSeq, HarnessKind, ProfileName, Scope, SecretName};
+use vessel_proto::{EventSeq, HarnessKind, NodeId, ProfileName, Scope, SecretName};
 
 use crate::selector::SessionSelector;
 
@@ -382,6 +382,18 @@ pub(crate) enum SecretCommand {
         /// Its name.
         name: SecretName,
     },
+    /// Copy a secret to another node of the fleet, which keeps it under
+    /// the same name. That node must have granted the fleet's home `admin`
+    /// (`vessel fleet join --grant read,operate,admin`).
+    Copy {
+        /// Its name.
+        name: SecretName,
+        /// The node's id, whole (`vessel fleet members` on the home, or
+        /// `vessel status` there): a value goes only to the node named
+        /// exactly, never to one a name or a prefix might also match.
+        #[arg(long)]
+        to: NodeId,
+    },
 }
 
 /// `vessel node devices ...`.
@@ -652,6 +664,22 @@ mod tests {
         ));
         // A move always resumes the copy: no --start.
         assert!(Cli::try_parse_from(["vessel", "session", "move", "3f2a", "--start"]).is_err());
+    }
+
+    #[test]
+    fn a_secret_is_copied_to_a_whole_node_id_only() {
+        let id = NodeId::random().to_string();
+        let parsed =
+            Cli::try_parse_from(["vessel", "fleet", "secret", "copy", "TOKEN", "--to", &id]);
+        assert!(parsed.is_ok(), "{parsed:?}");
+        let prefix = id.get(..8).unwrap();
+        for to in ["laptop", prefix] {
+            assert!(
+                Cli::try_parse_from(["vessel", "fleet", "secret", "copy", "TOKEN", "--to", to])
+                    .is_err(),
+                "{to}"
+            );
+        }
     }
 
     #[test]

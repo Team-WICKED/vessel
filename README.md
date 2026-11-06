@@ -220,7 +220,10 @@ vessel fleet members
 - `vessel fleet leave` stops following; the files stay.
 - MCP servers defined in the home's `fleet.toml` reach every session; a
   secret they need is set on each node with `vessel fleet secret set
-  NAME` (typed, not shown, or piped) and never leaves it.
+  NAME` (typed, not shown, or piped), or copied from a node that has it
+  with `vessel fleet secret copy NAME --to NODE_ID` (the target's whole
+  node id; it must have joined with `--grant read,operate,admin`); it is
+  never shown.
 
 ### Copying a conversation or a memory
 
