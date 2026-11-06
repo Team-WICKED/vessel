@@ -31,7 +31,7 @@ install and update).
   installs on first contact; the node book with pinned node ids; `vessel
   node install|status|update` (refuse while sessions are live,
   `--when-idle`, `--now`).
-- **Checked by hand** (coordinator, real OpenSSH on ingwdev1): install by
+- **Checked by hand** (coordinator, real OpenSSH on a Linux machine): install by
   upload, auto-start with `--bind none`, `run` over SSH, `update` refused
   while a session was live, a clean `SIGTERM` stop.
 - **Known limits, accepted for M2:**
