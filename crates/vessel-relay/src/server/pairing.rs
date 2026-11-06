@@ -19,12 +19,12 @@
 //!   is forwarded, so the sender is pushed back by TCP). A splice silent
 //!   in one direction past the idle timeout ends (pongs count).
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Query, State};
+use axum::extract::{ConnectInfo, Extension, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use bytes::Bytes;
@@ -35,9 +35,10 @@ use tokio::sync::oneshot;
 use tokio::time::sleep;
 use vessel_proto::{ConnId, RelayClose, RoutingId};
 
+use super::accept::Authenticated;
 use super::control::after;
 use super::throttle::ByteRate;
-use super::{Limits, Relay, close_with, lock, too_large};
+use super::{Client, Limits, Relay, close_with, lock, too_large};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ConnectQuery {
@@ -52,32 +53,40 @@ pub(super) struct AcceptQuery {
 pub(super) async fn connect(
     State(relay): State<Arc<Relay>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(socket_place): Extension<Authenticated>,
     headers: HeaderMap,
     Query(query): Query<ConnectQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let address = relay.client_address(peer, &headers);
-    let admitted = relay.admit(address);
+    let client = relay.client_address(peer, &headers);
+    let admitted = relay.admit(client);
     relay
         .limit(upgrade)
-        .on_upgrade(move |mut client| async move {
+        .on_upgrade(move |mut socket| async move {
             if !admitted {
-                close_with(&mut client, RelayClose::RateLimited).await;
+                close_with(&mut socket, RelayClose::RateLimited).await;
                 return;
             }
-            pair(&relay, query.node, client, address).await;
+            pair(&relay, query.node, socket, client, &socket_place).await;
         })
 }
 
 pub(super) async fn accept(
     State(relay): State<Arc<Relay>>,
+    Extension(socket_place): Extension<Authenticated>,
     Query(query): Query<AcceptQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
     relay.limit(upgrade).on_upgrade(move |node| async move {
         let waiting = lock(&relay.pending).remove(&query.conn);
         let unclaimed = match waiting {
-            Some(client) => client.send(node).err(),
+            // The connection id was announced to the registered node
+            // only: naming it is the node's data connection
+            // authenticating.
+            Some(client) => {
+                socket_place.promote();
+                client.send(node).err()
+            }
             None => Some(node),
         };
         // The client gave up (or never was): nothing to join.
@@ -114,8 +123,15 @@ fn new_conn() -> Option<ConnId> {
 }
 
 /// Announce `client` to `node`, wait for the node's data connection, then
-/// splice them.
-async fn pair(relay: &Relay, node: RoutingId, mut client: WebSocket, address: IpAddr) {
+/// splice them. Paired, the client's socket has authenticated
+/// (`socket_place`): the node took it.
+async fn pair(
+    relay: &Relay,
+    node: RoutingId,
+    mut client: WebSocket,
+    from: Client,
+    socket_place: &Authenticated,
+) {
     let slot = lock(&relay.nodes).get(&node).map(|registration| {
         (
             registration.incoming.clone(),
@@ -127,7 +143,7 @@ async fn pair(relay: &Relay, node: RoutingId, mut client: WebSocket, address: Ip
         return;
     };
     // Held until this function returns: through the wait and the splice.
-    let Some(_client) = relay.client(node, address) else {
+    let Some(_client) = relay.client(node, from.address) else {
         close_with(&mut client, RelayClose::Full).await;
         return;
     };
@@ -158,7 +174,11 @@ async fn pair(relay: &Relay, node: RoutingId, mut client: WebSocket, address: Ip
     let _late = lock(&relay.pending).remove(&conn);
     drop(place);
     match accepted {
-        Some(node_socket) => splice(relay, client, node_socket).await,
+        Some(node_socket) => {
+            socket_place.promote();
+            relay.refund(from);
+            splice(relay, client, node_socket).await;
+        }
         None => close_with(&mut client, RelayClose::NotAccepted).await,
     }
 }

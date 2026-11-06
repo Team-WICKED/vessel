@@ -16,6 +16,8 @@ mod flood;
 #[cfg(test)]
 mod keepalive;
 #[cfg(test)]
+mod levers;
+#[cfg(test)]
 mod support;
 #[cfg(test)]
 mod tamper;
@@ -37,8 +39,8 @@ use vessel_relay::{
 use vessel_secure::{NodeKeypair, SecureError, initiate, routing_id};
 
 use crate::support::{
-    EchoNode, Forwarder, RawNode, Relay, channel, close_code, connect_url, raw, receive_json,
-    send_json, tls, token, within,
+    EchoNode, Forwarder, RawNode, Relay, channel, close_code, connect_url, raw, raw_from,
+    receive_json, send_json, tls, token, within,
 };
 
 #[tokio::test]
@@ -297,23 +299,31 @@ async fn waiting_clients_are_capped_and_time_out_with_4408() {
 }
 
 #[tokio::test]
-async fn connections_are_rate_limited_per_address() {
+async fn requests_through_a_trusted_proxy_are_rate_limited_by_the_clients_address() {
+    // A direct peer is rate-limited from `accept` (`levers.rs`); through a
+    // trusted proxy, by the address in its header, at the upgrade.
     let mut limits = Limits::default();
     limits.connect_burst = 2;
     limits.connect_refill = Duration::from_secs(3600);
-    let relay = Relay::with_limits(limits).await;
+    let relay = Relay::with_config(limits, Some("x-real-ip")).await;
     let url = connect_url(&relay.url, &RoutingId::from_bytes([1; 16]));
     for _ in 0..2 {
-        let mut client = raw(&url).await;
+        let mut client = raw_from(&url, "x-real-ip", "192.0.2.1").await;
         assert_eq!(
             close_code(&mut client).await,
             Some(RelayClose::NoSuchNode.code())
         );
     }
-    let mut client = raw(&url).await;
+    let mut client = raw_from(&url, "x-real-ip", "192.0.2.1").await;
     assert_eq!(
         close_code(&mut client).await,
         Some(RelayClose::RateLimited.code())
+    );
+    // Another client of the same proxy is not affected.
+    let mut other = raw_from(&url, "x-real-ip", "192.0.2.2").await;
+    assert_eq!(
+        close_code(&mut other).await,
+        Some(RelayClose::NoSuchNode.code())
     );
 }
 

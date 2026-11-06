@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use bytes::Bytes;
@@ -29,16 +29,18 @@ use vessel_secure::proof_challenge;
 
 use crate::ticket::{check_ticket, unix_now};
 
+use super::accept::Authenticated;
 use super::{RegisteringSlot, Registration, Relay, close_with, too_large};
 
 pub(super) async fn upgrade(
     State(relay): State<Arc<Relay>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(socket_place): Extension<Authenticated>,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let address = relay.client_address(peer, &headers);
-    let admitted = relay.admit(address);
+    let client = relay.client_address(peer, &headers);
+    let admitted = relay.admit(client);
     relay
         .limit(upgrade)
         .on_upgrade(move |mut socket| async move {
@@ -49,7 +51,7 @@ pub(super) async fn upgrade(
             // A connection that has not registered yet holds a place among
             // those registering, in all and for its address, until it has
             // (`Limits::max_registering`, `max_registering_per_address`).
-            let Some(registering) = relay.registering(address) else {
+            let Some(registering) = relay.registering(client.address) else {
                 close_with(&mut socket, RelayClose::Full).await;
                 return;
             };
@@ -59,6 +61,11 @@ pub(super) async fn upgrade(
             };
             drop(registering);
             if let Some((node, until)) = registered {
+                // Registered: the socket moves into the share kept for
+                // sockets that have authenticated, and its rate is given
+                // back (`Limits::max_unauthenticated`).
+                socket_place.promote();
+                relay.refund(client);
                 serve(&relay, socket, node, until).await;
             }
         })
