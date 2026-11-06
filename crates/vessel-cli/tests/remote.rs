@@ -427,3 +427,70 @@ async fn a_dropped_ssh_connection_during_attach_resumes() {
     })
     .await;
 }
+
+/// `vessel node update --now` interrupts live sessions only when
+/// confirmed: not at a terminal that takes `--yes`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_now_needs_a_confirmation_then_stops_the_node() {
+    within(async {
+        let machine = Machine::new();
+        let home = machine.home.path().to_str().unwrap().to_owned();
+        let node = ["--node", "me@gpu-box"];
+        let run = machine
+            .vessel(
+                &[&node[..], &["run", "claude", "--detach", "--cwd", &home]].concat(),
+                b"",
+            )
+            .await;
+        assert!(run.ok, "{}", run.stderr);
+        let id = run.stdout.trim().to_owned();
+
+        let next = machine.local.path().join("vesseld-next");
+        let mut bytes = std::fs::read(vessel_testkit::vesseld().unwrap()).unwrap();
+        bytes.extend_from_slice(b"yet another build");
+        std::fs::write(&next, &bytes).unwrap();
+        std::fs::set_permissions(&next, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let next = next.to_str().unwrap().to_owned();
+        let update = |extra: &'static [&'static str]| {
+            [
+                &node[..],
+                &["node", "update", "--vesseld", &next, "--now"],
+                extra,
+            ]
+            .concat()
+        };
+
+        let unconfirmed = machine.vessel(&update(&[]), b"").await;
+        assert!(!unconfirmed.ok);
+        assert!(
+            unconfirmed.stderr.contains("--yes"),
+            "{}",
+            unconfirmed.stderr
+        );
+
+        let stopped = machine.vessel(&update(&["--yes"]), b"").await;
+        assert!(stopped.ok, "{}", stopped.stderr);
+        assert!(
+            stopped.stdout.contains("stopped vesseld"),
+            "{}",
+            stopped.stdout
+        );
+        machine.node_gone().await;
+
+        // The next command starts the node again; the session it had was
+        // interrupted.
+        let sessions = machine
+            .vessel(&[&node[..], &["sessions"]].concat(), b"")
+            .await;
+        assert!(sessions.ok, "{}", sessions.stderr);
+        let line = sessions
+            .stdout
+            .lines()
+            .find(|line| line.contains(&id))
+            .unwrap_or_else(|| panic!("{}", sessions.stdout));
+        assert!(line.contains("interrupted"), "{line}");
+        machine.stop_node().await;
+    })
+    .await;
+}
