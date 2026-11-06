@@ -72,6 +72,7 @@ mod node;
 mod persist;
 mod principal;
 mod profiles;
+mod secret_copy;
 mod secure;
 mod server;
 mod service;

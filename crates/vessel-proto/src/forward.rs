@@ -160,10 +160,12 @@ impl Method {
     ///   and harness info, sessions (list, read, create, send, kill, move
     ///   between profiles), profiles to choose from, and the transfers F4
     ///   pulls through the home (export, import, read, close), with
-    ///   `secret.set`, which `secret.copy` sends to its target.
+    ///   `secret.set`, which `secret.copy` sends to its target, and
+    ///   `secret.list` (names only), which it asks the target first, so a
+    ///   target that would refuse the value never receives it.
     /// - Not forwardable, administration of a node done there: stopping it,
-    ///   its devices, re-reading its profiles, listing, deleting or copying
-    ///   its secrets.
+    ///   its devices, re-reading its profiles, deleting or copying its
+    ///   secrets.
     /// - Not forwardable, the fleet's own plumbing: an envelope is never
     ///   wrapped in another (at most two hops, no loops), and the bundle,
     ///   grant and membership calls belong to the hop between a member and
@@ -189,13 +191,13 @@ impl Method {
             | Self::ImportMemory
             | Self::ReadTransfer
             | Self::CloseTransfer
-            | Self::SetSecret => true,
+            | Self::SetSecret
+            | Self::ListSecrets => true,
             Self::StopNode
             | Self::InviteDevice
             | Self::ListDevices
             | Self::RevokeDevice
             | Self::ReloadProfiles
-            | Self::ListSecrets
             | Self::DeleteSecret
             | Self::CopySecret
             | Self::Forward

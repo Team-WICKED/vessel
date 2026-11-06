@@ -18,6 +18,10 @@
 //!   and answers "is it enabled" from that log (`vessel init` tests). See
 //!   `src/bin/fake_tool.rs`.
 //!
+//! Both harness fakes answer `report <path>` by writing their arguments,
+//! environment and (ACP) MCP servers to that file ([`write_report`]), so a
+//! test sees values without them entering the session's log.
+//!
 //! It also locates a freshly built `vesseld` ([`vesseld()`]) for tests
 //! outside `vessel-node` that need the real node binary (installing it on a
 //! fake remote, attaching to it over `fake-ssh`).
@@ -75,7 +79,10 @@ use tokio::time::error::Elapsed;
 
 #[cfg(feature = "relay")]
 pub mod relay;
+mod report;
 mod vesseld;
+
+pub use report::write_report;
 
 pub use vesseld::vesseld;
 

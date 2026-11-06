@@ -154,7 +154,8 @@ fn the_forwardable_set_is_pinned() {
             "memory.import",
             "transfer.read",
             "transfer.close",
-            "secret.set"
+            "secret.set",
+            "secret.list"
         ]
     );
 }
