@@ -1,0 +1,29 @@
+[package]
+name = "vessel-fleet"
+description = "Vessel fleet bundles: content-addressed manifests, the materialiser that writes them into harness homes, and MCP secret resolution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Each harness's home layout (instruction file, skills directory).
+vessel-harness.workspace = true
+vessel-proto.workspace = true
+
+# Random suffixes for temporary files beside the ones being replaced.
+getrandom.workspace = true
+serde.workspace = true
+# `managed.json`, the record of what the materialiser wrote.
+serde_json.workspace = true
+# Blob hashes (the manifest's `BlobHash` is a SHA-256).
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
