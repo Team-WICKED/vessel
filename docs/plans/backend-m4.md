@@ -405,6 +405,239 @@ member vesseld                         home vesseld
   one node creates, drives and reads a session on another through the home;
   the target's grant to the home caps it; depth counts across nodes.
 
+## Protocol 6 (draft)
+
+Drafted 2026-11-06 by Track H's worker for the coordinator's review; the
+coordinator lands the `vessel-proto` contract. It covers F4 (sessions and
+memory across nodes), the rest of F3 (secrets on the wire) and Track X
+(agent calls across nodes through the home), on ADR 0012 (one home,
+members pull; membership by pairing; secrets by reference; history and
+memory on demand) and ADR 0013 (a credential per session; scopes plus
+ownership; across nodes through the home; grants only shrink).
+
+### What exists to build on
+
+- Members hold a `sync` credential on the home (F2, as built). The home
+  holds none on its members yet: the mutual grant was left for this
+  version. Only the home can reach every node.
+- `fleet.manifest` + `fleet.blob` already move a set of files by content
+  hash, in 1 MiB chunks (`Manifest`, `BundlePath`, `BundleFile`,
+  `BlobChunk`). `fleet.watch` set the precedent of a long poll instead of
+  a new stream type.
+- Every row names `[Scope, since]`; `Call::since` raises it per field; the
+  generated guard checks every call's scope, and for agents (H4) the
+  ownership of the session an `operate` call names (`Target`).
+- `Creator` has `owner`, `device {id}` and `agent {node, session}`.
+  Session structs do not reject unknown fields; some fleet types do.
+
+### Shape in one paragraph
+
+Data moves by **target pull** with one generic mechanism: a source node
+snapshots a set of files into a *transfer* (a manifest of `BundlePath →
+BundleFile` plus chunks by hash, the bundle's own shape) and the target
+reads it. Calls reach other nodes in an **envelope** that travels caller →
+its node → home → target and is checked at each step: a node checks the
+call against its caller as if it were local, the home checks that a
+member speaks only for itself, and the target runs it with the
+intersection of the delivering node's grant there and the origin's
+scopes, ownership and limits applied to the origin. Cross-node waiting is
+a **long-poll read**, not a relayed subscription. Secrets are set and
+copied, never read back.
+
+### Rows
+
+Every row is `since: 6`. "Target" means the node that runs the inner
+call.
+
+Envelope (Track X):
+
+| Method | Scope | Request → response | What it does |
+| --- | --- | --- | --- |
+| `fleet.forward` | Read | `Forward { node: NodeId, call: Call }` → `Forwarded { reply: Reply }` | A client (CLI, device, agent) asks its own node to run `call` on fleet node `node`. The node checks `call`'s own row scope (and, for an agent, the ownership and limits it can check locally) against the caller, as if the call were local, builds the `Origin` (below), and sends `fleet.relay` to its home (or, on the home, `fleet.deliver` to the member). `node` equal to the node itself runs the call locally. |
+| `fleet.relay` | Sync | `Relay { node, call, origin: Origin }` → `Forwarded` | A member asks the home to pass a call on. The home refuses an `origin.node` other than the member's own node (a member speaks only for its own principals), then sends `fleet.deliver` to `node` with its credential there, or, when `node` is the home itself, runs the call as `fleet.deliver` would. |
+| `fleet.deliver` | Read | `Deliver { call, origin }` → `Forwarded` | The home asks a member to run a call on behalf of `origin`. The member runs it as a delegated principal (below). Never passed on: delivering is the last hop, so there are no loops and at most two hops. |
+| `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member. |
+| `fleet.peers` | Sync | `ListPeers` → `Vec<FleetNode>` | The home's view of the fleet for members: `FleetNode { node, name, protocol, reachable }`, the home included. |
+| `fleet.nodes` | Read | `ListNodes` → `Vec<FleetNode>` | What any node knows of its fleet (a member asks its home with `fleet.peers`); the agents' `list_nodes`. |
+
+`Origin { node: NodeId, by: OriginBy, scopes: Vec<Scope> }`, with `OriginBy`
+`owner`, `device { id }` or `agent { session, depth }`. `scopes` is what the
+origin principal holds on its own node; `depth` is its session's agent
+depth.
+
+Transfers, generic (F4):
+
+| Method | Scope | Request → response | What it does |
+| --- | --- | --- | --- |
+| `session.export` | Operate | `ExportSession { session, force: bool }` → `TransferManifest` | Snapshot a structured session's harness files (the descriptor's `session_files`, never `memory/`) into a transfer. A live session mid-turn is refused unless `force`, as for `session.move_profile`. For agents it is an `operate` call on a session, so ownership applies: an agent copies away only what it started. |
+| `memory.export` | Admin | `ExportMemory { profile: Option<ProfileName>, project: Option<PathBuf> }` → `TransferManifest` | Snapshot a profile's memory: one project's (`project`, a working directory on this node) or all of them. `admin`, since memory is kept per account on purpose (decision 4). |
+| `transfer.read` | Read | `ReadTransfer { transfer: TransferId, hash: BlobHash, offset: u64 }` → `BlobChunk` | A chunk of one file of an open transfer, as `fleet.blob`. |
+| `transfer.close` | Read | `CloseTransfer { transfer }` → `Ack` | Drop the snapshot. Transfers also expire after 10 idle minutes and at restart (the staging directory is emptied at start). |
+| `session.import` | Operate | `ImportSession { from: SessionRef { node, session }, profile: Option<ProfileName>, cwd: Option<PathBuf>, start: bool }` → `SessionInfo` | The target pulls: `session.export` on `from.node` (through `fleet.forward` when it is another node), reads every file, places them into the chosen profile's home with the project renamed for the target's working directory, and with `start` creates a session resuming the conversation (`session/load`). A file already there with other content refuses the import before anything is written. The new session records `origin` (below). `move` is `import` then `session.kill` on the source, done by the client. |
+| `memory.import` | Admin | `ImportMemory { from: MemoryRef { node, profile, project }, profile: Option<ProfileName>, project: Option<PathBuf> }` → `MemoryImported { written: u32, same: u32, beside: Vec<BundlePath> }` | The same pull for memory. Conflicting files are written beside the existing ones (`.vessel-incoming`), as the materialiser does; nothing is overwritten. |
+
+`TransferManifest { transfer: TransferId, files: BTreeMap<BundlePath,
+BundleFile>, detail: TransferDetail }`; `TransferDetail` is `session {
+harness, harness_session, profile, cwd, info: SessionInfo }` or `memory {
+harness, profile, project }`. A `TransferId` is 128 random bits and
+belongs to whoever opened it: the same principal (for a delivered call,
+the delivering device together with the origin) must read and close it.
+
+Secrets (F3):
+
+| Method | Scope | Request → response | What it does |
+| --- | --- | --- | --- |
+| `secret.set` | Admin | `SetSecret { name: SecretName, value: SecretValue }` → `Ack` | Store a value in this node's `secrets.toml` (owner-only). |
+| `secret.list` | Admin | `ListSecrets` → `Vec<SecretName>` | Names only. |
+| `secret.delete` | Admin | `DeleteSecret { name }` → `Ack` | |
+| `secret.copy` | Admin | `CopySecret { name, to: NodeId }` → `Ack` | The source sends its value on: `fleet.forward { node: to, call: secret.set { … } }`. The target's `admin` check applies to the delivering grant, so copying needs the target's owner to have granted the home `admin` there, explicitly. |
+
+There is no `secret.get`: no call returns a value, so a value leaves a node
+only into another node's store. `SecretValue` is a new type: serialisable
+(unlike `ResolvedValue`), with a redacted `Debug`, held in memory only for
+the call. Values cross inside the secure channels (client → node, member
+↔ home); the home sees one in passing as it relays, which adds nothing to
+what its credentials on members already allow. Nothing logs it: `vessel-rpc`
+logs method names, never parameters, and every type that can hold one
+redacts its `Debug`.
+
+One field (Track X):
+
+- `session.read` gains `wait: Option<u32>` (seconds, at most 60; `Call::since`
+  6 for the field): with nothing at `from` yet, the node answers once
+  something arrives or the wait ends (an empty page). It serves waiting on
+  another node without relaying subscriptions.
+
+### Authority on the target: the intersection rule
+
+The target runs a delivered call as a **delegated principal**:
+
+- `effective scopes = grant of the delivering device on the target ∩
+  origin.scopes`. The delivering device is the home's (on a member), or
+  the relaying member's own device on the home (when the target is the
+  home). The call's row scope must be in `effective`, as for any caller.
+  So nobody exceeds what the target's owner granted, and an agent never
+  exceeds its own scopes.
+- Ownership and limits apply to the origin. For `origin.by = agent`, an
+  `operate` call on a session needs that session's `created_by` chain to
+  reach `agent { node: origin.node, session }`, followed through the
+  target's own sessions (the `Target` rule as built, generalised to an
+  agent of another node). The target counts the agent's live sessions it
+  holds (at most 8) and refuses a session that would be deeper than 3.
+- The creator chain reaches the target in the envelope and stays in what
+  the session records. A session created by a delivered call records
+  `created_by` as `agent { node: origin.node, session }` for an agent
+  (a variant protocol 5 already has), and as `device { id }` of the
+  delivering device otherwise, which is true on the target. New optional
+  fields keep the rest: `SessionInfo.via: Option<NodeId>` (the home it
+  came through) and `SessionInfo.origin: Option<SessionOrigin>`
+  (`remote { node, by: owner | device { id } }` for a forwarded creation,
+  `imported { node, session }` for an import).
+- A target refuses a delivered call whose `origin.node` is not a member of
+  the delivering home's fleet (the home vouches only for its members).
+
+### What crate owns what
+
+| Crate | Part |
+| --- | --- |
+| `vessel-proto` | The rows, `Origin`, `TransferId`, `TransferManifest`, `TransferDetail`, `SessionRef`, `MemoryRef`, `FleetNode`, `SecretValue`, the `SessionInfo` fields, `ReadEvents.wait`. |
+| `vessel-rpc` | Nothing new beyond the table; a per-call deadline long enough for a forwarded long poll. |
+| `vessel-harness` | Which files a session or a profile's memory is (`session_files`, a new `memory_files`), and renaming a project directory for another working directory (`rebase`: Claude Code's slug; Codex keeps dates, so its rollouts need no rename). |
+| `vessel-fleet` | Transfers as file sets: snapshot into a staging blob store, read by hash, and `place` (write a received set into a home without following links, never overwriting, conflicts beside), shared with the materialiser; `secrets.toml`. |
+| `vessel-node` | The handlers: `transfers` (open, read, close, expiry), imports (pulling through the fleet link), `fleet.forward`/`relay`/`deliver` and the delegated principal in the guard, `fleet.grant` on both sides, `fleet.peers`/`nodes`, `session.read` waiting. |
+| `vessel-client` | Typed calls, `NodeClient::on(node)` for forwarded calls, a transfer reader that checks hashes. |
+| `vessel-mcp` | The tools take `node` (below). |
+| `vessel-cli` | `vessel session move|copy --to NODE [--cwd]`, `vessel fleet memory copy`, `vessel fleet secret set|list|delete|copy`, `--node` on a fleet node through forwarding. |
+
+Tracks: F3 the secret rows; F4 the transfers and imports; X the envelope,
+the mutual grant, `fleet.peers`/`nodes`, `session.read` waiting and the
+tools. F4's cross-node pull depends on X's envelope; within one node
+(another profile) it does not.
+
+### `vessel mcp` across nodes
+
+- `list_nodes` calls `fleet.nodes`. Every other tool takes `node`
+  (default: this node); a call for another node goes in `fleet.forward`.
+- `wait_turn` becomes a loop of `session.read { from, wait: 30 }` until a
+  turn ends, a permission is asked or the session ends. A subscription
+  across two hops would need the home to relay a stream per waiting agent,
+  with lag and resume on each hop; a long poll returns within one round
+  trip of a record landing, holds one call open per waiting agent, and
+  needs nothing new in `vessel-rpc`. The local case uses the same loop, so
+  the tool has one code path.
+- `read_events` is `session.read` (paging) as now; `create_session`,
+  `send_input`, `answer_permission` and `kill_session` are forwarded as
+  they are, and the target applies ownership to the agent.
+
+### What a protocol 5 peer sees
+
+- It knows none of the new methods; a protocol 6 client refuses to send
+  them to a protocol 5 node (`Call::since`), and `session.read` with
+  `wait` likewise, so `vessel-client` falls back to polling there.
+- New optional `SessionInfo` fields are ignored when decoded (session
+  structs do not reject unknown fields), and `created_by` uses only
+  variants it knows, so no stand-in is needed.
+- In a mixed fleet the home lists a protocol 5 member with its version in
+  `fleet.peers`, and refuses to deliver to it (`unsupported`, naming the
+  version): delivering without the envelope would lose the origin, and
+  with it ownership and limits. It still serves the bundle to it.
+
+### Alternatives weighed
+
+- **Who moves the files.** A CLI-mediated push (download from the source
+  to the person's machine, upload to the target) works without a fleet,
+  but needs an upload channel, sends the data over the person's link
+  twice, and is out of reach of agents, which only reach their own node. A
+  source push through the home needs upload calls too, with the target's
+  policy checked per write. **Target pull through the home** needs only
+  reads, which the bundle already has, serves CLI and agents with one call
+  (`session.import` on the target), and a direct link (a mesh, ADR 0013
+  option 1) can replace the hop later without changing the calls. Cost:
+  two hops per chunk until then.
+- **Snapshot or live files.** Reading a live transcript races the harness
+  appending to it; a snapshot at `export` (copied, not linked: an append
+  would change a link too) gives fixed hashes and resumable reads, for
+  the disk it takes until closed or expired.
+- **One transfer mechanism or two.** Sessions and memory are both "a set
+  of files under a harness home"; only what is chosen and where it lands
+  differ. One manifest and chunk shape (the bundle's) serves both, and
+  scopes differ by the opening row (`session.export` operate,
+  `memory.export` admin) rather than inside one method.
+- **An envelope or a `node` field on every request.** A field on each
+  request would change every type and leave the guard to rediscover the
+  intersection per method. Three rows (forward, relay, deliver), each with
+  a real static scope for its own hop, keep the generated guard as it is
+  and put the intersection in one place.
+- **Relayed subscriptions or a long-poll read.** See `vessel mcp` above;
+  `fleet.watch` already chose the long poll for the same reason.
+- **`secret.get`, sealed values, or copy by the source.** A `get` would
+  make every admin client a way to read secrets; sealing a value to the
+  target's key would need a second Noise pattern (against ADR 0009's one
+  mode) to hide it from a home that can already call the target with its
+  own credential. The source sending `secret.set` keeps values in node
+  stores only.
+- **The mutual grant as a credential the member mints and sends, or as a
+  pairing link.** A link reuses ADR 0010 end to end (single use, expiry,
+  scopes, revocation, the device list) and needs no second credential
+  format.
+- **`fleet.push`: dropped.** It would be the protocol's only upload, and
+  would write into the person's own source files on the home, the one
+  place Vessel never writes (ADR 0012: the source is never overwritten
+  automatically). The home's sources are ordinary files the person edits
+  there, or with their usual tools over SSH. If it is wanted later, it is
+  `transfer` in the other direction, on the same shapes.
+
+### Open points for the review
+
+- Whether a member's `sync` credential on the home should also cover
+  relaying (`fleet.relay` at `Sync`), or relaying should be a scope of its
+  own that the home's owner grants per member.
+- Codex's `session/load` after an import into another working directory:
+  the rollout records its first working directory; whether `codex-acp`
+  resumes under a new one needs checking with throwaway homes.
+- Limits for transfers (largest file, total size, files per manifest) and
+  where they live (`Config`).
+
 ## Done criteria (milestone)
 
 - The operator's four Claude logins work as four profiles on one node, and
