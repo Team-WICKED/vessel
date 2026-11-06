@@ -172,3 +172,28 @@ fn missing_program_fails_to_spawn() {
     let spec = CommandSpec::new("/definitely/not/a/program");
     assert!(PtyProcess::spawn(&spec, SIZE).is_err());
 }
+
+/// The modes a full-screen TUI switches on its terminal (alternate screen,
+/// hidden cursor, bracketed paste, kitty keyboard flags) reach the output
+/// byte for byte; clients depend on seeing them, for example to undo them
+/// when detaching. (Unix: Windows' pseudo console re-renders output.)
+#[cfg(unix)]
+#[tokio::test]
+async fn terminal_mode_sequences_pass_through_untouched() {
+    within(async {
+        let (mut pty, output) = PtyProcess::spawn(&fake_tui(), SIZE).unwrap();
+        let mut screen = Screen::new(output);
+        let at = screen.expect(0, "ready").await;
+        pty.write(Bytes::from_static(b"modes on\r")).await.unwrap();
+        let at = screen
+            .expect(at, "\u{1b}[?1049h\u{1b}[?25l\u{1b}[?2004h\u{1b}[>1u")
+            .await;
+        pty.write(Bytes::from_static(b"modes off\r")).await.unwrap();
+        let _ = screen
+            .expect(at, "\u{1b}[<u\u{1b}[?2004l\u{1b}[?25h\u{1b}[?1049l")
+            .await;
+        pty.kill().unwrap();
+        let _ = pty.wait().await;
+    })
+    .await;
+}

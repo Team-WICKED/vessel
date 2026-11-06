@@ -12,7 +12,9 @@
 //! - `initialize`: protocol v1, `loadSession` supported.
 //! - `session/new`: session `fake-session-<n>`, with one `model` select
 //!   option (`fake-small`, the default, or `fake-large`).
-//! - `session/load`: replays one agent message chunk, `replayed <id>`.
+//! - `session/load`: replays the conversation as a user message chunk
+//!   `earlier question` and an agent message chunk `replayed <id>`, then
+//!   answers with the same `model` option as `session/new`.
 //! - `session/set_config_option`: accepts the two models, rejects others.
 //! - `session/prompt`, by prompt text:
 //!   - `plain`: one message chunk `echo: plain`, then `end_turn`;
@@ -150,15 +152,29 @@ async fn serve() -> ExitCode {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: LoadSessionRequest, responder, cx| {
-                cx.send_notification(SessionNotification::new(
-                    request.session_id.clone(),
-                    SessionUpdate::AgentMessageChunk(ContentChunk::new(text(&format!(
-                        "replayed {}",
-                        request.session_id.0
-                    )))),
-                ))?;
-                responder.respond(LoadSessionResponse::new())
+            {
+                let state = Arc::clone(&state);
+                async move |request: LoadSessionRequest, responder, cx| {
+                    let say = |update| {
+                        cx.send_notification(SessionNotification::new(
+                            request.session_id.clone(),
+                            update,
+                        ))
+                    };
+                    say(SessionUpdate::UserMessageChunk(ContentChunk::new(text(
+                        "earlier question",
+                    ))))?;
+                    say(SessionUpdate::AgentMessageChunk(ContentChunk::new(text(
+                        &format!("replayed {}", request.session_id.0),
+                    ))))?;
+                    let model = lock(&state)
+                        .model
+                        .get_or_insert_with(|| MODELS[0].to_owned())
+                        .clone();
+                    responder.respond(
+                        LoadSessionResponse::new().config_options(vec![model_option(&model)]),
+                    )
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )

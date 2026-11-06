@@ -13,8 +13,14 @@
 //!    and again on every `SIGWINCH`.
 //! 4. It prints `ready` and a `> ` prompt, then handles stdin lines:
 //!    `exit [code]` exits with that code (default 0), `env NAME` prints
-//!    `env NAME=<value>` or `env NAME unset`, `cwd` prints `cwd <dir>`, and
-//!    anything else prints `echo: <line>`. EOF on stdin exits 0.
+//!    `env NAME=<value>` or `env NAME unset`, `cwd` prints `cwd <dir>`,
+//!    `modes on` / `modes off` switch the terminal modes a full-screen TUI
+//!    sets (alternate screen, hidden cursor, bracketed paste, kitty
+//!    keyboard flags, as Codex's TUI does) and print `modes on` / `modes
+//!    off`, `escape` (Unix) starts a sleeper in a process group of its own,
+//!    which survives the group kill and keeps the output open, and prints
+//!    `escaped <pid>`, and anything else prints `echo: <line>`. EOF on stdin
+//!    exits 0.
 
 use std::io::{self, BufRead as _, Write as _};
 use std::process::{ExitCode, Stdio};
@@ -94,6 +100,19 @@ fn handle(line: &str) -> Option<ExitCode> {
             Some(value) => say(&format!("env {name}={}", value.to_string_lossy())),
             None => say(&format!("env {name} unset")),
         }
+    } else if line == "modes on" {
+        // Alternate screen, hide the cursor, bracketed paste, push kitty
+        // keyboard flags (disambiguate escape codes).
+        raw(b"\x1b[?1049h\x1b[?25l\x1b[?2004h\x1b[>1u");
+        say("modes on");
+    } else if line == "modes off" {
+        raw(b"\x1b[<u\x1b[?2004l\x1b[?25h\x1b[?1049l");
+        say("modes off");
+    } else if line == "escape" {
+        match spawn_escapee() {
+            Ok(pid) => say(&format!("escaped {pid}")),
+            Err(error) => say(&format!("error: no escape: {error}")),
+        }
     } else if line == "cwd" {
         match std::env::current_dir() {
             Ok(dir) => say(&format!("cwd {}", dir.display())),
@@ -116,6 +135,38 @@ fn spawn_sleeper() -> io::Result<u32> {
     // Dropping a std `Child` neither waits for nor kills it; the grandchild
     // is meant to outlive this handle.
     Ok(child.id())
+}
+
+/// Start a sleeper in a process group of its own (Unix): killing this
+/// program's group does not reach it, and it keeps the output open, like a
+/// daemon a harness started and forgot. Returns its pid.
+#[cfg(unix)]
+fn spawn_escapee() -> io::Result<u32> {
+    use std::os::unix::process::CommandExt as _;
+
+    let child = std::process::Command::new(std::env::current_exe()?)
+        .arg("--sleeper")
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .process_group(0)
+        .spawn()?;
+    Ok(child.id())
+}
+
+#[cfg(not(unix))]
+fn spawn_escapee() -> io::Result<u32> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "process groups are Unix-only",
+    ))
+}
+
+/// Write bytes as they are (escape sequences), flushed.
+fn raw(bytes: &[u8]) {
+    let mut out = io::stdout().lock();
+    let written = out.write_all(bytes).and_then(|()| out.flush());
+    drop(written);
 }
 
 /// Stdin lines, read on a plain thread.
