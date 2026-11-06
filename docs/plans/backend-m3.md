@@ -682,3 +682,27 @@ Paths are in `getpaseo/paseo`.
 - **Route choice.** Every route is probed, and the client switches to one
   that is at least 40 ms faster three times in a row
   (`packages/app/src/runtime/host-runtime.ts`).
+
+## Smoke on one machine (coordinator, 2026-11-06, protocol 5 build)
+
+Release binaries of `backend/m4` (8e1c250), everything in a temporary
+directory, a testkit fake under `codex`; no real harness or account.
+
+- `vesseld relay` with a token file; a node with `--relay ws://...` and no
+  advertised direct route, so a client can only use the relay. The node
+  registered at once.
+- `vessel node pair` printed the link; `vessel nodes add --pair --yes` read
+  it from stdin, showed the key fingerprint, and paired over the relay.
+  The credential file is 0600 in a 0700 directory.
+- Through the relay: `status` (protocol 2..=5), `run codex --detach`,
+  `send`, `log` (the fake echoed the line), `kill`. The node saw a device
+  principal with read, operate and admin, the default for an invitation
+  without scopes.
+- `node devices revoke` closed the device's connections; the next command
+  from it got "this device was revoked on the node".
+- Still to do: the same over `wss://` behind an HTTPS proxy on a public
+  host (the first real TLS test), which needs the operator's go for the
+  host.
+- Seen in passing: when `vessel` exits after a call, the node logs
+  "connection ended abnormally" (the client drops its websocket without a
+  close frame). Harmless; worth a clean close later.
