@@ -72,16 +72,19 @@ impl PtyProcess {
         drop(pair.slave);
 
         let Some(pid) = child.process_id() else {
-            terminate_unidentified(&*child);
+            stop_and_reap(child);
             return Err(PtyError::NoPid { program: program() });
         };
-        let mut killer = Killer::new(&*child, pid).map_err(|source| {
-            terminate_unidentified(&*child);
-            PtyError::Group {
-                program: program(),
-                source,
+        let mut killer = match Killer::new(&*child, pid) {
+            Ok(killer) => killer,
+            Err(source) => {
+                stop_and_reap(child);
+                return Err(PtyError::Group {
+                    program: program(),
+                    source,
+                });
             }
-        })?;
+        };
 
         // From here on, a failure must stop the program before returning.
         let started = threads::start(pair.master, child, killer.reaper(pid));
@@ -196,9 +199,14 @@ impl Drop for PtyProcess {
     }
 }
 
-/// Best-effort stop for a child whose pid could not be used.
-fn terminate_unidentified(child: &(dyn portable_pty::Child + Send + Sync)) {
-    if let Err(error) = child.clone_killer().kill() {
+/// Stop a child that never got its waiter thread, and reap it, so a failed
+/// spawn leaves no zombie behind. Blocks until the child is gone; `spawn`
+/// runs in a blocking context.
+pub(crate) fn stop_and_reap(mut child: Box<dyn portable_pty::Child + Send + Sync>) {
+    if let Err(error) = child.kill() {
         tracing::warn!(%error, "cannot stop PTY program");
+    }
+    if let Err(error) = child.wait() {
+        tracing::warn!(%error, "cannot reap PTY program");
     }
 }
