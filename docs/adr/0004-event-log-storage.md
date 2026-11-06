@@ -34,7 +34,9 @@ Option 3, owned by `vessel-store`:
 - On startup, sessions that were live are marked `Interrupted`.
 - Retention: a byte cap per session and a cap on the number of ended
   sessions; the oldest are pruned first. `session.read` reports the oldest
-  retained seq.
+  retained seq. (Amended 2026-11-06: for a live session, records pruned
+  from the store but still in its ring are read from the ring, so a
+  catching-up follower misses only what the node no longer has at all.)
 - Schema version in `PRAGMA user_version`, with forward-only migrations.
 
 ## Why
