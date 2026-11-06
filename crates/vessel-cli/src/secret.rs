@@ -1,5 +1,5 @@
-//! `vessel fleet secret set|list|delete` (ADR 0012, plan F3): this node's
-//! secrets for the fleet's MCP servers.
+//! `vessel fleet secret set|list|delete|copy` (ADR 0012, plan F3): this
+//! node's secrets for the fleet's MCP servers.
 //!
 //! [Decision Log]
 //! - A value never comes from the command line, which every user of the
@@ -13,12 +13,19 @@
 //!   and Ctrl-D cancel; anything else is part of the value as typed.
 //! - Nothing prints a value: `list` prints names, `set` and `delete` say
 //!   what happened by name.
+//! - `copy` asks the running node to send its value to another fleet node
+//!   (`secret.copy`); the value goes node to node through the home and
+//!   never through this command. The target is named as the fleet knows
+//!   it (`fleet.nodes`), so it need not be reachable from here.
 
 use std::io::{IsTerminal as _, Read as _};
 
 use vessel_node::fleet::{self, FleetFiles};
 
-use crate::args::SecretCommand;
+use vessel_proto::{FleetNode, ListNodes, SecretName};
+
+use crate::args::{SecretCommand, Target};
+use crate::connect::connect;
 use crate::error::CliError;
 use crate::io;
 
@@ -26,7 +33,11 @@ use crate::io;
 const MAX_VALUE: u64 = 64 * 1024;
 
 /// `vessel fleet secret <command>`.
-pub(crate) async fn command(files: FleetFiles, command: SecretCommand) -> Result<(), CliError> {
+pub(crate) async fn command(
+    target: &Target,
+    files: FleetFiles,
+    command: SecretCommand,
+) -> Result<(), CliError> {
     match command {
         SecretCommand::Set { name } => {
             let at_terminal = std::io::stdin().is_terminal();
@@ -78,8 +89,41 @@ pub(crate) async fn command(files: FleetFiles, command: SecretCommand) -> Result
             })
             .await?;
         }
+        SecretCommand::Copy { name, to } => copy(target, name, &to).await?,
     }
     Ok(())
+}
+
+/// `vessel fleet secret copy NAME --to NODE`: the node sends its value to
+/// fleet node `to` (its name in the fleet, or its id or the start of it),
+/// through the fleet's home. The value never passes through this command.
+async fn copy(target: &Target, name: SecretName, to: &str) -> Result<(), CliError> {
+    let client = connect(target).await?.client;
+    let nodes = client.call(ListNodes).await?;
+    let node = fleet_node(&nodes, to)?;
+    client.secret_copy(name.clone(), node.node).await?;
+    io::note(&format!("copied {name} to {}\n", node.name)).await?;
+    Ok(())
+}
+
+/// The fleet node named `text`, or whose id is `text` or starts with it.
+fn fleet_node<'a>(nodes: &'a [FleetNode], text: &str) -> Result<&'a FleetNode, CliError> {
+    if let Some(named) = nodes.iter().find(|node| node.name == text) {
+        return Ok(named);
+    }
+    let wanted = text.trim().to_ascii_lowercase();
+    let matches: Vec<&FleetNode> = nodes
+        .iter()
+        .filter(|node| !wanted.is_empty() && node.node.to_string().starts_with(&wanted))
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok(one),
+        [] => Err(CliError::NoSuchFleetNode(text.to_owned())),
+        several => Err(CliError::AmbiguousFleetNode {
+            text: text.to_owned(),
+            count: several.len(),
+        }),
+    }
 }
 
 /// Standard input, piped: all of it, without one trailing newline.
@@ -152,4 +196,39 @@ fn read_hidden() -> Result<String, CliError> {
         }
     }
     String::from_utf8(value).map_err(|_not_utf8| CliError::Usage("a secret must be UTF-8 text"))
+}
+
+#[cfg(test)]
+mod tests {
+    use vessel_proto::{NodeId, PROTOCOL_VERSION};
+
+    use super::*;
+
+    fn node(name: &str) -> FleetNode {
+        FleetNode {
+            node: NodeId::random(),
+            name: name.to_owned(),
+            protocol: PROTOCOL_VERSION,
+            reachable: true,
+        }
+    }
+
+    #[test]
+    fn a_fleet_node_is_named_or_given_by_its_id() {
+        let nodes = [node("laptop"), node("desktop")];
+        assert_eq!(fleet_node(&nodes, "desktop").unwrap().name, "desktop");
+        let id = nodes[0].node.to_string();
+        assert_eq!(
+            fleet_node(&nodes, id.get(..8).unwrap()).unwrap().name,
+            "laptop"
+        );
+        assert!(matches!(
+            fleet_node(&nodes, "nas"),
+            Err(CliError::NoSuchFleetNode(_))
+        ));
+        assert!(matches!(
+            fleet_node(&nodes, ""),
+            Err(CliError::NoSuchFleetNode(_))
+        ));
+    }
 }

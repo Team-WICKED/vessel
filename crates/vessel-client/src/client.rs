@@ -2,16 +2,16 @@
 
 use std::path::PathBuf;
 use vessel_proto::{
-    BlobChunk, BlobHash, BundleFile, BundlePath, ClientInfo, CloseTransfer, CreateSession,
-    DeleteSecret, DeviceId, DeviceInfo, EventPage, EventSeq, ExportMemory, ExportSession,
-    FleetMember, Forward, Generation, GetManifest, GetNode, GetSession, Harness, HarnessKind,
-    ImportMemory, ImportSession, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
-    ListMembers, ListProfiles, ListSecrets, ListSessions, MAX_TRANSFER_FILE, Manifest,
-    MemoryImported, MoveProfile, NodeId, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion,
-    ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, ReportApplied, RevokeDevice, Scope,
-    SecretName, SecretValue, SendInput, SessionId, SessionImported, SessionInfo, SessionInput,
-    SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, TransferId, TransferManifest,
-    WatchFleet,
+    BlobChunk, BlobHash, BundleFile, BundlePath, ClientInfo, CloseTransfer, CopySecret,
+    CreateSession, DeleteSecret, DeviceId, DeviceInfo, EventPage, EventSeq, ExportMemory,
+    ExportSession, FleetMember, Forward, Generation, GetManifest, GetNode, GetSession, Harness,
+    HarnessKind, ImportMemory, ImportSession, Invitation, InviteDevice, KillSession, ListDevices,
+    ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions, MAX_TRANSFER_FILE,
+    Manifest, MemoryImported, MoveProfile, NodeId, NodeInfo, ProfileInfo, ProfileName,
+    ProtocolVersion, ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, ReportApplied,
+    RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId, SessionImported,
+    SessionInfo, SessionInput, SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, TransferId,
+    TransferManifest, WatchFleet,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription, Unary};
 
@@ -395,6 +395,22 @@ impl NodeClient {
     /// `NotFound` when it is not set; otherwise see [`CallError`].
     pub async fn secret_delete(&self, name: SecretName) -> Result<(), CallError> {
         self.connection.call(DeleteSecret { name }).await.map(drop)
+    }
+
+    /// `secret.copy` (protocol 6): the node sends its value of secret
+    /// `name` to fleet node `to`, which stores it under the same name.
+    /// Needs `admin` here, and `to` must have granted the fleet's home
+    /// `admin`.
+    ///
+    /// # Errors
+    /// `NotFound` when the secret is not set here; `Forbidden` when `to`
+    /// has not granted the home `admin` (the message says how to); otherwise
+    /// see [`CallError`].
+    pub async fn secret_copy(&self, name: SecretName, to: NodeId) -> Result<(), CallError> {
+        self.connection
+            .call(CopySecret { name, to })
+            .await
+            .map(drop)
     }
 
     /// `session.export` (protocol 6): snapshot a structured session's

@@ -363,14 +363,17 @@ member vesseld                         home vesseld
   gateway (follow, kept edits, reports, scopes, delete and restore),
   between two nodes through an in-process relay (join while running,
   follow an edit, leave), and the CLI through a relay.
-- **F3 (done, except `secret.copy`):** `secrets.toml`, `vessel fleet
-  secret set|list|delete`, and the fleet's `McpSource` (`FleetMcp`) in
+- **F3 (done):** `secrets.toml`, `vessel fleet secret
+  set|list|delete|copy`, and the fleet's `McpSource` (`FleetMcp`) in
   place of `NoMcpServers`; the `secret.set|list|delete` rows call the same
-  store (protocol 6); `secret.copy` waits for Track X's envelope. Tests: the store
+  store (protocol 6), and `secret.copy` sends the value as `secret.set`
+  through the envelope (`pass_on`) as the caller. Tests: the store
   (comments kept, owner-only, errors never quoting a value), a member
   receiving the definitions, a session's agent getting a server with
   this node's secret and starting without it once the secret is deleted
-  (named in its log), and the CLI (stdin only, names only).
+  (named in its log), the CLI (stdin only, names only), and a copy
+  between members through the home, refused where the home was not
+  granted `admin` and to the home itself.
 - **F4 (done, 2026-11-06):** `session.export`, `memory.export`,
   `transfer.read`/`close` and `session.import`/`memory.import`, between
   profiles of one node and between fleet nodes, the client's calls and
@@ -385,8 +388,10 @@ member vesseld                         home vesseld
   end to end with `fake-acp` for Claude Code and Codex profiles, an
   agent's ownership, a session moved and a memory copied between two
   members through the home on an in-process relay, and the CLI.
-- **Next:** `secret.copy` (F3's last row), now that the envelope is
-  built.
+- **Known cost:** an import from this node's own profile stages the
+  files twice (the export's snapshot, then the import's incoming store),
+  so it briefly takes twice their size on disk; kept, since the same path
+  serves imports from other nodes.
 
 ## Track F: fleet and first run
 
@@ -488,7 +493,7 @@ Drafted 2026-11-06 by Track H's worker, accepted by the coordinator the
 same day with the decisions recorded at the end of this section. The
 contract (`vessel-proto` types and rows, `PROTOCOL_VERSION = 6`, the rpc
 `Unary` markers, node stubs answering `unsupported` from
-`vessel-node/src/unbuilt.rs`) landed before F3, F4 and X build on it. It covers F4 (sessions and
+`vessel-node/src/unbuilt.rs`, removed once every row was built) landed before F3, F4 and X build on it. It covers F4 (sessions and
 memory across nodes), the rest of F3 (secrets on the wire) and Track X
 (agent calls across nodes through the home), on ADR 0012 (one home,
 members pull; membership by pairing; secrets by reference; history and

@@ -24,14 +24,15 @@
 //! - Values enter only through `vessel fleet secret set` (a prompt without
 //!   echo, or standard input), never a command line. `set_secret`,
 //!   `secret_names` and `delete_secret` are what protocol 6's `secret.set`,
-//!   `secret.list` and `secret.delete` (admin) will call; there is no way
-//!   to read a value back out, by design.
+//!   `secret.list` and `secret.delete` (admin) call. No call reads a value
+//!   back out; `secret_value` only feeds `secret.copy`, which sends it to
+//!   another node's store as `secret.set`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr as _;
 
-use vessel_proto::{ResolvedValue, SecretName};
+use vessel_proto::{ResolvedValue, SecretName, SecretValue};
 
 use super::files::{FileError, FleetFiles, FleetLock};
 
@@ -144,6 +145,22 @@ fn warn_if_shared(_path: &Path) {}
 pub fn secret_names(files: &FleetFiles) -> Result<Vec<SecretName>, SecretsError> {
     let (secrets, _digest) = read(files)?;
     Ok(secrets.names().cloned().collect())
+}
+
+/// The value of secret `name`, for `secret.copy` to send on to another
+/// node's store (the only way a value leaves this file); `None` if it is
+/// not set. Blocks.
+///
+/// # Errors
+/// See [`SecretsError`].
+pub(crate) fn secret_value(
+    files: &FleetFiles,
+    name: &SecretName,
+) -> Result<Option<SecretValue>, SecretsError> {
+    let (secrets, _digest) = read(files)?;
+    Ok(secrets
+        .get(name)
+        .map(|value| SecretValue::new(value.expose().to_owned())))
 }
 
 /// Set secret `name` to `value` in `secrets.toml` (created owner-only),

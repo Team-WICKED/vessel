@@ -23,6 +23,8 @@ mod profiles;
 #[cfg(unix)]
 mod remote;
 #[cfg(test)]
+mod secrets_across;
+#[cfg(test)]
 mod secure;
 #[cfg(test)]
 mod structured;
