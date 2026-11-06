@@ -157,17 +157,19 @@ struct RelayArgs {
     max_connections: usize,
     /// Of --max-connections, the connections that have not authenticated
     /// yet (registered as a node, or paired as a client): the rest is kept
-    /// for those that have.
+    /// for those that have. Less than half of --max-connections.
     #[arg(long, env = "VESSEL_RELAY_MAX_UNAUTHENTICATED", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_unauthenticated)]
     max_unauthenticated: usize,
     /// Connections not authenticated yet from one address (an IPv6 /64; a
     /// /56 twice this, a /48 four times), counted from accept; not
-    /// applied to a trusted proxy's connections.
+    /// applied to a trusted proxy's connections. Four times it must be
+    /// less than half of --max-unauthenticated.
     #[arg(long, env = "VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_connections_per_address)]
     max_connections_per_address: usize,
-    /// Nodes registering at once from one address.
+    /// Nodes registering at once from one address (a /48 four times this,
+    /// which must be less than half of --max-registering).
     #[arg(long, env = "VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_registering_per_address)]
     max_registering_per_address: usize,
@@ -176,7 +178,8 @@ struct RelayArgs {
     #[arg(long, env = "VESSEL_RELAY_RESERVED_REGISTERING",
         default_value_t = vessel_relay::Limits::default().reserved_registering)]
     reserved_registering: usize,
-    /// Relayed client connections at once from one address.
+    /// Relayed client connections at once from one address (a /48 four
+    /// times this, which must be less than half of --max-clients).
     #[arg(long, env = "VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_clients_per_address)]
     max_clients_per_address: usize,
@@ -297,6 +300,12 @@ async fn relay(args: Box<RelayArgs>) -> ExitCode {
     limits.max_registering_per_address = args.max_registering_per_address;
     limits.reserved_registering = args.reserved_registering;
     limits.max_clients_per_address = args.max_clients_per_address;
+    if let Err(unbalanced) = limits.check() {
+        // One /48 could hold half of a pool: the relay could be denied by
+        // a single host's network.
+        tracing::error!(error = %unbalanced, "relay failed to start");
+        return ExitCode::FAILURE;
+    }
     tracing::info!(
         max_nodes = limits.max_nodes,
         max_registering = limits.max_registering,

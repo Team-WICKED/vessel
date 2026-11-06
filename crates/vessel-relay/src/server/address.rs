@@ -21,23 +21,34 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
+/// How many times a per-address limit one IPv6 `/48` may hold: the most
+/// any block may. The counting ([`V6_LAYERS`]) and the startup check that
+/// no `/48` can hold half of a pool (`Limits::check`) both take it from
+/// here, so they cannot drift apart.
+pub(crate) const WIDEST: u32 = 4;
+
+/// The IPv6 blocks an address counts in, narrowest first, each with how
+/// many times a per-address limit it may hold. The last, the widest,
+/// holds the most ([`WIDEST`]).
+const V6_LAYERS: [(u8, u32); 3] = [(64, 1), (56, 2), (48, WIDEST)];
+
 /// One block an address counts in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Block {
     /// The address with every bit past `prefix` cleared.
     network: IpAddr,
     prefix: u8,
+    /// How many times a per-address limit it may hold (1 for an IPv4
+    /// address; [`V6_LAYERS`] for IPv6).
+    scale: u32,
 }
 
 impl Block {
     /// How many times a per-address limit this block may hold: 1 for an
-    /// IPv4 address or an IPv6 `/64`, 2 for a `/56`, 4 for a `/48`.
+    /// IPv4 address or an IPv6 `/64`, 2 for a `/56`, [`WIDEST`] for a
+    /// `/48`.
     pub(crate) const fn scale(self) -> u32 {
-        match self.prefix {
-            56 => 2,
-            48 => 4,
-            _ => 1,
-        }
+        self.scale
     }
 
     /// `limit` for this block ([`Block::scale`]).
@@ -59,11 +70,12 @@ pub(crate) fn blocks(address: IpAddr) -> Vec<Block> {
         IpAddr::V4(v4) => vec![v4_block(v4)],
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => vec![v4_block(v4)],
-            None => [64, 56, 48]
+            None => V6_LAYERS
                 .into_iter()
-                .map(|prefix| Block {
+                .map(|(prefix, scale)| Block {
                     network: IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & v6_mask(prefix))),
                     prefix,
+                    scale,
                 })
                 .collect(),
         },
@@ -74,6 +86,7 @@ const fn v4_block(v4: Ipv4Addr) -> Block {
     Block {
         network: IpAddr::V4(v4),
         prefix: 32,
+        scale: 1,
     }
 }
 
@@ -189,6 +202,21 @@ mod tests {
             blocks(ip("2001:db8:aa:1::1"))[2],
             blocks(ip("2001:db8:aa:2::1"))[2]
         );
+    }
+
+    #[test]
+    fn the_widest_block_holds_the_most() {
+        let scales: Vec<u32> = V6_LAYERS.iter().map(|&(_prefix, scale)| scale).collect();
+        assert!(
+            scales.windows(2).all(|pair| pair[0] <= pair[1]),
+            "{scales:?}"
+        );
+        assert_eq!(V6_LAYERS.last(), Some(&(48, WIDEST)));
+        let widest = blocks(ip("2001:db8::1"))
+            .iter()
+            .map(|block| block.scale())
+            .max();
+        assert_eq!(widest, Some(WIDEST));
     }
 
     #[test]

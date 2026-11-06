@@ -12,6 +12,7 @@
 
 mod accept;
 mod address;
+mod balance;
 mod control;
 mod pairing;
 mod rate;
@@ -37,6 +38,7 @@ use vessel_secure::MAX_RECORD;
 
 pub use self::address::{BadProxy, TrustedProxy};
 use self::address::{Block, blocks};
+pub use self::balance::Unbalanced;
 use self::rate::RateLimiter;
 use self::throttle::{Refusal, RefusalLog};
 use crate::carrier::Keepalive;
@@ -91,6 +93,10 @@ use crate::{ACCEPT_PATH, CONNECT_PATH, HEALTH_PATH, NODE_PATH};
 ///   left; until then the connection holds no place, for at most
 ///   `first_message_timeout`. The client address header is believed only
 ///   from `trusted_proxies`.
+/// - After round 8: `Limits::check` refuses limits under which one `/48`
+///   could hold half of a pool or more (`balance`), so the bar holds
+///   whatever the operator sets; the defaults pass (registering per
+///   address 7, `max_unauthenticated` 400).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Limits {
@@ -135,14 +141,18 @@ pub struct Limits {
     pub max_connections: usize,
     /// Of `max_connections`, the sockets that have not authenticated yet
     /// (a registered node's control connection and a client paired with a
-    /// node have): the rest is kept for those that have.
+    /// node have): the rest is kept for those that have. Less than half of
+    /// `max_connections` ([`Limits::check`]).
     pub max_unauthenticated: usize,
     /// Sockets not authenticated yet from one address (an IPv4 address, an
     /// IPv6 `/64`; a `/56` twice this, a `/48` four times), counted from
-    /// `accept`. Not applied to a trusted proxy's connections.
+    /// `accept`. Not applied to a trusted proxy's connections. A `/48`'s
+    /// share less than half of `max_unauthenticated` ([`Limits::check`]).
     pub max_connections_per_address: usize,
     /// Control connections still registering, or waiting for a place, at
-    /// once from one address (scaled as `max_connections_per_address`).
+    /// once from one address (scaled as `max_connections_per_address`). A
+    /// `/48`'s share less than half of `max_registering`
+    /// ([`Limits::check`]).
     pub max_registering_per_address: usize,
     /// Of `max_registering`, the places kept for nodes that registered
     /// here before: taken only when no open place is left, by a
@@ -151,7 +161,8 @@ pub struct Limits {
     /// counts as half.
     pub reserved_registering: usize,
     /// Relayed client connections at once from one address (scaled as
-    /// `max_connections_per_address`).
+    /// `max_connections_per_address`). A `/48`'s share less than half of
+    /// `max_clients` ([`Limits::check`]).
     pub max_clients_per_address: usize,
     /// How long a registering node has for its first message, and a
     /// spliced client for its first record.
@@ -179,14 +190,30 @@ impl Default for Limits {
             max_bytes_per_second: 16 * 1024 * 1024,
             header_read_timeout: Duration::from_secs(10),
             max_connections: 1000,
-            max_unauthenticated: 500,
+            max_unauthenticated: 400,
             max_connections_per_address: 16,
-            max_registering_per_address: 8,
+            max_registering_per_address: 7,
             reserved_registering: 16,
             max_clients_per_address: 16,
             first_message_timeout: Duration::from_secs(2),
             shutdown_grace: Duration::from_secs(5),
         }
+    }
+}
+
+impl Limits {
+    /// Whether these limits keep the bar: one IPv6 `/48` (at four times
+    /// each per-address limit) holds less than half of the registering
+    /// places, of the client places and of the unauthenticated share, and
+    /// that share is less than half of `max_connections` (`balance`).
+    /// The defaults pass; `serve` and `vesseld relay` refuse limits that
+    /// do not.
+    ///
+    /// # Errors
+    /// The first rule broken, naming both limits by their `vesseld relay`
+    /// flags, the largest share that would pass and the smallest pool.
+    pub fn check(&self) -> Result<(), Unbalanced> {
+        balance::check(self)
     }
 }
 
@@ -209,6 +236,10 @@ pub struct RelayConfig {
     /// a header). Their sockets are not counted per address at `accept`;
     /// anyone else is counted by its socket address throughout.
     pub trusted_proxies: Vec<TrustedProxy>,
+    /// Whether `serve` refuses limits that break the bar
+    /// ([`Limits::check`]). Only tests that exercise one cap at a tiny
+    /// scale turn it off; `vesseld relay` cannot.
+    pub check_limits: bool,
 }
 
 impl RelayConfig {
@@ -220,6 +251,7 @@ impl RelayConfig {
             limits: Limits::default(),
             client_address_header: None,
             trusted_proxies: Vec::new(),
+            check_limits: true,
         }
     }
 }
@@ -227,8 +259,9 @@ impl RelayConfig {
 /// Serve the relay on `listener` until `shutdown`.
 ///
 /// # Errors
-/// A client address header without a trusted proxy (`InvalidInput`), or
-/// the listener failed.
+/// A client address header without a trusted proxy, or limits that break
+/// the bar ([`Limits::check`]), both `InvalidInput`; or the listener
+/// failed.
 pub async fn serve(
     listener: TcpListener,
     config: RelayConfig,
@@ -240,6 +273,11 @@ pub async fn serve(
             "a client address header is believed only from trusted proxies: name at least one \
              (--trusted-proxy)",
         ));
+    }
+    if config.check_limits
+        && let Err(unbalanced) = config.limits.check()
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, unbalanced));
     }
     let mut config = config;
     if config.client_address_header.is_none() && !config.trusted_proxies.is_empty() {

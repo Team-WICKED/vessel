@@ -355,7 +355,7 @@ scope, and the README says so.
 - From `accept`, new connections are rate-limited per address with the
   limiter the handlers used (30 at once, then one a second), and an
   address may hold 16 sockets not authenticated yet (was 128). Sockets
-  not authenticated yet fill at most `max_unauthenticated` (500) of
+  not authenticated yet fill at most `max_unauthenticated` (400) of
   `max_connections` (1000); a socket moves into the rest once it
   authenticates (a node registered, a client paired with its node, the
   node's data connection claimed) and gives its rate token back, so
@@ -377,6 +377,15 @@ scope, and the README says so.
   (its own per-client limits, nginx's `limit_conn`, stand in); requests
   through it are rate-limited by the header's address at the upgrade
   (`4429`). The per-address client limit defaults to 16 (was 32).
+- The bar holds whatever the operator sets: the relay refuses to start
+  (`Limits::check`, in `serve` and `vesseld relay`) unless one `/48`, at
+  four times each per-address limit, holds less than half of the
+  registering places, of the client places and of the unauthenticated
+  share, and that share is less than half of `max_connections`. The
+  refusal names both flags, the largest value that would pass and the
+  smallest pool. The `/48` multiplier is one constant that the counting
+  and the check share. Two defaults moved to pass: registering per
+  address 8 to 7, and `max_unauthenticated` 500 to 400.
 - Cost: a client through a trusted proxy is only counted once its request
   arrives, so a proxy without its own connection limit is still a lever
   (the README's nginx example sets one). A known node in a kept place
