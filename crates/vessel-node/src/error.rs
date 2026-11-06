@@ -43,10 +43,11 @@ pub(crate) enum ServiceError {
     /// No session with this id, live or stored.
     #[error("no session {0}")]
     NotFound(SessionId),
-    /// The session ended in an earlier run of this node; it can be read but
+    /// The session has ended and is served from the store (it ended in an
+    /// earlier run, or in this one and was handed over); it can be read but
     /// not driven.
-    #[error("session {0} ended in an earlier run of this node")]
-    EndedEarlier(SessionId),
+    #[error("session {0} has ended; its log can still be read")]
+    Ended(SessionId),
     /// `from` is past the end of the session's log.
     #[error("session {session} has {next} records; cannot start at {from}")]
     Ahead {
@@ -80,7 +81,7 @@ impl ServiceError {
     pub(crate) fn to_wire(&self) -> WireError {
         let code = match self {
             Self::NotFound(_) => ErrorCode::NotFound,
-            Self::EndedEarlier(_) => ErrorCode::Conflict,
+            Self::Ended(_) => ErrorCode::Conflict,
             Self::Ahead { .. } => ErrorCode::InvalidRequest,
             Self::Session(error) => error.code(),
             Self::Store(error) => error.code(),

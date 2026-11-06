@@ -8,7 +8,8 @@
 //! - the store, for anything older. It first waits until the store has
 //!   committed everything up to the ring's oldest record, because a record
 //!   can leave the ring before the store has it;
-//! - the store alone, for sessions from earlier runs.
+//! - the store alone, for ended sessions the store serves (from earlier
+//!   runs, or handed over once their log was complete).
 //!
 //! A forwarder never buffers. When the client is slow, sending waits on the
 //! connection's outbound queue; meanwhile the live broadcast moves on, and
@@ -212,7 +213,7 @@ impl Forwarder {
         Ok(true)
     }
 
-    /// A session from an earlier run: everything stored, then the end.
+    /// A session the store serves: everything stored, then the end.
     async fn stored(&mut self) -> Result<SubscriptionEnd, Closed> {
         loop {
             let Some(records) = self.page().await else {

@@ -9,7 +9,7 @@
 //!                                                    | Handler
 //!                                                 service (routing only)
 //!                                                    |
-//!            sessions: live runtime sessions + stored ones from earlier runs
+//!            sessions: live runtime sessions + stored ones (ended, handed over)
 //!              |  create ---> vessel-session ---durable records---> persist ---> vessel-store
 //!              |  subscribe -> follow (ring) + store gap fill ---> Outbound
 //!              |  read ------> wait until durable, then the store
@@ -22,7 +22,8 @@
 //!   errors to wire errors once.
 //! - `sessions`: the node's view of sessions, live and stored.
 //! - `persist`: drains each session's durable channel into the store and
-//!   publishes how far it is committed.
+//!   publishes how far it is committed; once a log is complete, `sessions`
+//!   removes the session from the runtime and the store serves it.
 //! - `subscribe`: forwards a session's records to one subscription.
 //! - `node`, `shutdown`: start, and stop in an order that loses nothing.
 //!
