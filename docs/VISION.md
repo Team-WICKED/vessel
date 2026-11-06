@@ -53,6 +53,12 @@ Things the GOAT project wanted and Vessel inherits:
   It is also where the hard part lives: identity, authorization, and what one
   agent is allowed to do on another node.
 
+Milestone 4 drafts this (2026-11-06; ADRs 0011 to 0013): profiles per node,
+one fleet home that members pull configuration from, and agents as
+principals with a credential per session. Under one operating-system user,
+that identity is accounting and least privilege, not isolation; sandboxing
+agents is later work.
+
 ## 4. opencodex: any model in any harness
 
 Every harness should be able to use every model, through a routing proxy the
