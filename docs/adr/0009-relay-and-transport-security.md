@@ -392,3 +392,45 @@ scope, and the README says so.
   and a new node in an open place are told apart by their first message,
   so a silent connection costs nothing but its socket, which the accept
   limits bound.
+
+## Amendment (2026-11-06): clients a node has not admitted yet
+
+The review's round 9 found that a relayed client counted as authenticated,
+and got its rate token back, once spliced to its node, before the node
+knew who it was. A client that completed the Noise handshake to the
+node's public key and sent no preamble then held one of the node's 64
+permits for channels not yet admitted for 10 s. That budget was the
+node's whole, direct route included, and one `/48`'s share of a relay's
+clients (64) held all of it: no device could reach the node by any route.
+A trusted proxy's client-address header that was a list or carried a port
+was counted as the proxy, and charged no rate. Now:
+
+- The relay counts a node's clients from one address (scaled for IPv6 as
+  every per-address count) while the node admits them,
+  `max_node_clients_per_address` (4; a `/48` 16), refused `4503`. The
+  relay cannot see admission, which is encrypted to the node; it infers
+  it: a node drops a relayed channel it has not admitted within
+  `RELAYED_ADMISSION` (5 s, handshake and preamble together), so a splice
+  still open after `client_settle` (7 s) was admitted. Only then does
+  the client leave that count, move into the share kept for sockets that
+  authenticated, and get its rate token back.
+- The node keeps relayed channels waiting for admission in a budget of
+  their own, `RELAYED_UNADMITTED` (40), apart from the direct route's 64,
+  and gives them 5 s in all instead of 10 s for each step. Both constants
+  live in `vessel-relay`, so the relay's startup check can hold one
+  `/48`'s share of a node's clients (16) under half of the node's budget.
+- A trusted proxy's header must hold one bare address, IPv4 or IPv6;
+  anything else is answered `400`. A request from a trusted proxy without
+  the header counts as the proxy, and is charged the rate as the proxy.
+- Alternatives: counting every client of a node per address for as long
+  as it is connected (a household or an office behind one address could
+  then keep only a few devices on one node at once); refunding nothing
+  for clients (every device connection would spend its address's rate
+  for good); reading the node's answers to tell admission (the records
+  are opaque, and a refusal is answered before the close, so a stranger
+  would get its token back).
+- Cost: the inference trusts nodes to keep `RELAYED_ADMISSION`. A node
+  from before this amendment keeps an unadmitted channel up to 20 s, so
+  behind it a relay settles such a client early; that node also has the
+  old shared budget, so it is protected only by upgrading. A device must
+  finish its handshake and preamble through a relay within 5 s.

@@ -290,9 +290,10 @@ In the crate table's order.
     device's connections, each of which has its own RPC server).
     `SecureGateway::accept` answers the Noise handshake with the node's key
     pair through `vessel_relay::respond` (closing with `4401` when it
-    fails), then the device preamble; at most 64 channels may be in their
-    handshake or preamble at once, with frames limited to 64 KiB until
-    admitted. Carriers come from `/secure` (pinged every 10 s, dropped
+    fails), then the device preamble; at most 64 direct channels and,
+    apart, 40 relayed ones (`vessel_relay::RELAYED_UNADMITTED`) may be in
+    their handshake or preamble at once, a relayed one with 5 s for both
+    (`RELAYED_ADMISSION`), with frames limited to 64 KiB until admitted. Carriers come from `/secure` (pinged every 10 s, dropped
     after 30 s of silence) and from one `NodeLink` per relay (`relays`):
     each `--relay`, with the relays' token, and on a fleet member with no
     route of its own its current home's relays, added while the node runs

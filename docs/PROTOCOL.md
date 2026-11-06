@@ -173,10 +173,14 @@ every method.)
     connections; through a trusted reverse proxy, where the client's
     address is known only from the request, that rate is checked at the
     upgrade and refused with `4429`. A connection that authenticates (a
-    node registered, a client paired with its node, a node's data
-    connection claimed) gives its share of the rate back. An IPv6 peer is
-    counted by its `/64`, `/56` and `/48` (the wider blocks with two and
-    four times each per-address limit).
+    node registered, a node's data connection claimed, a client still
+    spliced 7 s after pairing, which its node has admitted) gives its
+    share of the rate back. An IPv6 peer is counted by its `/64`, `/56`
+    and `/48` (the wider blocks with two and four times each per-address
+    limit). A client of one node from one address past
+    `--max-node-clients-per-address` while the node admits them is closed
+    with `4503`. Behind a trusted proxy, a client-address header that is
+    not one bare address is answered `400`.
   - Deadlines a peer must keep: a request's headers within 10 s; a
     node's first control message within 2 s of the upgrade; a client's
     first record (its handshake message) within 2 s of the relay pairing
@@ -184,6 +188,12 @@ every method.)
     control connection holds none until its first message: a key
     registered at that relay before takes one of the places kept for
     known nodes, if one is free; any other is refused `full` at once.
+  - A node gives a channel a relay spliced to it 5 s
+    (`vessel_relay::RELAYED_ADMISSION`) for the Noise handshake and the
+    device preamble together, and drops it otherwise (a direct channel
+    keeps 10 s for each); at most 40 relayed channels wait at once,
+    apart from 64 direct ones. A client must send its preamble as soon
+    as its handshake is done.
   - A node that does not know `full` or `ticket` reads the message as
     malformed and retries; a client that does not know `4503` sees a
     plain close; a relay from before tickets refuses a ticket as

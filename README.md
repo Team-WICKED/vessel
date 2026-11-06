@@ -133,7 +133,11 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   `--trusted-proxy` (an address or a network in CIDR form, repeatable),
   and the relay refuses to start with a header and no trusted proxy;
   anyone else is counted by their own address, whatever they send. The
-  proxy must overwrite the header. A trusted proxy's sockets are not
+  proxy must overwrite the header with one bare address, IPv4
+  (`192.0.2.7`) or IPv6 (`2001:db8::7`): a list (as `X-Forwarded-For`
+  grows), a port, brackets or the header twice are answered `400`, and
+  a request from the proxy without the header counts as the proxy
+  itself, rate included. A trusted proxy's sockets are not
   counted per address at accept (they would all be the proxy's): the
   relay counts per client from the header once a request arrives, so
   the proxy should limit connections per client itself, as `limit_conn`
@@ -159,6 +163,7 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   | `--max-registering-per-address` | nodes still registering at once from one address. 4 × it under half of `--max-registering` | 7 |
   | `--reserved-registering` | of `--max-registering`, places kept for nodes that registered here before (at most half) | 16 |
   | `--max-clients-per-address` | relayed connections at once from one address. 4 × it under half of `--max-clients` | 16 |
+  | `--max-node-clients-per-address` | relayed connections to one node at once from one address while the node admits them (their first 7 s). 4 × it under half of the 40 relayed channels a node admits at once | 4 |
   | `--trusted-proxy` | a proxy whose `--client-address-header` is believed (above); repeatable | none |
 
   Per address means an IPv4 address, or an IPv6 `/64`; a `/56` may hold
@@ -173,8 +178,11 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   scaled the same way); a socket that authenticates gives its share of
   the rate back, so only sockets that never do spend it. A socket has
   authenticated once its node registered (token or ticket, and proof of
-  its key), once its client was paired with the node, or once the node's
-  data connection was claimed.
+  its key), once the node's data connection was claimed, or, for a
+  client, once its node has admitted it: the relay cannot see that
+  (everything is encrypted to the node), but a node drops a relayed
+  channel it has not admitted within 5 s, so a client still connected
+  7 s after it was paired was admitted.
 
   A node past `--max-nodes` is told the relay is full and tries again
   every 30 s; a client or a registering node past a connection limit is
@@ -197,7 +205,10 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   they can fill the unauthenticated share and the open registering
   places, so new connections are refused until they stop, though nodes
   and clients already through keep working. Filtering at the network
-  edge, or a DDoS service in front, is the answer to that.
+  edge, or a DDoS service in front, is the answer to that. A node behind
+  the relay keeps its own budget for relayed channels waiting to be
+  admitted (40), apart from its direct route's (64), so a crowd through
+  a relay never takes the direct route's room.
 - A fleet's home that registers with the relay gives its members, those
   started without `--relay` of their own, tickets for their own keys
   (`fleet.callback`), never the token: a ticket registers that one node,
@@ -420,7 +431,7 @@ start a session on another machine and read its answer.
 | `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
 | `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` (needs a trusted proxy) | unset: the peer's address |
 | `VESSEL_RELAY_TRUSTED_PROXY` | `vesseld relay --trusted-proxy`, comma-separated | none |
-| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND`, `VESSEL_RELAY_MAX_CONNECTIONS`, `VESSEL_RELAY_MAX_UNAUTHENTICATED`, `VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS`, `VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS`, `VESSEL_RELAY_RESERVED_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB, 1000, 400, 16, 7, 16, 16 |
+| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND`, `VESSEL_RELAY_MAX_CONNECTIONS`, `VESSEL_RELAY_MAX_UNAUTHENTICATED`, `VESSEL_RELAY_MAX_CONNECTIONS_PER_ADDRESS`, `VESSEL_RELAY_MAX_REGISTERING_PER_ADDRESS`, `VESSEL_RELAY_RESERVED_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS`, `VESSEL_RELAY_MAX_NODE_CLIENTS_PER_ADDRESS` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB, 1000, 400, 16, 7, 16, 16, 4 |
 | `VESSEL_NODE_SOCKET`, `VESSEL_AGENT_SESSION`, `VESSEL_AGENT_SECRET` | `vessel mcp` only: set by the node in each session's `vessel` MCP server | set by the node |
 
 ## Layout
