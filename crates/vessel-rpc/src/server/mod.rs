@@ -59,9 +59,11 @@ pub struct ServerConfig {
     /// How long a new connection may take to send `Hello`; a client that
     /// connects and says nothing is dropped instead of holding a slot.
     pub handshake_timeout: Duration,
-    /// How long a closing connection may spend writing frames that were
-    /// already queued (answers to calls that finished just before a
-    /// shutdown). A client that stopped reading is dropped after this.
+    /// How long a closing connection may spend on what it still owes the
+    /// client: answers to calls that were running when the server began
+    /// shutting down (`node.stop{now}` is one), and frames already queued.
+    /// A call still running, or a client that stopped reading, is dropped
+    /// after this.
     pub close_timeout: Duration,
 }
 
@@ -133,8 +135,10 @@ where
     /// the server shuts down. `context` builds the handler's per-connection
     /// context once the handshake succeeded.
     ///
-    /// Returns `Ok` for an orderly close (by either side). In-flight calls
-    /// are aborted when the connection ends.
+    /// Returns `Ok` for an orderly close (by either side). When the server
+    /// shuts down, calls already running get up to `close_timeout` to finish
+    /// and be answered; otherwise in-flight calls are aborted when the
+    /// connection ends.
     ///
     /// # Errors
     /// The transport failed, the client broke the protocol or spoke no
@@ -200,8 +204,16 @@ where
             Arc::new(context(peer)),
             self.config.max_in_flight,
         );
-        let reader = calls::read(stream, calls, queue, closing.clone());
-        let writer = writer::write(sink, queue_rx, closing, self.config.close_timeout);
+        let settled = CancellationToken::new();
+        let reader = calls::read(
+            stream,
+            calls,
+            queue,
+            closing.clone(),
+            settled.clone(),
+            self.config.close_timeout,
+        );
+        let writer = writer::write(sink, queue_rx, closing, settled, self.config.close_timeout);
         let (read, write) = tokio::join!(reader, writer);
         tracing::debug!("client disconnected");
         read.and(write)

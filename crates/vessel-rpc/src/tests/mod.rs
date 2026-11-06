@@ -117,6 +117,8 @@ struct Probe {
 struct Fake {
     probe: Arc<Probe>,
     seen: mpsc::Sender<Call>,
+    /// The server's shutdown, which `node.stop{now}` cancels as a node does.
+    shutdown: CancellationToken,
 }
 
 struct Context {
@@ -275,7 +277,15 @@ impl Handler for Fake {
     }
 
     async fn stop_node(&self, _context: &Context, request: StopNode) -> Result<Ack, WireError> {
+        let when = request.when;
         self.saw(request.into_call());
+        if when == StopWhen::Now {
+            // As the node does, the shutdown starts before this call
+            // returns. Yielding lets the connection notice it first: the
+            // race the answer has to survive.
+            self.shutdown.cancel();
+            tokio::task::yield_now().await;
+        }
         Ok(Ack)
     }
 }
@@ -318,6 +328,7 @@ fn serve_with(transport: MemoryTransport, config: ServerConfig) -> Served {
     let fake = Fake {
         probe: Arc::clone(&probe),
         seen,
+        shutdown: shutdown.clone(),
     };
     let node = tokio::sync::watch::channel(node()).1;
     let server = Server::new(Arc::new(fake), node, config, shutdown.clone());

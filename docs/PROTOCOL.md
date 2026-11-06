@@ -12,7 +12,8 @@ Nodes speak 2..=3. Version 3 only adds, so version 2 peers keep working.
   signal shutdown: live sessions end `interrupted`. `when_idle` drains: new
   `session.create` calls get `unavailable`, live sessions continue, and the
   node exits when none is live. A client that negotiated 2 never sends it.
-  Until milestone 2 lands, nodes answer it with `unsupported`.
+  The `ack` is written before the node closes the connection, `now`
+  included. (Builds before milestone 2's node side answered `unsupported`.)
 - `NodeInfo.state`: `serving` | `draining`. When absent (a version 2 node),
   read it as `serving`.
 - `vesseld attach` exit codes (`ProxyExit`): `0` closed, `80` no node

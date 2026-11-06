@@ -45,7 +45,28 @@ async fn client_reports_rejection() {
     node_side.await.unwrap();
 }
 
+/// A call still running when the server begins shutting down is answered
+/// before the connection closes: `node.stop{now}` starts the shutdown from
+/// inside its own call, and its client must still get the `Ack`.
 #[tokio::test]
+async fn a_call_running_at_shutdown_is_still_answered() {
+    let running = start(ClientConfig::default()).await;
+    assert_eq!(
+        running
+            .client
+            .call(StopNode {
+                when: StopWhen::Now
+            })
+            .await,
+        Ok(Ack)
+    );
+    running.served.await.unwrap().unwrap();
+    running.client.closed().await;
+}
+
+/// A call that does not finish within the close timeout is given up: its
+/// client sees `Disconnected`, and the shutdown does not wait for it.
+#[tokio::test(start_paused = true)]
 async fn disconnect_fails_pending_calls() {
     let running = start(ClientConfig::default()).await;
     let client = running.client.clone();
@@ -102,5 +123,55 @@ async fn shutdown_does_not_wait_for_a_client_that_stopped_reading() {
             .unwrap();
     }
     served.shutdown.cancel();
+    served.task.await.unwrap().unwrap();
+}
+
+/// A frame the writer already took off its queue but could not write yet
+/// (the client was not reading) when the shutdown began is still written,
+/// in order, by the close: no answer goes missing.
+#[tokio::test]
+async fn a_frame_waiting_for_the_client_when_shutdown_begins_is_not_lost() {
+    let (mut client_end, server_end) = pair();
+    let mut served = serve(server_end);
+    let hello = ClientFrame::Hello(vessel_proto::Hello {
+        protocol: ProtocolRange::CURRENT,
+        client: client_info(),
+    });
+    client_end
+        .send(serde_json::to_string(&hello).unwrap())
+        .await
+        .unwrap();
+    let _welcome = client_end.next().await.unwrap().unwrap();
+    // More answers than the transport buffers (16), not read yet: the
+    // writer ends up holding one it cannot write.
+    let calls = 20;
+    for id in 0..calls {
+        let request = ClientFrame::Request {
+            id: RequestId::new(id),
+            call: GetNode.into_call(),
+        };
+        client_end
+            .send(serde_json::to_string(&request).unwrap())
+            .await
+            .unwrap();
+    }
+    for _ in 0..calls {
+        let _seen = served.seen.recv().await.unwrap();
+    }
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    served.shutdown.cancel();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    let mut answered = Vec::new();
+    while let Some(frame) = client_end.next().await {
+        let Ok(ServerFrame::Response { id, .. }) = serde_json::from_str(&frame.unwrap()) else {
+            panic!("expected only responses");
+        };
+        answered.push(id);
+    }
+    assert_eq!(answered, (0..calls).map(RequestId::new).collect::<Vec<_>>());
     served.task.await.unwrap().unwrap();
 }
