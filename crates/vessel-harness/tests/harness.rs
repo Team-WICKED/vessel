@@ -52,7 +52,7 @@ mod support {
 #[expect(clippy::panic_in_result_fn, reason = "a test helper")]
 fn launch(lookup: &Lookup, spec: &SessionSpec) -> Result<CommandSpec, HarnessError> {
     let profile = Profile::default_for(spec.harness);
-    let launch = vessel_harness::launch(lookup, spec, &profile, &ResolvedMcpServers::new())?;
+    let launch = vessel_harness::launch(lookup, spec, &profile, &ResolvedMcpServers::new(), None)?;
     assert!(launch.mcp_file.is_none() && launch.unattached.is_empty());
     Ok(launch.command)
 }

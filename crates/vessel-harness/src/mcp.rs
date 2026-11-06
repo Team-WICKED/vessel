@@ -31,16 +31,20 @@
 //!   (`vessel_proto::McpTransport`); this module keeps them out of the
 //!   harness's arguments too, putting them in an owner-only file or in the
 //!   process environment (readable only by the same user).
-//! - The file lives in a directory the caller chooses ([`launch_in`]; the
-//!   node passes an owner-only directory under its data directory, ADR
-//!   0012), or else the system's temporary directory, under a random name,
-//!   created exclusively (an existing file or link there is refused, never
-//!   followed) and owner-only, so no other user can read it or plant one
-//!   even in a shared directory. The caller writes it right before starting
-//!   the harness and keeps the guard for the session's life; dropping the
-//!   guard removes it.
-//!
-//! [`launch_in`]: crate::launch_in
+//! - The file lives in a directory the caller must give
+//!   ([`launch`](crate::launch); the node's is owner-only under its data
+//!   directory and emptied at start, so a crash leaves nothing behind for
+//!   long, ADR 0012), under a random name, created exclusively (an existing
+//!   file or link there is refused, never followed) and owner-only. There
+//!   is no fallback to a shared temporary directory. The caller writes it
+//!   right before starting the harness and keeps the guard for the
+//!   session's life; dropping the guard removes it.
+//! - Windows has no mode bits, and setting an explicit DACL needs Win32
+//!   calls the workspace does not make (no `unsafe`). A file there inherits
+//!   its directory's ACL, which inside the user's profile admits only that
+//!   user, the guarantee the node's `token` and `node.key` already rely on
+//!   (`vessel-store`'s `files`). So on Windows the file is written only
+//!   inside the user's profile directory and refused anywhere else.
 
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
@@ -200,10 +204,21 @@ fn new_private(path: &Path) -> io::Result<fs::File> {
         .open(path)
 }
 
-/// On Windows the temporary directory is the user's own (under the
-/// profile), which other users cannot read.
+/// Windows: only inside the user's profile directory, whose inherited ACL
+/// admits only that user (see the module docs); refused elsewhere.
 #[cfg(not(unix))]
 fn new_private(path: &Path) -> io::Result<fs::File> {
+    let inside_profile = path
+        .parent()
+        .and_then(|dir| fs::canonicalize(dir).ok())
+        .zip(dirs::home_dir().and_then(|home| fs::canonicalize(home).ok()))
+        .is_some_and(|(dir, home)| dir.starts_with(home));
+    if !inside_profile {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "an MCP configuration file is written only inside the user's profile directory on Windows",
+        ));
+    }
     fs::OpenOptions::new()
         .write(true)
         .create_new(true)

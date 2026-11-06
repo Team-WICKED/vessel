@@ -174,14 +174,16 @@ mod support {
     }
 }
 
-/// Launch `spec` asking for `profile` by name, as the node does.
+/// Launch `spec` asking for `profile` by name, as the node does, with the
+/// MCP file (if any) in the test's own directory (the lookup's).
 fn launch(
     lookup: &Lookup,
     spec: &SessionSpec,
     profile: &Profile,
     mcp: &ResolvedMcpServers,
 ) -> Result<Launch, HarnessError> {
-    vessel_harness::launch(lookup, &asking(spec.clone(), profile), profile, mcp)
+    let dir = lookup.dirs().first().map(PathBuf::as_path);
+    vessel_harness::launch(lookup, &asking(spec.clone(), profile), profile, mcp, dir)
 }
 
 #[test]
@@ -222,7 +224,7 @@ fn a_claude_terminal_gets_the_profile_and_an_owner_only_mcp_file() {
 
     // The file is written only when asked, exclusively and owner-only, and
     // it holds the values; dropping the guard removes it.
-    assert!(file.path().starts_with(std::env::temp_dir()));
+    assert!(file.path().starts_with(bin.path()));
     assert!(!file.path().exists());
     let Launch { mcp_file, .. } = launched;
     let written = mcp_file.unwrap().write().unwrap();
@@ -532,24 +534,42 @@ fn the_profile_must_be_the_one_the_spec_asks_for() {
 
     // No profile named: only the default will do.
     assert_eq!(
-        vessel_harness::launch(&lookup, &spec, &alt, &none).unwrap_err(),
+        vessel_harness::launch(&lookup, &spec, &alt, &none, None).unwrap_err(),
         HarnessError::ProfileNotRequested {
             requested: None,
             given: alt.name().clone(),
         }
     );
-    assert!(vessel_harness::launch(&lookup, &spec, &default, &none).is_ok());
+    assert!(vessel_harness::launch(&lookup, &spec, &default, &none, None).is_ok());
     // The default named explicitly is the default.
     let named_default = asking(spec.clone(), &default);
-    assert!(vessel_harness::launch(&lookup, &named_default, &default, &none).is_ok());
+    assert!(vessel_harness::launch(&lookup, &named_default, &default, &none, None).is_ok());
     // A named profile: that one, not the default.
     let wants_alt = asking(spec, &alt);
-    assert!(vessel_harness::launch(&lookup, &wants_alt, &alt, &none).is_ok());
+    assert!(vessel_harness::launch(&lookup, &wants_alt, &alt, &none, None).is_ok());
     assert_eq!(
-        vessel_harness::launch(&lookup, &wants_alt, &default, &none).unwrap_err(),
+        vessel_harness::launch(&lookup, &wants_alt, &default, &none, None).unwrap_err(),
         HarnessError::ProfileNotRequested {
             requested: Some(alt.name().clone()),
             given: default.name().clone(),
         }
     );
+}
+
+/// Review finding 3: no shared fallback for the MCP file.
+#[test]
+fn a_harness_that_needs_an_mcp_file_needs_a_directory() {
+    let bin = TempDir::new();
+    let tui = fake(vessel_testkit::Fake::Tui);
+    let _claude = install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap();
+    let lookup = Lookup::new([bin.path().to_owned()]);
+    let spec = terminal(HarnessKind::ClaudeCode, &[], bin.path());
+    let default = Profile::default_for(HarnessKind::ClaudeCode);
+    assert_eq!(
+        vessel_harness::launch(&lookup, &spec, &default, &servers(), None).unwrap_err(),
+        HarnessError::NoMcpDirectory
+    );
+    // Without servers, or for a harness without a file, none is needed.
+    let none = ResolvedMcpServers::new();
+    assert!(vessel_harness::launch(&lookup, &spec, &default, &none, None).is_ok());
 }

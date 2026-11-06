@@ -45,6 +45,11 @@ pub struct Launch {
 /// `mcp` is not used, and neither are the profile's arguments. In both
 /// modes the profile's variables are set and its `unset` ones removed.
 ///
+/// A terminal session's MCP configuration file goes in `mcp_dir`, an
+/// owner-only directory of the node's (ADR 0012); there is no fallback to
+/// a shared directory, so without one a harness that needs the file is
+/// refused.
+///
 /// The working directory defaults to the node user's home directory, is
 /// made absolute, and must exist: running an agent in a different directory
 /// than asked is worse than refusing.
@@ -59,29 +64,14 @@ pub struct Launch {
 /// when the program is missing; [`HarnessError::RelativeDirectory`] or
 /// [`HarnessError::NoSuchDirectory`] for a bad working directory;
 /// [`HarnessError::Mcp`] when the servers cannot be given to this harness
-/// (two values for one variable).
+/// (two values for one variable); [`HarnessError::NoMcpDirectory`] when the
+/// harness needs a file and `mcp_dir` is `None`.
 pub fn launch(
     lookup: &Lookup,
     spec: &SessionSpec,
     profile: &Profile,
     mcp: &ResolvedMcpServers,
-) -> Result<Launch, HarnessError> {
-    launch_in(lookup, spec, profile, mcp, &std::env::temp_dir())
-}
-
-/// [`launch`], with a terminal session's MCP configuration file in
-/// `mcp_dir` rather than the system's temporary directory. The node passes
-/// an owner-only directory of its own (ADR 0012); the file is owner-only
-/// and created exclusively either way.
-///
-/// # Errors
-/// As [`launch`].
-pub fn launch_in(
-    lookup: &Lookup,
-    spec: &SessionSpec,
-    profile: &Profile,
-    mcp: &ResolvedMcpServers,
-    mcp_dir: &Path,
+    mcp_dir: Option<&Path>,
 ) -> Result<Launch, HarnessError> {
     let harness = spec.harness;
     if profile.harness() != harness {
@@ -226,7 +216,7 @@ fn protected(name: &str) -> bool {
 fn attach(
     command: CommandSpec,
     rendered: TerminalMcp,
-    dir: &Path,
+    dir: Option<&Path>,
 ) -> Result<(CommandSpec, Option<McpFile>), HarnessError> {
     let mut command = command.args(rendered.args);
     for (name, value) in rendered.env {
@@ -235,6 +225,7 @@ fn attach(
     let Some(form) = rendered.file else {
         return Ok((command, None));
     };
+    let dir = dir.ok_or(HarnessError::NoMcpDirectory)?;
     let mut argument = OsString::from(form.flag);
     let file = McpFile::new(form, dir).map_err(|error| HarnessError::McpFile {
         reason: error.to_string(),
