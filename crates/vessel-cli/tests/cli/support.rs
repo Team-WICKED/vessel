@@ -55,6 +55,11 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) async fn start() -> Self {
+        Self::start_with(|_, _| {}).await
+    }
+
+    /// Start the node with `adjust` applied to its config.
+    pub(super) async fn start_with(adjust: impl FnOnce(&mut Config, &Path)) -> Self {
         let data = tempfile::tempdir().unwrap();
         let bin = tempfile::tempdir().unwrap();
         let tui = Fake::Tui.path().unwrap();
@@ -64,6 +69,7 @@ impl Fixture {
         let mut config = Config::new(DataDir::new(data.path()));
         config.bind = Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
         config.harness_lookup = Lookup::new([bin.path().to_path_buf()]);
+        adjust(&mut config, data.path());
         let node = Node::start(config).await.unwrap();
         Self {
             data,
@@ -78,6 +84,10 @@ impl Fixture {
 
     pub(super) fn data(&self) -> &Path {
         self.data.path()
+    }
+
+    pub(super) const fn node(&self) -> &Node {
+        &self.node
     }
 
     pub(super) fn node_address(&self) -> String {
@@ -124,6 +134,21 @@ impl Fixture {
             let _ = command.env(key, value);
         }
         command.stdin(Stdio::null()).output().await.unwrap().into()
+    }
+
+    /// Run `vessel <args>` without `--node`, in the data directory, with
+    /// `stdin` as its input.
+    pub(super) async fn vessel_book_input(&self, args: &[&str], stdin: &[u8]) -> Ran {
+        let mut child = book_command(self.data.path(), self.data.path(), args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(stdin).await.unwrap();
+        drop(input);
+        child.wait_with_output().await.unwrap().into()
     }
 
     /// The node book `vessel` uses in these tests.
