@@ -311,7 +311,10 @@ async fn a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows() {
             }
             other => panic!("expected the pruned range first, got {other:?}"),
         };
-        assert!(resumed_at.get() >= 4, "nothing was pruned: {resumed_at}");
+        // How many records the output becomes depends on how the PTY chunks
+        // it (ConPTY on Windows coalesces more than Unix PTYs), so only the
+        // fact of a gap is asserted, not its size.
+        assert!(resumed_at.get() > 0, "nothing was pruned: {resumed_at}");
         client.kill(id).await.unwrap();
         let mut rest = Vec::new();
         while let Some(record) = replay.next().await {
