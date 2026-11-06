@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::id::NodeId;
+use crate::key::NodePublicKey;
 
 /// A wire protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -34,10 +35,10 @@ impl fmt::Display for ProtocolVersion {
 
 /// The protocol this build speaks. Bump on any breaking change to a wire type
 /// and record the change in `docs/PROTOCOL.md`.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(3);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(4);
 
-/// The oldest protocol this build still accepts. Version 3 only adds a
-/// method and a defaulted field, so version 2 peers keep working.
+/// The oldest protocol this build still accepts. Versions 3 and 4 only add
+/// methods and defaulted fields, so version 2 peers keep working.
 pub const MIN_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
 
 /// An inclusive range of protocol versions a peer can speak.
@@ -109,6 +110,10 @@ pub struct NodeInfo {
     /// Whether it takes new sessions (protocol 3; absent means serving).
     #[serde(default)]
     pub state: NodeState,
+    /// The node's static key for secure channels (protocol 4; absent from
+    /// older nodes and from nodes without a key yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<NodePublicKey>,
 }
 
 #[cfg(test)]

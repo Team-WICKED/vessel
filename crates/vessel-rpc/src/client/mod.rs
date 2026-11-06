@@ -39,9 +39,10 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
-    Call, ClientFrame, ClientInfo, CreateSession, GetNode, GetSession, Hello, KillSession,
-    ListHarnesses, ListSessions, Outcome, ProtocolRange, ReadEvents, Request, RequestId, SendInput,
-    ServerFrame, StopNode, Subscribe, Unsubscribe, Welcome, WireError,
+    Call, ClientFrame, ClientInfo, CreateSession, GetNode, GetSession, Hello, InviteDevice,
+    KillSession, ListDevices, ListHarnesses, ListSessions, Outcome, ProtocolRange, ReadEvents,
+    Request, RequestId, RevokeDevice, SendInput, ServerFrame, StopNode, Subscribe, Unsubscribe,
+    Welcome, WireError,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -65,6 +66,9 @@ impl Unary for KillSession {}
 impl Unary for ReadEvents {}
 impl Unary for Unsubscribe {}
 impl Unary for StopNode {}
+impl Unary for InviteDevice {}
+impl Unary for ListDevices {}
+impl Unary for RevokeDevice {}
 
 /// `n` as a `NonZeroUsize` for constants.
 const fn at_least_one(n: usize) -> NonZeroUsize {

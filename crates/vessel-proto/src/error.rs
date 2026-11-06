@@ -17,6 +17,8 @@ pub enum ErrorCode {
     InvalidRequest,
     /// Missing or wrong credentials.
     Unauthorized,
+    /// Authenticated, but the caller lacks the method's scope (protocol 4).
+    Forbidden,
     /// The client and node share no protocol version.
     ProtocolMismatch,
     /// The referenced session, subscription or permission does not exist.
