@@ -87,6 +87,12 @@ pub(crate) enum CliError {
          open one yet"
     )]
     NoSecureChannel { node: String },
+    /// `vessel node devices revoke` with an id that matches no device.
+    #[error("no device matches `{0}`; `vessel node devices` lists them")]
+    NoSuchDevice(String),
+    /// ... or several.
+    #[error("`{prefix}` matches {count} devices; give more of the id")]
+    AmbiguousDevice { prefix: String, count: usize },
     /// A command that needs an SSH node got another kind.
     #[error("{node} is not an SSH node; {what} works only over SSH")]
     NotSsh { node: String, what: &'static str },
