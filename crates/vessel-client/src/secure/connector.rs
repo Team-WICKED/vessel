@@ -42,21 +42,25 @@
 //!   registers at relays under a new routing id, so a client with only
 //!   relay routes sees `4404` (transient) and keeps retrying; only a
 //!   direct route can tell it the key changed.
+//! - Pairing ([`pair_over`]) tries the link's routes the same way, but only
+//!   until a secure channel is up: the invitation goes out on that route,
+//!   and once sent it may be spent, so no other route repeats it.
 
 use std::time::Duration;
 
-use vessel_proto::{ClientInfo, NodeClose, RoutingId};
+use vessel_proto::{ClientInfo, NodeClose, NodePublicKey, PairingOffer, RouteUrl, RoutingId};
 use vessel_rpc::ClientConfig;
-use vessel_secure::SecureError;
+use vessel_secure::{SecureChannel, SecureError};
 
+use super::SecureConnectError;
 use super::dial::{Dialer, PeerClose};
 use super::route::{ReachError, Route, RouteError, RouteFailure};
-use super::{SecureConnectError, open_with};
 use crate::address::SecureTarget;
 use crate::client::NodeClient;
 use crate::connector::Connector;
 use crate::credential::DeviceCredential;
 use crate::error::chain;
+use crate::pairing::{self, Paired};
 
 /// How long a dial may take before the next route is tried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +77,64 @@ impl Default for RouteTimeouts {
             direct: Duration::from_secs(3),
             relay: Duration::from_secs(10),
         }
+    }
+}
+
+/// Every route of a node, in the order they are tried: direct addresses,
+/// then relays.
+fn routes(direct: &[RouteUrl], relays: &[RouteUrl]) -> Vec<Route> {
+    let direct = direct.iter().cloned().map(Route::Direct);
+    direct
+        .chain(relays.iter().cloned().map(Route::Relay))
+        .collect()
+}
+
+/// What opening a secure channel on one route needs.
+struct Channels<'a, D> {
+    dialer: &'a D,
+    key: &'a NodePublicKey,
+    routing_id: RoutingId,
+    timeouts: RouteTimeouts,
+    secure: &'a vessel_secure::Config,
+}
+
+impl<D: Dialer> Channels<'_, D> {
+    /// Dial `route` and run the handshake to the pinned key.
+    async fn open(&self, route: &Route) -> Result<SecureChannel<D::Carrier>, RouteError<D::Error>> {
+        let dialed = match route {
+            Route::Direct(url) => {
+                let limit = self.timeouts.direct;
+                tokio::time::timeout(limit, self.dialer.direct(url))
+                    .await
+                    .map_err(|_elapsed| RouteError::DialTimeout(limit))?
+            }
+            Route::Relay(url) => {
+                let limit = self.timeouts.relay;
+                tokio::time::timeout(limit, self.dialer.relay(url, &self.routing_id))
+                    .await
+                    .map_err(|_elapsed| RouteError::DialTimeout(limit))?
+            }
+        };
+        let carrier = dialed.map_err(|error| RouteError::Dial {
+            transient: self.dialer.is_transient(&error),
+            error,
+        })?;
+        vessel_secure::initiate_with(carrier, self.key, self.secure)
+            .await
+            .map_err(|error| self.read_close(error))
+    }
+
+    /// A carrier that failed during the handshake may say why with a close
+    /// code; the dialer knows how to read it.
+    fn read_close(&self, error: SecureError) -> RouteError<D::Error> {
+        if let SecureError::Carrier(io) = &error {
+            match self.dialer.closed_with(io) {
+                Some(PeerClose::Node(NodeClose::HandshakeFailed)) => return RouteError::WrongKey,
+                Some(PeerClose::Relay(close)) => return RouteError::Relay(close),
+                None => {}
+            }
+        }
+        RouteError::Open(SecureConnectError::Channel(error))
     }
 }
 
@@ -138,13 +200,6 @@ impl<D> SecureConnector<D> {
     pub const fn dialer(&self) -> &D {
         &self.dialer
     }
-
-    /// Every route, in the order they are tried.
-    fn routes(&self) -> impl Iterator<Item = Route> + '_ {
-        let direct = self.target.direct.iter().cloned().map(Route::Direct);
-        let relays = self.target.relays.iter().cloned().map(Route::Relay);
-        direct.chain(relays)
-    }
 }
 
 impl<D: Dialer> SecureConnector<D> {
@@ -154,47 +209,20 @@ impl<D: Dialer> SecureConnector<D> {
         route: &Route,
         client: ClientInfo,
     ) -> Result<NodeClient, RouteError<D::Error>> {
-        let dialed = match route {
-            Route::Direct(url) => {
-                let limit = self.timeouts.direct;
-                tokio::time::timeout(limit, self.dialer.direct(url))
-                    .await
-                    .map_err(|_elapsed| RouteError::DialTimeout(limit))?
-            }
-            Route::Relay(url) => {
-                let limit = self.timeouts.relay;
-                tokio::time::timeout(limit, self.dialer.relay(url, &self.routing_id))
-                    .await
-                    .map_err(|_elapsed| RouteError::DialTimeout(limit))?
-            }
+        let channels = Channels {
+            dialer: &self.dialer,
+            key: &self.target.key,
+            routing_id: self.routing_id,
+            timeouts: self.timeouts,
+            secure: &self.secure,
         };
-        let carrier = dialed.map_err(|error| RouteError::Dial {
-            transient: self.dialer.is_transient(&error),
-            error,
-        })?;
-        open_with(
-            carrier,
-            &self.target.key,
-            &self.credential,
-            client,
-            &self.config,
-            &self.secure,
-        )
-        .await
-        .map_err(|error| self.read_close(error))
-    }
-
-    /// A carrier that failed during the handshake may say why with a close
-    /// code; the dialer knows how to read it.
-    fn read_close(&self, error: SecureConnectError) -> RouteError<D::Error> {
-        if let SecureConnectError::Channel(SecureError::Carrier(io)) = &error {
-            match self.dialer.closed_with(io) {
-                Some(PeerClose::Node(NodeClose::HandshakeFailed)) => return RouteError::WrongKey,
-                Some(PeerClose::Relay(close)) => return RouteError::Relay(close),
-                None => {}
-            }
-        }
-        RouteError::Open(error)
+        let channel = channels.open(route).await?;
+        let channel = pairing::authenticate(channel, &self.credential)
+            .await
+            .map_err(|error| RouteError::Open(SecureConnectError::Preamble(error)))?;
+        NodeClient::over(channel, client, &self.config)
+            .await
+            .map_err(|error| RouteError::Open(SecureConnectError::Handshake(error)))
     }
 }
 
@@ -203,7 +231,7 @@ impl<D: Dialer> Connector for SecureConnector<D> {
 
     async fn connect(&self, client: ClientInfo) -> Result<NodeClient, Self::Error> {
         let mut failures = Vec::new();
-        for route in self.routes() {
+        for route in routes(&self.target.direct, &self.target.relays) {
             match self.attempt(&route, client.clone()).await {
                 Ok(connection) => {
                     tracing::debug!(%route, "connected to the paired node");
@@ -225,4 +253,50 @@ impl<D: Dialer> Connector for SecureConnector<D> {
     fn is_transient(&self, error: &Self::Error) -> bool {
         !error.is_final()
     }
+}
+
+/// Pair with the node of `offer` as `device_name`, over the first of its
+/// routes (direct, then relays) that opens a secure channel to its key.
+/// Returns the new credential and the node, and the route that worked;
+/// the channel is closed afterwards. Connecting is [`SecureConnector`]'s
+/// job, once the credential is stored.
+///
+/// # Errors
+/// No route opened a channel, or the node refused the invitation (used,
+/// expired, for another node: final), or the channel failed after the
+/// invitation was sent (the invitation may be spent; make a new one).
+pub async fn pair_over<D: Dialer>(
+    dialer: &D,
+    offer: &PairingOffer,
+    device_name: &str,
+    timeouts: RouteTimeouts,
+) -> Result<(Paired, Route), ReachError<D::Error>> {
+    let secure = vessel_secure::Config::default();
+    let channels = Channels {
+        dialer,
+        key: &offer.key,
+        routing_id: vessel_secure::routing_id(&offer.key),
+        timeouts,
+        secure: &secure,
+    };
+    let mut failures = Vec::new();
+    for route in routes(&offer.direct, &offer.relays) {
+        let channel = match channels.open(&route).await {
+            Ok(channel) => channel,
+            Err(error) => {
+                tracing::debug!(%route, error = %chain(&error), "route failed");
+                failures.push(RouteFailure { route, error });
+                continue;
+            }
+        };
+        return match pairing::pair(channel, &offer.invite, device_name).await {
+            Ok((paired, _channel)) => Ok((paired, route)),
+            Err(error) => {
+                let error = RouteError::Open(SecureConnectError::Preamble(error));
+                failures.push(RouteFailure { route, error });
+                Err(ReachError::new(failures))
+            }
+        };
+    }
+    Err(ReachError::new(failures))
 }
