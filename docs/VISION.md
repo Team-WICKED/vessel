@@ -19,8 +19,23 @@ stays independent so its own licence is free to choose.
 Paseo wraps well-known harnesses (Claude Code, Codex) without replacing them,
 makes remote access painless, ships a relay so machines reach each other
 without a VPN, and has its own plugin layer. Vessel's node daemon plays the
-same role, and the relay should be built on an existing overlay (Tailscale's
-`tsnet`, or raw WireGuard) rather than invented.
+same role.
+
+Vessel's relay follows Paseo's shape (decided 2026-11-06, milestone 3; ADRs
+0009 and 0010). A dumb relay pairs a node's outbound connection with a
+client's and forwards bytes. Every connection is encrypted end to end (Noise
+NK) to a key the client learned when it was paired. The relay is built into
+`vesseld` (`vesseld relay`), so running one means running the same binary on
+any public machine. A node with a public address is dialled directly over the
+same encrypted channel.
+
+An earlier draft built the relay on an existing overlay (Tailscale's `tsnet`,
+or raw WireGuard). Our own relay replaces that because:
+
+- it needs no third-party account or coordination service;
+- end-to-end encryption keeps the relay, and any network under it, out of
+  the trust base, so an overlay adds nothing there;
+- it is one binary we already ship, with no second daemon to configure.
 
 ## 3. GOAT: the fleet
 
@@ -55,7 +70,7 @@ editor) is attached.
 ## Order of attack
 
 1. Node daemon + CLI (this repo today).
-2. Relay and peer discovery.
+2. Relay (our own, end-to-end encrypted) and pairing.
 3. Sync of skills, MCP, memory, history.
 4. Model routing proxy inside the node.
 5. LSP-to-MCP context bridge.
