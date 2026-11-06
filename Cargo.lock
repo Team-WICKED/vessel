@@ -2551,8 +2551,10 @@ dependencies = [
 name = "vessel-client"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
  "futures-util",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
@@ -2563,6 +2565,7 @@ dependencies = [
  "toml_edit",
  "tracing",
  "vessel-proto",
+ "vessel-relay",
  "vessel-rpc",
  "vessel-secure",
 ]

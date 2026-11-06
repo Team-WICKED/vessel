@@ -5,6 +5,7 @@ mod calls;
 mod memory;
 mod pinned;
 mod resume;
+mod secure;
 mod stream;
 mod websocket;
 

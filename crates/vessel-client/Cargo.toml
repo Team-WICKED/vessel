@@ -9,10 +9,15 @@ repository.workspace = true
 
 [dependencies]
 vessel-proto.workspace = true
+vessel-relay.workspace = true
 vessel-rpc.workspace = true
 vessel-secure.workspace = true
 
 futures-util = { workspace = true, features = ["sink"] }
+# An empty root store when every route is `ws://` and the system has no
+# roots (`vessel_relay::TlsConfig::with_roots`); already built for
+# vessel-relay.
+rustls.workspace = true
 serde.workspace = true
 # The device preamble's frames (ADR 0010), before `vessel-rpc` takes over.
 serde_json.workspace = true
@@ -23,6 +28,7 @@ toml_edit.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

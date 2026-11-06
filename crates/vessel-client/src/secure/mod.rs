@@ -21,14 +21,16 @@
 mod connector;
 mod dial;
 mod route;
+mod websocket;
 
 use vessel_proto::{ClientInfo, NodePublicKey, PairingOffer};
 use vessel_rpc::ClientConfig;
 use vessel_secure::{Carrier, SecureError};
 
-pub use connector::{RouteTimeouts, SecureConnector};
+pub use connector::{RouteTimeouts, SecureConnector, pair_over};
 pub use dial::{Dialer, PeerClose};
 pub use route::{ReachError, Route, RouteError, RouteFailure};
+pub use websocket::WsDialer;
 
 use crate::client::NodeClient;
 use crate::credential::DeviceCredential;
@@ -109,23 +111,7 @@ pub async fn open<C: Carrier>(
     client: ClientInfo,
     config: &ClientConfig,
 ) -> Result<NodeClient, SecureConnectError> {
-    let secure = vessel_secure::Config::default();
-    open_with(carrier, key, credential, client, config, &secure).await
-}
-
-/// [`open`], with explicit secure channel limits.
-///
-/// # Errors
-/// See [`SecureConnectError`].
-pub async fn open_with<C: Carrier>(
-    carrier: C,
-    key: &NodePublicKey,
-    credential: &DeviceCredential,
-    client: ClientInfo,
-    config: &ClientConfig,
-    secure: &vessel_secure::Config,
-) -> Result<NodeClient, SecureConnectError> {
-    let channel = vessel_secure::initiate_with(carrier, key, secure)
+    let channel = vessel_secure::initiate(carrier, key)
         .await
         .map_err(SecureConnectError::Channel)?;
     let channel = pairing::authenticate(channel, credential).await?;
