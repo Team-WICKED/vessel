@@ -39,6 +39,7 @@ use serde::Serialize;
 use vessel_proto::{McpTransport, ResolvedMcpServers};
 
 use super::{Descriptor, Home, Structured};
+use crate::layout::HarnessLayout;
 use crate::mcp::{FileForm, McpError, TerminalMcp};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
@@ -52,6 +53,10 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     home: Home {
         variable: Some("CLAUDE_CONFIG_DIR"),
         default: &[".claude"],
+    },
+    layout: HarnessLayout {
+        instructions: Some("CLAUDE.md"),
+        skills: Some("skills"),
     },
     login: Some(&["auth", "status"]),
     sessions: Some(session_files),

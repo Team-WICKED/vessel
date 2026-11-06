@@ -11,6 +11,7 @@
 //! launch (structured ones still do, over ACP).
 
 use super::{Descriptor, Home, Structured};
+use crate::layout::HarnessLayout;
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     binary: "gemini",
@@ -21,6 +22,10 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     home: Home {
         variable: None,
         default: &[".gemini"],
+    },
+    layout: HarnessLayout {
+        instructions: Some("GEMINI.md"),
+        skills: None,
     },
     login: None,
     sessions: None,
