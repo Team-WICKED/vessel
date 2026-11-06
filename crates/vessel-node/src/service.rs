@@ -476,6 +476,13 @@ impl NodeService {
         let Some(agent) = principal.agent() else {
             return Ok(());
         };
+        // This node's agent is done once its session's end is visible,
+        // before `retire` closes its connection (as in `Agents::admit`).
+        // Another node's agent was checked by its own node when the call
+        // was passed on (`Agents::depth`).
+        if matches!(principal, Principal::Agent { .. }) && !self.agents.is_live(agent.1) {
+            return Err(wire(&ServiceError::AgentGone(agent.1)));
+        }
         let here = self.lifecycle.info().id;
         let mut current = session;
         // A chain longer than the depth limit cannot lead to the agent.
