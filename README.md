@@ -163,7 +163,7 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   | `--max-registering-per-address` | nodes still registering at once from one address. 4 × it under half of `--max-registering` | 7 |
   | `--reserved-registering` | of `--max-registering`, places kept for nodes that registered here before (at most half) | 16 |
   | `--max-clients-per-address` | relayed connections at once from one address. 4 × it under half of `--max-clients` | 16 |
-  | `--max-node-clients-per-address` | relayed connections to one node at once from one address while the node admits them (their first 7 s). 4 × it under half of the 40 relayed channels a node admits at once | 4 |
+  | `--max-node-clients-per-address` | relayed connections to one node at once from one address while the node admits them (their first 7 s). 4 × it under half of the 40 a node admits at once through one relay | 4 |
   | `--trusted-proxy` | a proxy whose `--client-address-header` is believed (above); repeatable | none |
 
   Per address means an IPv4 address, or an IPv6 `/64`; a `/56` may hold
@@ -206,9 +206,10 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   places, so new connections are refused until they stop, though nodes
   and clients already through keep working. Filtering at the network
   edge, or a DDoS service in front, is the answer to that. A node behind
-  the relay keeps its own budget for relayed channels waiting to be
-  admitted (40), apart from its direct route's (64), so a crowd through
-  a relay never takes the direct route's room.
+  relays keeps, for each relay it is linked to, a budget of its own for
+  channels waiting to be admitted through it (40), apart from the other
+  relays' and its direct route's (64, of which one address holds 7, a
+  `/48` 28), so a crowd through one route never takes another's room.
 - A fleet's home that registers with the relay gives its members, those
   started without `--relay` of their own, tickets for their own keys
   (`fleet.callback`), never the token: a ticket registers that one node,
