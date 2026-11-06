@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::device::Scope;
 use crate::id::{DeviceId, NodeId, SessionId};
+use crate::key::NodePublicKey;
 use crate::node::ProtocolVersion;
 use crate::pairing::PairingLink;
 use crate::rpc::{Call, Method, Reply};
@@ -125,6 +126,34 @@ pub struct GrantHome {
     pub link: PairingLink,
 }
 
+/// `fleet.forget` (protocol 6): on the home, forget member node `node`'s
+/// binding (its key and name, kept for good otherwise), for a node
+/// reinstalled with a new key or to be renamed. Its grants are deleted;
+/// the invitations outstanding on the home are withdrawn, and the node's
+/// id and name go next only to a member device paired after this, so the
+/// node is invited again and joins from there. Needs `admin`; never
+/// forwarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgetNode {
+    /// The member node.
+    pub node: NodeId,
+}
+
+/// What `fleet.forget` did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeForgotten {
+    /// The key the node was bound to.
+    pub key: NodePublicKey,
+    /// The name it was known by, now released.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The member devices that granted for it; their grants are deleted.
+    /// One that should not sync any more is revoked separately.
+    pub devices: Vec<DeviceId>,
+    /// Invitations that were outstanding on the home and are withdrawn.
+    pub withdrawn: u32,
+}
+
 /// `fleet.peers` (protocol 6): the home's view of its fleet, for its
 /// members. Needs `sync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +233,7 @@ impl Method {
             | Self::Relay
             | Self::Deliver
             | Self::GrantHome
+            | Self::ForgetNode
             | Self::ListPeers
             | Self::ListNodes
             | Self::GetManifest

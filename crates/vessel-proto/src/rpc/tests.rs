@@ -38,6 +38,7 @@ fn every_method_declares_a_scope_and_admin_is_rare() {
             "device.revoke",
             "profile.reload",
             "fleet.members",
+            "fleet.forget",
             "memory.export",
             "memory.import",
             "secret.set",
