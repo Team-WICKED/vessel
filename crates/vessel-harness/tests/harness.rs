@@ -258,18 +258,23 @@ fn relative_search_entries_are_ignored() {
 }
 
 #[test]
-fn relative_working_directories_become_absolute() {
+fn relative_working_directories_are_refused() {
     let bin = TempDir::new();
     drop(install(bin.path(), HarnessKind::Codex, Role::Terminal, &fake_tui()).unwrap());
-    let command = launch(
-        &Lookup::new([bin.path().to_path_buf()]),
-        &terminal(HarnessKind::Codex, &[], Some(PathBuf::from("."))),
-    )
-    .unwrap();
-    let cwd = command.cwd.unwrap();
-    assert!(cwd.is_absolute(), "{}", cwd.display());
-    assert_eq!(
-        cwd.canonicalize().unwrap(),
-        std::env::current_dir().unwrap().canonicalize().unwrap()
-    );
+    let lookup = Lookup::new([bin.path().to_path_buf()]);
+    // "." exists relative to the node's own directory; it is still refused,
+    // because the client cannot know what it names.
+    for relative in [".", "work", "../elsewhere"] {
+        let error = launch(
+            &lookup,
+            &terminal(HarnessKind::Codex, &[], Some(PathBuf::from(relative))),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            HarnessError::RelativeDirectory {
+                cwd: PathBuf::from(relative)
+            }
+        );
+    }
 }
