@@ -76,7 +76,7 @@ pub enum SessionFilesError {
     #[error("`{id}` is not a session id that can name a file")]
     InvalidId {
         /// The id as given.
-        id: String,
+        id: HarnessSessionId,
     },
     /// The working directory cannot be turned into the harness's project
     /// name (not absolute, or not Unicode).
@@ -91,9 +91,20 @@ pub enum SessionFilesError {
         /// Which harness.
         harness: HarnessKind,
         /// The session.
-        id: String,
+        id: HarnessSessionId,
         /// Where it was looked for.
         home: PathBuf,
+    },
+    /// More than one transcript claims the session; Vessel does not guess
+    /// which is the conversation.
+    #[error("{count} {harness} transcripts claim session {id}")]
+    Ambiguous {
+        /// Which harness.
+        harness: HarnessKind,
+        /// The session.
+        id: HarnessSessionId,
+        /// How many.
+        count: usize,
     },
     /// Reading the home failed.
     #[error("cannot read {}", path.display())]
@@ -120,13 +131,12 @@ pub fn session_files(
     let Some(find) = descriptor(harness).sessions else {
         return Err(SessionFilesError::Unsupported { harness });
     };
-    let id = id.as_str();
-    if !is_file_name(id) {
-        return Err(SessionFilesError::InvalidId { id: id.to_owned() });
+    if !is_file_name(id.as_str()) {
+        return Err(SessionFilesError::InvalidId { id: id.clone() });
     }
     find(home, cwd, id)?.ok_or_else(|| SessionFilesError::NotFound {
         harness,
-        id: id.to_owned(),
+        id: id.clone(),
         home: home.to_owned(),
     })
 }

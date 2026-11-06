@@ -24,7 +24,10 @@ use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, InlineTable, Value};
-use vessel_proto::{EnvName, McpServerName, McpTransport, ResolvedMcpServers, ResolvedValue};
+use vessel_proto::{
+    EnvName, HarnessKind, HarnessSessionId, McpServerName, McpTransport, ResolvedMcpServers,
+    ResolvedValue,
+};
 
 use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
@@ -52,14 +55,14 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     terminal_args: true,
 };
 
-/// Finds `sessions/*/*/*/rollout-*-<id>.jsonl`, the date directories in
-/// order. Symbolic links are not followed.
+/// Finds `sessions/*/*/*/rollout-<timestamp>-<id>.jsonl`, the id matched
+/// whole (a suffix of a longer id is another session). Symbolic links are
+/// not followed. Two files for one id is an error rather than a guess.
 fn session_files(
     home: &Path,
     _cwd: &Path,
-    id: &str,
+    id: &HarnessSessionId,
 ) -> Result<Option<SessionFiles>, SessionFilesError> {
-    let suffix = format!("-{id}.jsonl");
     let mut level = vec![PathBuf::from("sessions")];
     for _depth in 0..3 {
         let mut next = Vec::new();
@@ -68,18 +71,42 @@ fn session_files(
         }
         level = next;
     }
+    let mut found = Vec::new();
     for day in &level {
         for file in children(home, day, Metadata::is_file)? {
             let matches = file
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(&suffix));
+                .is_some_and(|name| rollout_id(name) == Some(id.as_str()));
             if matches {
-                return Ok(Some(SessionFiles::new(file, Vec::new())));
+                found.push(file);
             }
         }
     }
-    Ok(None)
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(found.pop().map(|file| SessionFiles::new(file, Vec::new()))),
+        count => Err(SessionFilesError::Ambiguous {
+            harness: HarnessKind::Codex,
+            id: id.clone(),
+            count,
+        }),
+    }
+}
+
+/// The session id in a rollout file name,
+/// `rollout-YYYY-MM-DDTHH-MM-SS-<id>.jsonl`; `None` for any other name.
+fn rollout_id(name: &str) -> Option<&str> {
+    const TIMESTAMP: usize = "YYYY-MM-DDTHH-MM-SS".len();
+    let rest = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let (timestamp, id) = (rest.get(..TIMESTAMP)?, rest.get(TIMESTAMP..)?);
+    let shaped = timestamp.char_indices().all(|(at, character)| match at {
+        4 | 7 | 13 | 16 => character == '-',
+        10 => character == 'T',
+        _ => character.is_ascii_digit(),
+    });
+    let id = id.strip_prefix('-')?;
+    (shaped && !id.is_empty()).then_some(id)
 }
 
 /// Entries of `home/relative` whose own metadata (not a link's target)

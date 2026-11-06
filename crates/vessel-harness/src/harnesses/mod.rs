@@ -13,7 +13,7 @@ mod opencode;
 
 use std::path::Path;
 
-use vessel_proto::{HarnessKind, ResolvedMcpServers};
+use vessel_proto::{HarnessKind, HarnessSessionId, ResolvedMcpServers};
 
 use crate::layout::HarnessLayout;
 use crate::mcp::{McpError, TerminalMcp};
@@ -53,7 +53,7 @@ pub(crate) struct Descriptor {
 /// Find a session's files: `(home, working directory, session id)`, the
 /// id already checked to be one plain file name.
 pub(crate) type FindSession =
-    fn(&Path, &Path, &str) -> Result<Option<SessionFiles>, SessionFilesError>;
+    fn(&Path, &Path, &HarnessSessionId) -> Result<Option<SessionFiles>, SessionFilesError>;
 
 /// Render MCP servers into the harness's launch-time form.
 pub(crate) type RenderMcp = fn(&ResolvedMcpServers) -> Result<TerminalMcp, McpError>;

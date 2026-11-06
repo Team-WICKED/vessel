@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use vessel_proto::{McpTransport, ResolvedMcpServers};
+use vessel_proto::{HarnessSessionId, McpTransport, ResolvedMcpServers};
 
 use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
@@ -131,8 +131,9 @@ fn canonical(_cwd: &Path) -> Option<PathBuf> {
 fn session_files(
     home: &Path,
     cwd: &Path,
-    id: &str,
+    id: &HarnessSessionId,
 ) -> Result<Option<SessionFiles>, SessionFilesError> {
+    let id = id.as_str();
     let mut found = None;
     for directory in directories(cwd) {
         let slug = slug(&directory).ok_or_else(|| SessionFilesError::InvalidDirectory {
