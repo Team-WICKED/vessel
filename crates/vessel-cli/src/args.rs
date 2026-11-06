@@ -104,6 +104,11 @@ pub(crate) enum Command {
         /// Session id, or a unique prefix of one.
         session: SessionSelector,
     },
+    /// Serve the Vessel tools over MCP on stdio, as a session's agent. A
+    /// node starts this for every session (the session's `vessel` MCP
+    /// server), with its endpoint and the session's credential in the
+    /// environment; it is not run by hand.
+    Mcp,
     /// Change a session in place.
     Session {
         #[command(subcommand)]

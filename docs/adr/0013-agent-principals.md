@@ -166,3 +166,52 @@ own.
 - A new crate, `vessel-mcp`: the MCP server, on `vessel-client`.
 - Per-agent identity under one OS user is accounting, not isolation; this
   ADR says so, and the plan lists sandboxing as later work.
+
+## As built (Track H, H4, 2026-11-06)
+
+The decision stands, on one node; cross-node calls (`fleet.forward`, the
+creator chain) are Track X.
+
+- **Credential.** Minted by `session.create` before the session starts:
+  the session runtime takes its id from the node (`LaunchOptions::id`), so
+  the credential is bound to it. 256 random bits; the node keeps only its
+  SHA-256 (`CredentialHash`), in memory, compared in constant time.
+- **Where it goes.** The `vessel` MCP server (`Config::vessel_mcp`; `vessel
+  node start` uses its own executable, `vesseld` a `vessel` beside it):
+  `vessel mcp`, with `VESSEL_NODE_SOCKET`, `VESSEL_AGENT_SESSION` and
+  `VESSEL_AGENT_SECRET` in that server's environment. A structured
+  session's agent gets it over ACP, Claude Code's terminal in the
+  owner-only MCP file. Codex's terminal form puts server values in Codex's
+  own environment (ADR 0012, as built), so there the credential is in the
+  harness's environment after all; its name ends in `SECRET`, which keeps
+  Codex from passing it to the commands its agent runs. A node without
+  `vessel_mcp` mints no credentials; limits and depth still apply.
+- **Admission.** On the local socket only, a JSON object as the first
+  frame. Anything wrong (unknown session, wrong secret, ended session) is
+  the same `rejected` as a wrong token. The check and the registration of
+  the connection share one lock, and the session's end cancels the
+  registered connections, as revoking a device does.
+- **Grants.** The agent's scopes are its creator's, at most `read` and
+  `operate`: an owner's or a device's session's agent gets the
+  intersection, an agent's session's agent the agent's. `owned_only` is
+  always on; profile grants (`[profiles.X.agent]`) are not built yet.
+- **Ownership.** Every request type declares the session an `operate` call
+  acts on (`session.send`, `session.kill`, `session.move_profile`); the
+  guard checks it after the scope, walking `created_by` up to the depth
+  limit through live and stored sessions. Reads (`session.get`, `.read`,
+  `.subscribe`, `.list`) are open to agents, which see the node's sessions.
+  An agent does not own its own session.
+- **Limits.** 8 live sessions an agent created itself (descendants count
+  for their own creators), and depth 3 (a user's session is 0). Both are
+  counted in the registry under one lock, so concurrent creations cannot
+  overshoot. Refusals are `forbidden`.
+- **Moves.** A profile move restarts the agent and its `vessel mcp`: the
+  move gets a second credential, and when it ends the one in use stays.
+- **`vessel mcp`.** On `rmcp` (plan decision 8; the check is recorded in
+  `vessel-mcp`'s Decision Log). Tools: `list_nodes` (this node until Track
+  X), `list_sessions`, `create_session` (with an optional first prompt,
+  sent once the session is ready), `send_input` (returns `from`),
+  `answer_permission`, `read_events`, `wait_turn` (until the turn ends, a
+  permission is asked, the session ends, or a timeout; with the reply
+  text), `kill_session`. The node's refusals come back as tool errors with
+  the protocol's code; a wrong call is a JSON-RPC error.

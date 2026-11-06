@@ -55,7 +55,15 @@ its manual smoke test: the end-to-end secure channel (`vessel-secure`),
 the relay (`vessel-relay`, `vesseld relay`), and pairing devices with a
 node, which they then reach directly or through relays.
 
-Not yet: fleet sync, harness profiles, model routing, the LSP bridge. See
+Milestone 4 (one person's machines as one fleet; see
+[docs/plans/backend-m4.md](docs/plans/backend-m4.md)) is in progress.
+Built so far on one node: harness profiles (`profiles.toml`, `vessel run
+--profile`, `vessel profiles`), moving a structured session to another
+profile (`vessel session move-profile`), and agent tools: every session's
+agent gets the `vessel` MCP server (`vessel mcp`) with a credential of its
+own, to start and drive sessions of its own.
+
+Not yet: fleet sync across machines, model routing, the LSP bridge. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Try it
@@ -179,6 +187,7 @@ vessel node devices revoke 3fa9       # its open connections close
 | `VESSEL_RELAY_BIND` | `vesseld relay --bind` | `127.0.0.1:7078` |
 | `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
 | `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` | unset: the peer's address |
+| `VESSEL_NODE_SOCKET`, `VESSEL_AGENT_SESSION`, `VESSEL_AGENT_SECRET` | `vessel mcp` only: set by the node in each session's `vessel` MCP server | set by the node |
 
 ## Layout
 

@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
-use vessel_node::{Config, DataDir, Node};
+use vessel_node::{Config, DataDir, Node, VesselMcp};
 use vessel_proto::RouteUrl;
 
 /// Vessel node daemon.
@@ -233,6 +233,7 @@ async fn run(dir: DataDir, args: Run) -> ExitCode {
     config.relays = args.relays;
     config.relay_token_file = args.relay_token_file;
     config.public = args.public;
+    config.vessel_mcp = vessel_beside_me();
 
     // Before the node starts, so a hang-up during start-up cannot kill it.
     #[cfg(unix)]
@@ -327,4 +328,13 @@ fn chain(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     text
+}
+
+/// `vessel mcp` for sessions' agents (ADR 0013): the `vessel` installed
+/// beside this `vesseld`, if there is one (releases ship both together);
+/// otherwise sessions get no `vessel` server.
+fn vessel_beside_me() -> Option<VesselMcp> {
+    let me = std::env::current_exe().ok()?;
+    let vessel = me.with_file_name(format!("vessel{}", std::env::consts::EXE_SUFFIX));
+    vessel.is_file().then(|| VesselMcp::vessel(vessel))
 }

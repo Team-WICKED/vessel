@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 vessel-client.workspace = true
+vessel-mcp.workspace = true
 vessel-node.workspace = true
 vessel-proto.workspace = true
 vessel-remote.workspace = true
@@ -36,6 +37,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# `vessel mcp` speaks JSON-RPC lines; its test reads them.
+serde_json.workspace = true
 tempfile.workspace = true
 tokio-util.workspace = true
 # An in-process relay for `vessel nodes add --pair` end to end.

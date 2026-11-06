@@ -126,6 +126,9 @@ pub(crate) enum CliError {
     Release(#[from] ReleaseError),
     #[error(transparent)]
     Build(#[from] BuildError),
+    /// `vessel mcp` stopped (ADR 0013).
+    #[error(transparent)]
+    Mcp(#[from] vessel_mcp::McpError),
 
     /// The local token file holds something a client cannot send.
     #[error("the token in {} cannot be sent as a bearer token", .0.display())]

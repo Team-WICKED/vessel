@@ -78,6 +78,7 @@ vessel-agent = { path = "crates/vessel-agent" }
 vessel-client = { path = "crates/vessel-client" }
 vessel-fleet = { path = "crates/vessel-fleet" }
 vessel-harness = { path = "crates/vessel-harness" }
+vessel-mcp = { path = "crates/vessel-mcp" }
 vessel-node = { path = "crates/vessel-node" }
 vessel-proc = { path = "crates/vessel-proc" }
 vessel-proto = { path = "crates/vessel-proto" }
@@ -126,6 +127,12 @@ process-wrap = { version = "10", default-features = false, features = ["job-obje
 # decision 2). Default features off: the unicode renderer only, with no
 # dependencies and no `unsafe` (checked 2026-11-06).
 qrcode = { version = "0.14", default-features = false }
+# The MCP server of `vessel mcp` (vessel-mcp, ADR 0013; plan decision 8).
+# Checked 2026-11-06 against AGENTS.md section 9: no `unsafe` of ours (its
+# one block is in its own tests), the same tokio runtime, and only `server`
+# and `transport-io`: no macros, HTTP, auth or child processes. It adds
+# schemars and five small helpers to the tree.
+rmcp = { version = "3.9", default-features = false, features = ["server", "transport-io"] }
 # SQLite event log with the library compiled in (vessel-store, ADR 0004).
 rusqlite = { version = "0.41", features = ["bundled"] }
 # Safe `tcgetwinsize` for the fake-tui test binary (vessel-testkit only).

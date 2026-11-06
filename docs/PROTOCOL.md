@@ -59,8 +59,15 @@ session as created by the owner, and never emit `profile_changed`.
   device gets `read`, `operate` and `admin`, as in version 4.
 - Agents (ADR 0013): on the local socket, an agent's `vessel mcp` sends
   `{"type":"agent","session","secret"}` as its first frame instead of the
-  token (a token is never a JSON object). Implemented with milestone 4
-  Track H.
+  token (a token is never a JSON object). A credential that is unknown,
+  wrong, or of an ended session is answered like a wrong token
+  (`rejected`, `unauthorized`); an admitted connection closes when its
+  session ends. An agent has its session creator's scopes, at most `read`
+  and `operate`; `session.send`, `session.kill` and `session.move_profile`
+  on a session it did not start (directly or through sessions it started)
+  are `forbidden`, as are a ninth live session of its own and a session
+  four levels of agents deep. Sessions it creates record `created_by:
+  {"kind":"agent","node","session"}`.
 - Older connections: a node adapts what it sends to the negotiated
   version, where it encodes frames. `profile_changed` reaches a version 2-4
   client as `agent { harness_log { line: "vessel: profile changed from A

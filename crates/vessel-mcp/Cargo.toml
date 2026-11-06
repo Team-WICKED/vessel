@@ -1,0 +1,28 @@
+[package]
+name = "vessel-mcp"
+description = "`vessel mcp`: the MCP server that gives a session's agent the Vessel tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-client.workspace = true
+vessel-proto.workspace = true
+
+bytes.workspace = true
+rmcp.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+vessel-harness = { workspace = true, features = ["fakes"] }
+vessel-node.workspace = true
+vessel-testkit.workspace = true
+
+[lints]
+workspace = true
