@@ -548,3 +548,49 @@ async fn an_ended_session_can_be_removed_and_its_holders_carry_on() {
     })
     .await;
 }
+
+/// A process the program started in a group of its own survives the group
+/// kill and keeps the PTY open. The session must still end, within the
+/// drain deadline, with the program's own exit code.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_process_that_escaped_the_group_does_not_keep_the_session_open() {
+    within(async {
+        let fixture = Fixture::new(DEFAULT_RING_CAPACITY, DEFAULT_DURABLE_CAPACITY);
+        let created = fixture
+            .runtime
+            .create(support::terminal(HarnessKind::ClaudeCode))
+            .await
+            .unwrap();
+        let stored = collect(created.durable);
+        let handle = created.handle;
+        let mut follower = Follower::new(&handle, EventSeq::ZERO);
+        follower.until_text("ready").await;
+        handle.send(keys("escape\r")).await.unwrap();
+        follower.until_text("escaped ").await;
+        follower.until_text("\n").await;
+        let escapee: u32 = follower
+            .text
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("escaped "))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        handle.send(keys("exit 3\r")).await.unwrap();
+        assert_eq!(
+            follower.until_end().await,
+            SessionStatus::Exited { code: Some(3) }
+        );
+        drop(stored.await.unwrap());
+
+        // The escapee is still there (that was the point); remove it.
+        let killed = std::process::Command::new("kill")
+            .args(["-9", &escapee.to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success(), "the escaped process should still run");
+    })
+    .await;
+}

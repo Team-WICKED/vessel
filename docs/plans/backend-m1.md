@@ -79,6 +79,16 @@ Owns: `vessel-proc`, `vessel-harness`, `vessel-pty`, `vessel-agent`,
   a message chunk, a thought, a tool call with an update, a permission
   request, and ends the turn; honours `session/cancel`.
 - Dev-dependency only; never shipped in `vesseld`.
+- Failure scenarios (added 2026-11-06, Track S review item 8), so the
+  runtime's hard paths have tests: `fake-acp` hangs at `initialize` or
+  `session/new` (`FAKE_ACP_HANG`), exits or writes non-UTF-8 mid-turn with
+  a permission request open (prompts `exit`, `garbage`), floods updates
+  until cancelled (`flood`), and on `session/load` replays a user and an
+  agent chunk and returns its config options; `fake-tui` switches the
+  modes a full-screen TUI sets (`modes on`/`off`: alternate screen,
+  bracketed paste, kitty keyboard flags) and starts a process that escapes
+  its group (`escape`, Unix). On Windows both run behind `.cmd` shims, as
+  npm installs harnesses.
 - `within(limit, test)`: the safety net integration tests put around
   themselves. It builds the fakes before starting the clock, because the
   first nested build of a run is a real build (about 30 crates; 60 s on the

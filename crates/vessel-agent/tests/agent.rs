@@ -408,7 +408,16 @@ async fn resuming_loads_the_session_and_replays_its_history() {
             resume: Some(HarnessSessionId::new("fake-session-9")),
             ..setup(None)
         });
-        // The replay arrives before the handshake completes.
+        // The replay (both sides of the conversation) arrives before the
+        // handshake completes.
+        assert_eq!(
+            agent.next().await,
+            Some(AgentEvent::UserMessageChunk {
+                content: ContentBlock::Text {
+                    text: "earlier question".to_owned()
+                }
+            })
+        );
         assert_eq!(
             agent.next().await,
             Some(AgentEvent::MessageChunk {
@@ -424,6 +433,35 @@ async fn resuming_loads_the_session_and_replays_its_history() {
             })
         );
         agent.input.prompt(text("plain")).await.unwrap();
+        drop(agent.until(turn_over).await);
+    })
+    .await;
+}
+
+/// `session/load` answers with the config options too, so a resumed
+/// session can switch models like a new one.
+#[tokio::test]
+async fn a_resumed_session_selects_the_requested_model() {
+    within(async {
+        let mut agent = Agent::start(AgentSetup {
+            resume: Some(HarnessSessionId::new("fake-session-4")),
+            ..setup(Some("fake-large"))
+        });
+        drop(agent.until(ready).await);
+        agent.input.prompt(text("hello")).await.unwrap();
+        drop(
+            agent
+                .until(|event| {
+                    *event
+                        == AgentEvent::MessageChunk {
+                            content: ContentBlock::Text {
+                                text: "echo: hello (model fake-large)".to_owned(),
+                            },
+                        }
+                })
+                .await,
+        );
+        agent.input.cancel_turn().await.unwrap();
         drop(agent.until(turn_over).await);
     })
     .await;
