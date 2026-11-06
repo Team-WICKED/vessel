@@ -20,11 +20,19 @@
 //!   from the escalation's seconds to the microseconds between the two, the
 //!   same race `vessel-proc` accepts for its sweep. Closing it there would
 //!   take `kqueue`'s `NOTE_EXIT`, which this crate cannot test.
+//! - In that window macOS refuses to signal the group (`EPERM`: every
+//!   member has exited, none is reaped yet). A refused signal therefore
+//!   waits, on a condition variable and at most [`REAP_GRACE`], for the
+//!   waiter to set the flag: if it does, the leader is gone and the signal
+//!   counts as delivered; if not, the refusal is real (a member running as
+//!   another user) and is returned.
 //! - Windows has no process groups: the killer terminates the program and
 //!   the pseudo console's closing ends the rest.
 
 #[cfg(unix)]
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+#[cfg(unix)]
+use std::time::Duration;
 
 use vessel_proc::{InvalidGroup, Signal, SignalError};
 
@@ -47,7 +55,15 @@ struct Leader {
     /// Set by the waiter once the leader exited, before it is reaped
     /// (see the module's Decision Log).
     exited: Mutex<bool>,
+    /// Woken when `exited` is set.
+    exiting: Condvar,
 }
+
+/// How long a refused signal waits for the waiter to report the leader's
+/// exit (macOS, see the module's Decision Log). The waiter reaps as soon as
+/// the leader exits, so this only bounds a real refusal's answer.
+#[cfg(unix)]
+const REAP_GRACE: Duration = Duration::from_millis(500);
 
 #[cfg(unix)]
 impl Leader {
@@ -57,7 +73,16 @@ impl Leader {
         if *exited {
             return Ok(());
         }
-        self.group.signal(signal)
+        match self.group.signal(signal) {
+            Err(refused) if refused.is_refused() => {
+                let (exited, _timeout) = self
+                    .exiting
+                    .wait_timeout_while(exited, REAP_GRACE, |exited| !*exited)
+                    .unwrap_or_else(PoisonError::into_inner);
+                if *exited { Ok(()) } else { Err(refused) }
+            }
+            delivered => delivered,
+        }
     }
 
     /// The leader exited: from now on signals do nothing. Sweeps the group
@@ -66,6 +91,7 @@ impl Leader {
     fn exited<T>(&self, reap: impl FnOnce() -> T) -> T {
         let mut exited = self.exited.lock().unwrap_or_else(PoisonError::into_inner);
         *exited = true;
+        self.exiting.notify_all();
         if let Err(error) = self.group.signal(Signal::Kill) {
             tracing::warn!(%error, "cannot sweep PTY process group");
         }
@@ -83,6 +109,7 @@ impl Killer {
             leader: Arc::new(Leader {
                 group: vessel_proc::ProcessGroup::of_leader(pid)?,
                 exited: Mutex::new(false),
+                exiting: Condvar::new(),
             }),
         })
     }
@@ -238,6 +265,7 @@ mod tests {
         let leader = Leader {
             group: vessel_proc::ProcessGroup::of_leader(child.id()).unwrap(),
             exited: Mutex::new(true),
+            exiting: Condvar::new(),
         };
         leader.signal(Signal::Kill).unwrap();
         assert!(
