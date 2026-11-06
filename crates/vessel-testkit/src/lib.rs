@@ -15,6 +15,10 @@
 //!   command on this machine under a fake home, with an injectable
 //!   connection drop (ADR 0007 tests). See `src/bin/fake_ssh.rs`.
 //!
+//! It also locates a freshly built `vesseld` ([`vesseld()`]) for tests
+//! outside `vessel-node` that need the real node binary (installing it on a
+//! fake remote, attaching to it over `fake-ssh`).
+//!
 //! This crate is a dev-dependency only; nothing in `vesseld` links it.
 //!
 //! [Decision Log]
@@ -61,6 +65,10 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use tokio::time::error::Elapsed;
+
+mod vesseld;
+
+pub use vesseld::vesseld;
 
 /// A fake harness binary built from this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -184,14 +192,14 @@ pub enum LocateError {
         /// What went wrong (kept as text so the error can be cached and cloned).
         message: String,
     },
-    /// `cargo build -p vessel-testkit --bins` failed.
-    #[error("building the fake harnesses failed:\n{stderr}")]
+    /// The nested `cargo build` failed.
+    #[error("building the test binaries failed:\n{stderr}")]
     Build {
         /// Cargo's error output.
         stderr: String,
     },
     /// The build succeeded but the binary is not where it should be.
-    #[error("fake harness binary not found at {}", path.display())]
+    #[error("test binary not found at {}", path.display())]
     Missing {
         /// Where it was expected.
         path: PathBuf,
@@ -206,7 +214,7 @@ fn built_dir() -> Result<PathBuf, LocateError> {
     BUILT
         .get_or_init(|| {
             let profile_dir = profile_dir()?;
-            build(&profile_dir)?;
+            build(&profile_dir, &["-p", "vessel-testkit", "--bins"])?;
             Ok(profile_dir)
         })
         .clone()
@@ -231,11 +239,12 @@ fn profile_dir() -> Result<PathBuf, LocateError> {
     Ok(dir.to_path_buf())
 }
 
-/// Run the nested build, if Cargo is driving this process.
+/// Run the nested build of `what` (`-p <package> --bins` or `--bin`), if
+/// Cargo is driving this process.
 ///
 /// Without `CARGO` (a test executable run by hand) the existing binaries are
 /// used as they are.
-fn build(profile_dir: &Path) -> Result<(), LocateError> {
+fn build(profile_dir: &Path, what: &[&str]) -> Result<(), LocateError> {
     let Some(cargo) = std::env::var_os("CARGO") else {
         return Ok(());
     };
@@ -252,14 +261,9 @@ fn build(profile_dir: &Path) -> Result<(), LocateError> {
         profile.to_os_string()
     };
     let output = Command::new(cargo)
-        .args([
-            "build",
-            "--quiet",
-            "-p",
-            "vessel-testkit",
-            "--bins",
-            "--profile",
-        ])
+        .args(["build", "--quiet"])
+        .args(what)
+        .arg("--profile")
         .arg(profile)
         .arg("--target-dir")
         .arg(target_dir)
