@@ -274,28 +274,43 @@ member vesseld                         home vesseld
 
 ### Track H progress
 
-Harness side of H1-H3, 2026-11-06, branch `backend/m4-profiles` (crates
-`vessel-harness`, `vessel-agent`, `vessel-session`, `vessel-testkit`):
+2026-11-06, branch `backend/m4-profiles`.
 
-- Done: `Profile` (default per harness, `info()`, redacted `Debug`),
-  `parse_profiles` for `profiles.toml` text, `home`, `login_check`,
-  `session_files` and `link_session`, `launch`/`launch_in` with profile and
-  MCP servers, ACP `session/new`/`session/load` with MCP servers,
-  `SessionRuntime::create_with(spec, LaunchOptions)`, and the fakes
-  reporting environment, arguments, MCP servers and the loaded session id.
-  Tests cover: two profiles give two homes, `unset` removes, another
-  harness's profile is refused, values never reach `ProfileInfo` or
-  `Debug`, MCP servers arrive at the fake (new and load; HTTP left out for
-  an agent without it), no value on any command line, the MCP file is
-  owner-only and removed with the session, and linking on a fake Claude
-  layout (same inode, `memory/` untouched, no symbolic link followed).
-- Refinements: ADR 0011 and ADR 0012, "As built" sections.
-- Left for the node, after the protocol 5 contract (step 1b): reading
-  `profiles.toml` (owner-only check), `profile.list`/`reload`, `--profile`,
-  `SessionSpec.profile` and `SessionInfo.profile`, passing the resolved
-  profile and an owner-only MCP directory into `create_with`, and H2's
-  `session.move_profile` on top of `login_check`, `session_files` and
-  `link_session`. H4 is not started.
+- **Harness side of H1-H3 (done):** `Profile` (default per harness,
+  `info()`, redacted `Debug`), `parse_profiles` for `profiles.toml` text,
+  `home`, `login_check`, `layout` (shared instructions and skills, for
+  Track F), `session_files` and `link_session`, `launch` with profile, MCP
+  servers and the node's MCP directory, ACP `session/new`/`session/load`
+  with MCP servers, `SessionRuntime::create_with(spec, LaunchOptions)`,
+  and the fakes reporting environment, arguments, MCP servers and the
+  loaded session id. Refinements are in ADR 0011 and ADR 0012, "As built".
+- **Review fixes (independent review of the harness side):** errors never
+  quote a `profiles.toml` value; Codex MCP variables cannot change Codex's
+  own environment (inherited values, the profile's, and variables that
+  steer it); the MCP file needs the node's directory (no shared fallback;
+  Windows only inside the user's profile); Codex rollouts match the whole
+  id and two are an error; one case rule for variable names (Windows
+  ignores case); `EPERM` from an exited leader's group counts as gone only
+  once the group is (`vessel-proc`, `vessel-pty`); typed errors and
+  config; links taken back on a failure partway; `memory` in any case.
+- **H1 on the node (done):** `profiles.toml` in the data directory, read
+  at start (a broken file stops the node) and on `profile.reload` (a
+  broken one leaves the profiles in effect, `conflict`), warned about when
+  others can read it; `profile.list` with the harness filter;
+  `session.create` resolves `spec.profile` (unknown or another harness's:
+  `invalid_request`) and records `created_by` (owner or device); an
+  owner-only `<data_dir>/mcp`, emptied at start; store schema 3
+  (`profile`, following `ProfileChanged`, and `created_by`); `vessel run
+  --profile`, `vessel profiles [--harness] [--reload]`. MCP servers are
+  still empty: Track F's resolve plugs in at
+  `vessel-node/src/profiles/launch.rs` (`mcp_servers`). End-to-end tests:
+  two profiles, two homes; `unset` removes; unknown and other-harness
+  profiles refused; values never reach `profile.list` or reload errors;
+  reload keeps the set on a bad file; a broken file stops the start;
+  profile and creator survive a restart; a device's session records the
+  device.
+- **Next:** H2 (`session.move_profile` on `login_check`, `session_files`
+  and `link_session`), H3's node side (with Track F's resolve), H4.
 
 ## Track F: fleet and first run
 
