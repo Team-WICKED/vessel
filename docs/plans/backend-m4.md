@@ -99,6 +99,29 @@ Protocol 5, all additive. Nodes speak 2..=5.
 - `PROTOCOL.md` gets a version 5 entry; the method table gains the rows and
   their scopes.
 
+### Contract as built
+
+The contract lands in steps, so Track H can start before M3's Track P is
+merged and the session structs (which Track P also touches) change once.
+
+- **Step 1a (2026-11-06, additive types only, no wire change yet):**
+  `vessel_proto::profile` has `ProfileName` (1-64 of letters, digits, `.`,
+  `_`, `-`; safe in file names, command lines and TOML keys unquoted),
+  `ProfileInfo`, `Creator` (tag `kind`; default `owner`, which is what every
+  session from before protocol 5 is), `AgentSecret` (32 bytes, redacted in
+  `Debug`) and `AgentAuth` (tag `type: "agent"`). The node tells an
+  `AgentAuth` preamble from a token preamble by the first character: a token
+  is never a JSON object. The `secret!` macro moved from `device.rs` to
+  `key.rs` so `AgentSecret` shares it with `DeviceSecret` and
+  `InvitationSecret`. `PROTOCOL_VERSION` stays 4.
+- **Step 1b (after Track P merges):** the `SessionSpec`/`SessionInfo`
+  fields (`profile`, `created_by` with a default of `owner`), the
+  `profile.*` and `session.move_profile` methods, `ProfileChanged`, the
+  `PROTOCOL.md` entry, and `PROTOCOL_VERSION = 5`. Both structs move to
+  constructor APIs in the same step, so later fields stop breaking every
+  literal in the workspace.
+- **Step 2 (before Track F):** the fleet rows and scope `sync`.
+
 ## Crates (ADR 0001)
 
 | Crate | Change | New edges |
