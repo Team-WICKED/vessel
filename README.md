@@ -210,6 +210,10 @@ vessel fleet members
   An agent's `vessel` tools take `node` (a name from `list_nodes`) to
   start and drive its own sessions on another member; a member's calls
   reach the other members only if it was invited with `--relay`.
+- The home binds each member's node id to its key for good. A member
+  reinstalled with a new key is refused until you run `vessel fleet forget
+  <node id>` on the home (`--data-dir` of the home's node); revoke its old
+  device there too if it should not sync any more.
 
 - Edit the sources on the home; members follow within seconds (the home
   watches `<data_dir>/fleet.toml` and its sources).
