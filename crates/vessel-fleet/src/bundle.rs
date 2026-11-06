@@ -47,7 +47,7 @@ use vessel_proto::{BundleFile, BundlePath, Generation, Manifest, McpDefinitions}
 use crate::blobs::BlobStore;
 use crate::files;
 use crate::rel::fold;
-use crate::skill::{SkillNameError, skill_name};
+use crate::skill::{SkillName, SkillNameError, skill_name};
 
 /// The largest file a bundle carries; larger ones are left out.
 pub const MAX_FILE: u64 = 16 * 1024 * 1024;
@@ -159,7 +159,7 @@ pub enum SourceProblem {
     #[error("{}: skill `{name}` is already {}", dir.display(), kept.display())]
     DuplicateSkill {
         /// The name.
-        name: String,
+        name: SkillName,
         /// The directory left out.
         dir: PathBuf,
         /// The directory bundled.
@@ -368,10 +368,10 @@ impl Builder<'_> {
                     continue;
                 }
             };
-            if self.skipped(&skill) {
+            if self.skipped(skill.as_str()) {
                 continue;
             }
-            if let Some(kept) = names.get(&fold(&skill)) {
+            if let Some(kept) = names.get(&fold(skill.as_str())) {
                 self.problems.push(SourceProblem::DuplicateSkill {
                     name: skill,
                     dir: path,
@@ -379,7 +379,7 @@ impl Builder<'_> {
                 });
                 continue;
             }
-            let _new = names.insert(fold(&skill), path);
+            let _new = names.insert(fold(skill.as_str()), path);
             self.add_tree(&dir, &format!("{}/{skill}", crate::SKILLS))?;
         }
         Ok(())
