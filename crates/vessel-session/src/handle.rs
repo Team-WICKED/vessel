@@ -152,6 +152,22 @@ impl SessionHandle {
         }
     }
 
+    /// Whether the session's agent is in the middle of a turn (a prompt
+    /// already on its way counts); `false` for a terminal session, whose
+    /// turns Vessel cannot see. For copying a session's files away
+    /// (protocol 6's `session.export`): between turns its transcript is
+    /// complete, during one the harness is still appending to it.
+    ///
+    /// # Errors
+    /// [`SessionError::Moving`] while the session moves to another profile,
+    /// [`SessionError::Ended`] once its agent's connection has closed.
+    pub async fn turn_running(&self) -> Result<bool, SessionError> {
+        match &self.0.input {
+            Input::Terminal(_) => Ok(false),
+            Input::Structured(route) => Ok(current(route)?.turn_running().await?),
+        }
+    }
+
     /// Wait until the session has ended, then return its final info.
     ///
     /// Resolves once the actor has published the final status and let go
