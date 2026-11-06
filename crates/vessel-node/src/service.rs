@@ -10,15 +10,15 @@ use vessel_proto::{
     Ack, BlobChunk, CreateSession, DeviceInfo, ErrorCode, EventPage, FleetMember, Generation,
     GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession, ListDevices,
     ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile, NodeInfo,
-    ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, Request, RevokeDevice,
-    SendInput, SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet,
-    WireError,
+    ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice, SendInput,
+    SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
 use crate::agents::{Agents, MAX_DEPTH};
 use crate::devices::Devices;
 use crate::error::ServiceError;
+use crate::fleet::Home;
 use crate::lifecycle::Lifecycle;
 use crate::principal::Principal;
 use crate::profiles::launch::{Launcher, agent_session};
@@ -42,6 +42,8 @@ pub(crate) struct NodeService {
     launcher: Launcher,
     /// Sessions' agents (ADR 0013): credentials, grants, limits.
     agents: Arc<Agents>,
+    /// The fleet's home side (ADR 0012).
+    fleet: Arc<Home>,
 }
 
 /// The parts a [`NodeService`] serves.
@@ -54,6 +56,7 @@ pub(crate) struct Parts {
     pub(crate) profiles: Arc<NodeProfiles>,
     pub(crate) launcher: Launcher,
     pub(crate) agents: Arc<Agents>,
+    pub(crate) fleet: Arc<Home>,
 }
 
 impl NodeService {
@@ -67,6 +70,7 @@ impl NodeService {
             profiles,
             launcher,
             agents,
+            fleet,
         } = parts;
         Self {
             lifecycle,
@@ -77,6 +81,7 @@ impl NodeService {
             profiles,
             launcher,
             agents,
+            fleet,
         }
     }
 }
@@ -406,46 +411,51 @@ impl NodeService {
     }
 }
 
-/// Protocol 5 methods whose implementations come with milestone 4's tracks
-/// (moves: Track H2; the fleet: Track F; docs/plans/backend-m4.md). Until
-/// then each answers `Unsupported` naming the method, so a protocol 5
-/// client gets a clear refusal rather than a guess. The scope check in
-/// `guard` already applies to them.
-#[expect(
-    clippy::unused_async,
-    reason = "every call has the same async shape, so the guard's rows are uniform"
-)]
+/// The fleet (ADR 0012, protocol 5), served by the home's side of
+/// `fleet`; a node that is not a home answers `unavailable`.
 impl NodeService {
+    #[expect(
+        clippy::unused_async,
+        reason = "every call has the same async shape, so the guard's rows are uniform"
+    )]
     pub(crate) async fn get_manifest(
         &self,
         _: &Connection,
         _: GetManifest,
     ) -> Result<Manifest, WireError> {
-        Err(not_yet::<GetManifest>())
+        self.fleet.manifest()
     }
 
     pub(crate) async fn read_blob(
         &self,
         _: &Connection,
-        _: ReadBlob,
+        request: ReadBlob,
     ) -> Result<BlobChunk, WireError> {
-        Err(not_yet::<ReadBlob>())
+        self.fleet.blob(request.hash, request.offset).await
     }
 
     pub(crate) async fn watch_fleet(
         &self,
         _: &Connection,
-        _: WatchFleet,
+        request: WatchFleet,
     ) -> Result<Generation, WireError> {
-        Err(not_yet::<WatchFleet>())
+        self.fleet.watch(request.after).await
     }
 
+    /// `fleet.report`: only a paired device (a member) reports; its device
+    /// id is whose report it is.
     pub(crate) async fn report_applied(
         &self,
-        _: &Connection,
-        _: ReportApplied,
+        connection: &Connection,
+        request: ReportApplied,
     ) -> Result<Ack, WireError> {
-        Err(not_yet::<ReportApplied>())
+        let Principal::Device { id, .. } = connection.principal() else {
+            return Err(WireError::new(
+                ErrorCode::InvalidRequest,
+                "only a member node reports to its fleet's home".to_owned(),
+            ));
+        };
+        self.fleet.report(*id, request).await.map(|()| Ack)
     }
 
     pub(crate) async fn list_members(
@@ -453,16 +463,7 @@ impl NodeService {
         _: &Connection,
         _: ListMembers,
     ) -> Result<Vec<FleetMember>, WireError> {
-        Err(not_yet::<ListMembers>())
+        let devices = self.devices.list().await.map_err(|error| wire(&error))?;
+        Ok(self.fleet.members(devices).await)
     }
-}
-
-fn not_yet<R: Request>() -> WireError {
-    WireError::new(
-        ErrorCode::Unsupported,
-        format!(
-            "`{}` is not implemented by this node yet",
-            R::METHOD.as_str()
-        ),
-    )
 }

@@ -39,10 +39,11 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
-    Call, ClientFrame, ClientInfo, CreateSession, GetNode, GetSession, Hello, InviteDevice,
-    KillSession, ListDevices, ListHarnesses, ListProfiles, ListSessions, MoveProfile, Outcome,
-    ProtocolRange, ReadEvents, ReloadProfiles, Request, RequestId, RevokeDevice, SendInput,
-    ServerFrame, StopNode, Subscribe, Unsubscribe, Welcome, WireError,
+    Call, ClientFrame, ClientInfo, CreateSession, GetManifest, GetNode, GetSession, Hello,
+    InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSessions,
+    MoveProfile, Outcome, ProtocolRange, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied,
+    Request, RequestId, RevokeDevice, SendInput, ServerFrame, StopNode, Subscribe, Unsubscribe,
+    WatchFleet, Welcome, WireError,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -72,6 +73,12 @@ impl Unary for RevokeDevice {}
 impl Unary for ListProfiles {}
 impl Unary for ReloadProfiles {}
 impl Unary for MoveProfile {}
+impl Unary for GetManifest {}
+impl Unary for ReadBlob {}
+// A long poll: one answer, however long the home waits before giving it.
+impl Unary for WatchFleet {}
+impl Unary for ReportApplied {}
+impl Unary for ListMembers {}
 
 /// `n` as a `NonZeroUsize` for constants.
 const fn at_least_one(n: usize) -> NonZeroUsize {

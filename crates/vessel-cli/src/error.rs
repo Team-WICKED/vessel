@@ -164,6 +164,18 @@ pub(crate) enum CliError {
     AmbiguousSession { prefix: String, matches: usize },
     #[error(transparent)]
     Node(#[from] NodeError),
+    /// `vessel fleet init` did not make this node a home.
+    #[error(transparent)]
+    FleetInit(#[from] vessel_node::fleet::InitError),
+    /// `vessel fleet join` did not join.
+    #[error(transparent)]
+    FleetJoin(#[from] vessel_node::fleet::JoinError),
+    /// `vessel fleet restore` did not restore.
+    #[error(transparent)]
+    FleetRestore(#[from] vessel_node::fleet::RestoreError),
+    /// A fleet file could not be read or written.
+    #[error(transparent)]
+    FleetFile(#[from] vessel_node::fleet::FileError),
     #[error("terminal I/O failed")]
     Io(#[from] std::io::Error),
     #[error("an input task failed")]
