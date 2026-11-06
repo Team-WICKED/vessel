@@ -3,6 +3,7 @@
 
 use std::fmt::Write as _;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use bytes::Bytes;
 use vessel_client::NodeClient;
@@ -84,7 +85,8 @@ async fn node_start(
 }
 
 async fn run_session(target: &Target, run: Run) -> Result<(), CliError> {
-    let client = connect(target).await?;
+    // The spec is checked before connecting, so a bad `--cwd` fails without
+    // touching the network.
     let mode = if run.structured {
         SessionMode::Structured {
             model: run.model.map(ModelId::new),
@@ -98,15 +100,39 @@ async fn run_session(target: &Target, run: Run) -> Result<(), CliError> {
     };
     let spec = SessionSpec {
         harness: run.harness,
-        cwd: run.cwd,
+        cwd: run.cwd.map(|cwd| node_cwd(target, cwd)).transpose()?,
         mode,
     };
+    let client = connect(target).await?;
     let info = client.create_session(spec).await?;
     if run.detach {
         return Ok(io::out(format!("{}\n", info.id).as_bytes()).await?);
     }
     io::note(&format!("[vessel] session {}\n", info.id)).await?;
     attach::attach(&client, &info, EventSeq::ZERO).await
+}
+
+/// `--cwd` as the node needs it: an absolute path on the node's machine.
+///
+/// The node refuses relative directories (they would be resolved against
+/// wherever `vesseld` happens to run). A relative `--cwd` means "relative
+/// to where I am", which only has a meaning when the node runs on this
+/// machine: then it is resolved against this process's current directory.
+/// For a node on another machine there is no such place, so it is refused
+/// here with an error saying so, instead of being sent and failing there
+/// with a less helpful one. "This machine" is a loopback `--node`, as for
+/// the token file (`connect`).
+fn node_cwd(target: &Target, cwd: PathBuf) -> Result<PathBuf, CliError> {
+    if cwd.is_absolute() {
+        return Ok(cwd);
+    }
+    if !target.node.is_loopback() {
+        return Err(CliError::RelativeCwd {
+            cwd,
+            node: target.node.clone(),
+        });
+    }
+    Ok(std::path::absolute(&cwd)?)
 }
 
 /// A line for a terminal session (ended with Enter, `\r`, which a TUI in
@@ -172,5 +198,34 @@ async fn print_log(
         if page.at_end {
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(node: &str) -> Target {
+        Target {
+            node: node.parse().unwrap(),
+            token: None,
+            data_dir: None,
+        }
+    }
+
+    #[test]
+    fn a_relative_cwd_is_resolved_here_only_for_a_node_on_this_machine() {
+        let here = std::env::current_dir().unwrap();
+        let local = node_cwd(&target("127.0.0.1:7077"), PathBuf::from("project")).unwrap();
+        assert_eq!(local, here.join("project"));
+        let absolute = here.join("elsewhere");
+        assert_eq!(
+            node_cwd(&target("gpu-box"), absolute.clone()).unwrap(),
+            absolute
+        );
+        assert!(matches!(
+            node_cwd(&target("gpu-box"), PathBuf::from("project")),
+            Err(CliError::RelativeCwd { .. })
+        ));
     }
 }

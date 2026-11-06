@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use vessel_client::{CallError, ConnectError, StreamError};
+use vessel_client::{CallError, ConnectError, NodeUrl, StreamError};
 use vessel_node::NodeError;
 
 #[derive(Debug, thiserror::Error)]
@@ -17,6 +17,20 @@ pub(crate) enum CliError {
         #[source]
         source: vessel_node::StoreError,
     },
+    /// A node on another machine and no `--token`: the local token file is
+    /// only ever sent to this machine's node (see `connect`).
+    #[error(
+        "{0} is not on this machine: pass its token with --token or VESSEL_TOKEN \
+         (the local token file is only sent to a node on this machine)"
+    )]
+    TokenRequired(NodeUrl),
+    /// A relative `--cwd` for a node on another machine, where it would mean
+    /// nothing.
+    #[error(
+        "--cwd {} is relative, but {node} is not on this machine: give an absolute path on that machine",
+        cwd.display()
+    )]
+    RelativeCwd { cwd: PathBuf, node: NodeUrl },
     /// The local token file holds something a client cannot send.
     #[error("the token in {} cannot be sent as a bearer token", .0.display())]
     UnusableToken(PathBuf),

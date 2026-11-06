@@ -17,11 +17,26 @@ pub(crate) fn data_dir(target: &Target) -> Result<DataDir, CliError> {
         .ok_or(CliError::NoHome)
 }
 
-/// Connect with `--token`/`VESSEL_TOKEN`, or the local token file.
+/// Connect with `--token`/`VESSEL_TOKEN`, or, for a node on this machine,
+/// the local token file.
+///
+/// [Decision Log]
+/// - Purpose: `vessel` on the node's own machine should just work, reading
+///   the token the node wrote; talking to another machine must not leak it.
+/// - Constraint: milestone 1 has no TLS (ADR 0005), so a token sent to a
+///   remote `ws://` node crosses the network in clear text. The local token
+///   file is this machine's node's secret; sending it to whatever host
+///   `--node` names would hand it to that host and to the network.
+/// - Choice: the token file is used only when `--node` is a loopback
+///   address or `localhost` (decided from the text, no DNS). For any other
+///   node the token must be given explicitly, and the error says so.
+/// - Cost: reaching a local node through a non-loopback address of this
+///   machine (its LAN IP) needs `--token` too.
 pub(crate) async fn connect(target: &Target) -> Result<NodeClient, CliError> {
     let token = match &target.token {
         Some(token) => token.clone(),
-        None => local_token(data_dir(target)?).await?,
+        None if target.node.is_loopback() => local_token(data_dir(target)?).await?,
+        None => return Err(CliError::TokenRequired(target.node.clone())),
     };
     let client = ClientInfo {
         name: "vessel-cli".to_owned(),

@@ -27,7 +27,11 @@ Option 2:
 - The websocket upgrade must carry `Authorization: Bearer <token>`. The
   comparison takes constant time. `/health` stays open.
 - Local clients (`vessel` CLI) read the token file; remote clients get it
-  through `--token`/`VESSEL_TOKEN`.
+  through `--token`/`VESSEL_TOKEN`. The CLI reads the file only when
+  `--node` is a loopback address or `localhost` (decided from the text, no
+  DNS). For any other node it requires the token explicitly, so this
+  machine's token is never sent to another host in clear text (see the
+  amendment below).
 - Binding a non-loopback address logs a warning that names the token file.
 
 ## Why

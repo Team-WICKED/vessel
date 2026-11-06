@@ -30,8 +30,9 @@ pub(crate) struct Target {
         default_value = "127.0.0.1:7077"
     )]
     pub(crate) node: NodeUrl,
-    /// The node's access token. Defaults to the token file of the local
-    /// data directory (the node writes it on first start).
+    /// The node's access token. For a node on this machine (a loopback
+    /// `--node`) it defaults to the token file of the local data directory;
+    /// a remote node needs it given explicitly.
     #[arg(long, global = true, env = "VESSEL_TOKEN", hide_env_values = true)]
     pub(crate) token: Option<BearerToken>,
     /// Local data directory (default `~/.vessel`): where the token is read
@@ -112,7 +113,9 @@ pub(crate) struct Run {
     /// Resume this harness session (structured mode).
     #[arg(long, requires = "structured")]
     pub(crate) resume: Option<String>,
-    /// Working directory on the node (defaults to the node's home).
+    /// Working directory on the node (defaults to the node user's home). A
+    /// relative path is taken from the current directory when the node is
+    /// on this machine, and refused for a remote node.
     #[arg(long)]
     pub(crate) cwd: Option<PathBuf>,
     /// Start it and print its id instead of attaching.

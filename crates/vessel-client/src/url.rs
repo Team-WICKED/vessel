@@ -1,6 +1,7 @@
 //! Where a node's RPC endpoint is.
 
 use std::fmt;
+use std::net::IpAddr;
 use std::str::FromStr;
 
 use tokio_tungstenite::tungstenite::http::Uri;
@@ -52,6 +53,40 @@ impl NodeUrl {
     #[must_use]
     pub fn is_tls(&self) -> bool {
         self.0.scheme_str() == Some("wss")
+    }
+
+    /// Whether the URL names this machine: `localhost` or a loopback
+    /// address (`127.0.0.0/8`, `::1`, or `::1`'s IPv4-mapped forms).
+    ///
+    /// Decided from the text alone, without DNS: a name that happens to
+    /// resolve to a loopback address counts as another machine. Callers use
+    /// this to decide whether local secrets (the node's token file) and
+    /// local paths may be sent, so the safe answer for anything uncertain is
+    /// "not this machine". A loopback port forwarded to another machine (an
+    /// SSH tunnel) still counts as this machine; that is the caller's
+    /// explicit setup, and it fails loudly (wrong token), not silently.
+    #[must_use]
+    pub fn is_loopback(&self) -> bool {
+        let Some(host) = self.0.host() else {
+            return false;
+        };
+        if host.eq_ignore_ascii_case("localhost") {
+            return true;
+        }
+        let bare = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(host);
+        match bare.parse::<IpAddr>() {
+            Ok(IpAddr::V4(address)) => address.is_loopback(),
+            Ok(IpAddr::V6(address)) => {
+                address.is_loopback()
+                    || address
+                        .to_ipv4_mapped()
+                        .is_some_and(|mapped| mapped.is_loopback())
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -123,6 +158,32 @@ mod tests {
         assert_eq!(url("https://host"), "wss://host/rpc");
         assert_eq!(url("ws://host:1/custom"), "ws://host:1/custom");
         assert!("wss://host".parse::<NodeUrl>().unwrap().is_tls());
+    }
+
+    #[test]
+    fn loopback_is_decided_from_the_text() {
+        let loopback = |text: &str| text.parse::<NodeUrl>().unwrap().is_loopback();
+        for local in [
+            "127.0.0.1",
+            "127.1.2.3:9000",
+            "localhost",
+            "LOCALHOST:7077",
+            "[::1]",
+            "ws://[::1]:7077/rpc",
+            "http://localhost",
+            "[::ffff:127.0.0.1]",
+        ] {
+            assert!(loopback(local), "{local}");
+        }
+        for remote in [
+            "gpu-box",
+            "10.0.0.5",
+            "[::2]",
+            "localhost.example.com",
+            "0.0.0.0",
+        ] {
+            assert!(!loopback(remote), "{remote}");
+        }
     }
 
     #[test]
