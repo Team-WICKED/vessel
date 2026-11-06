@@ -34,10 +34,11 @@ vessel-pty      -> proc
 vessel-agent    -> proto, proc
 vessel-session  -> proto, harness, pty, agent
 vessel-store    -> proto
-vessel-node     -> proto, rpc, harness, session, store, secure
-vessel-client   -> proto, rpc, secure
+vessel-node     -> proto, rpc, harness, session, store, secure, relay
+vessel-client   -> proto, rpc, secure      (relay: with Track P's dial)
 vessel-remote   -> proto, rpc, client      (milestone 2)
 vessel-secure   -> proto                   (milestone 3)
+vessel-relay    -> proto, secure           (milestone 3)
 vessel-cli      -> proto, client, node, remote
 vessel-testkit  (fake harness binaries for tests; dev-dependency only)
 ```
@@ -53,10 +54,15 @@ secure channel (ADR 0009). Its one edge, `-> proto`, is for the key types
 that travel on the wire (`NodePublicKey`, `RoutingId`, the relay's
 `HandshakeMessage`); everything computed from them with cryptography stays
 in `vessel-secure`, so `vessel-proto` stays free of it. `vessel-relay`
-(`-> proto, secure`) and the node's and client's edges to both come with
-the changes that add them. Track P added `vessel-node -> secure` (answering
-handshakes with the node's key pair) and `vessel-client -> secure`
-(initiating them to a pinned key, and fingerprints).
+(`-> proto, secure`) is the relay server, the node's link to it and the
+client's dial, and the websocket carriers both ends use. Track P added
+`vessel-node -> secure` (answering handshakes with the node's key pair) and
+`vessel-client -> secure` (initiating them to a pinned key, and
+fingerprints). `vessel-node` gains `-> relay` for `vesseld relay` and, with
+Track P's integration, `/secure` and relay data connections; the client's
+`-> relay` (for `dial` and `WsCarrier`) comes with that integration.
+`vessel-testkit` (dev-only) has a `relay` feature: a misbehaving relay
+proxy built on `tokio-tungstenite`, with no edge to Vessel crates.
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.

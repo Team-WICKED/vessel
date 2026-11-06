@@ -49,6 +49,7 @@ mod link;
 mod server;
 mod socket;
 mod tls;
+mod token;
 
 use vessel_proto::RouteUrl;
 
@@ -59,6 +60,7 @@ pub use dial::{DialError, connect, dial};
 pub use link::{LinkState, NodeLink};
 pub use server::{Limits, RelayConfig, serve};
 pub use tls::{TlsConfig, TlsError};
+pub use token::{TokenFileError, read_token_file};
 
 /// The node's control connection.
 pub const NODE_PATH: &str = "/v1/node";

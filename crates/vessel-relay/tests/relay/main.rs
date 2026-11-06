@@ -10,6 +10,8 @@
 mod direct;
 #[cfg(test)]
 mod support;
+#[cfg(test)]
+mod tamper;
 
 use std::sync::Arc;
 use std::time::Duration;

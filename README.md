@@ -49,8 +49,14 @@ remote machine needs only SSH access. `vessel` installs its own `vesseld`
 there on first contact, `attach` starts the node, and attaching survives
 a lost connection.
 
-Not yet: relay, TLS, fleet sync, harness profiles, model routing, the LSP
-bridge. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Milestone 3 (a node behind NAT, through a relay; see
+[docs/plans/backend-m3.md](docs/plans/backend-m3.md)) is in progress: the
+end-to-end secure channel (`vessel-secure`) and the relay
+(`vessel-relay`, `vesseld relay`) exist; pairing and nodes and clients that
+use them are being built.
+
+Not yet: fleet sync, harness profiles, model routing, the LSP bridge. See
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Try it
 
@@ -94,6 +100,41 @@ first.
 - A dropped connection during `attach` reconnects by itself and continues
   where it was.
 
+### Running a relay
+
+A relay lets clients reach a node that has no public address. It only
+splices connections: everything through it is end-to-end encrypted to the
+node's key (ADR 0009), and it keeps nothing on disk.
+
+```bash
+head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
+./target/release/vesseld relay --bind 127.0.0.1:7078 --token-file relay.token
+```
+
+- Nodes that use the relay need the same token; clients need none.
+- The relay speaks plain HTTP. For `wss://`, put it behind the HTTPS
+  reverse proxy that already serves the machine, for example with nginx
+  (the relay URL is then `wss://relay.example.com/vessel`):
+
+  ```nginx
+  location /vessel/ {
+      proxy_pass http://127.0.0.1:7078/;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header X-Real-IP $remote_addr;
+  }
+  ```
+
+- Behind a proxy every connection comes from the proxy, so the per-client
+  rate limit needs the client's address: `--client-address-header
+  X-Real-IP` (or `CF-Connecting-IP` behind Cloudflare). Set it only if
+  every request goes through that proxy and the proxy overwrites the
+  header; otherwise clients could pick their own address.
+- The relay pings every connection every 10 s, so a proxy's idle timeout
+  of 60 s (nginx's default) is enough.
+- `GET /health` answers `ok`.
+
 ### Environment
 
 | Variable | Means | Default |
@@ -104,6 +145,9 @@ first.
 | `VESSEL_CONFIG_DIR` | where the node book lives (`<dir>/vessel/nodes.toml`); tests point it at a temporary directory | the platform's config directory (`~/.config` on Linux) |
 | `VESSEL_SSH` | the `ssh` program to run (tests use `fake-ssh`) | `ssh` on `PATH` |
 | `VESSEL_GH` | the GitHub CLI used to download releases | `gh` on `PATH` |
+| `VESSEL_RELAY_BIND` | `vesseld relay --bind` | `127.0.0.1:7078` |
+| `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
+| `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` | unset: the peer's address |
 
 ## Layout
 

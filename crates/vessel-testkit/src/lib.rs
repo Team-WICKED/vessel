@@ -19,6 +19,10 @@
 //! outside `vessel-node` that need the real node binary (installing it on a
 //! fake remote, attaching to it over `fake-ssh`).
 //!
+//! With the `relay` feature, [`relay::MisbehavingRelay`] is a relay that
+//! drops, replays, reorders, corrupts or delays messages on command
+//! (milestone 3).
+//!
 //! This crate is a dev-dependency only; nothing in `vesseld` links it.
 //!
 //! [Decision Log]
@@ -66,6 +70,8 @@ use std::time::Duration;
 
 use tokio::time::error::Elapsed;
 
+#[cfg(feature = "relay")]
+pub mod relay;
 mod vesseld;
 
 pub use vesseld::vesseld;

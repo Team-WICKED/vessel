@@ -20,11 +20,18 @@ path = "src/bin/fake_acp.rs"
 name = "fake-ssh"
 path = "src/bin/fake_ssh.rs"
 
+[features]
+# The misbehaving relay (`relay` module): a websocket proxy, so only tests
+# that need it pay for the websocket stack (the fake binaries do not).
+relay = ["dep:futures-util", "dep:tokio-tungstenite"]
+
 [dependencies]
 agent-client-protocol.workspace = true
+futures-util = { workspace = true, optional = true, features = ["sink"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std", "rt"] }
+tokio-tungstenite = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["compat"] }
 
 [target.'cfg(unix)'.dependencies]
