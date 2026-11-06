@@ -86,8 +86,12 @@ depend on the node, so there is no cycle).
 - Runtime track, terminal and structured sessions working end to end:
   - `vessel-proc`: `CommandSpec`, `spawn` as a process-group leader,
     `ProcessGroup` (Unix). Stopping signals the whole group, and the group
-    is swept once its leader exits. Windows terminates only the direct
-    child (no job objects yet).
+    is swept once its leader exits. On Windows each child starts suspended
+    in its own kill-on-close job object (`process-wrap`), so stopping ends
+    the whole tree: an npm `.cmd` shim's `cmd.exe`, the adapter it started,
+    and their children. PTY sessions (`vessel-pty`) still terminate only
+    the direct child on Windows; the rest end when the pseudo console
+    closes.
   - `vessel-harness`: one descriptor module per harness, `Lookup` (explicit
     search path), concurrent `discover` with a version-probe timeout,
     `launch` (working directory made absolute and checked). The `fakes`

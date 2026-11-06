@@ -23,24 +23,23 @@ pub struct Spawned {
     pub stderr: ChildStderr,
 }
 
-/// Start `spec` with piped stdio, as the leader of a new process group.
+/// Start `spec` with piped stdio, as the leader of a new process group (a
+/// new job object on Windows).
 ///
 /// # Errors
-/// Fails if the program cannot be started.
+/// Fails if the program cannot be started (on Windows also if its job
+/// object cannot be set up).
 pub fn spawn(spec: &CommandSpec) -> Result<Spawned, SpawnError> {
     let mut command = tokio::process::Command::from(spec.to_command());
     let _ = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // Backstop for paths that drop a `Child` without waiting; on Windows
-        // it is the only cleanup (see `Child::signal`).
+        // Backstop for paths that drop a `Child` without waiting.
         .kill_on_drop(true);
-    #[cfg(unix)]
-    let _ = command.process_group(0);
 
     let program = || spec.program.clone();
-    let mut inner = command.spawn().map_err(|source| SpawnError::Start {
+    let mut inner = os::spawn(command).map_err(|source| SpawnError::Start {
         program: program(),
         source,
     })?;
@@ -48,9 +47,10 @@ pub fn spawn(spec: &CommandSpec) -> Result<Spawned, SpawnError> {
         program: program(),
         stream,
     };
-    let stdin = inner.stdin.take().ok_or_else(|| missing(Stream::Stdin))?;
-    let stdout = inner.stdout.take().ok_or_else(|| missing(Stream::Stdout))?;
-    let stderr = inner.stderr.take().ok_or_else(|| missing(Stream::Stderr))?;
+    let (stdin, stdout, stderr) = os::pipes(&mut inner);
+    let stdin = stdin.ok_or_else(|| missing(Stream::Stdin))?;
+    let stdout = stdout.ok_or_else(|| missing(Stream::Stdout))?;
+    let stderr = stderr.ok_or_else(|| missing(Stream::Stderr))?;
     let pid = inner
         .id()
         .ok_or_else(|| SpawnError::NoPid { program: program() })?;
@@ -75,13 +75,15 @@ pub fn spawn(spec: &CommandSpec) -> Result<Spawned, SpawnError> {
     })
 }
 
-/// A running child that leads its own process group.
+/// A running child that leads its own process group (on Windows: the first
+/// process of its own job object).
 ///
 /// Dropping a `Child` that has not been waited for kills its whole group, so
-/// an early return or a cancelled task cannot leak processes.
+/// an early return or a cancelled task cannot leak processes. On Windows
+/// dropping it closes the job, which kills every process in it.
 #[derive(Debug)]
 pub struct Child {
-    inner: tokio::process::Child,
+    inner: os::Inner,
     pid: u32,
     #[cfg(unix)]
     group: ProcessGroup,
@@ -105,11 +107,12 @@ impl Child {
 
     /// Ask the child's process group to stop.
     ///
-    /// On Unix this signals every process in the group. On Windows every
-    /// signal terminates the direct child only; processes it started may
-    /// survive (no job objects yet, see the crate docs). After the child has
-    /// been reaped this does nothing: [`wait`](Self::wait) already swept the
-    /// group.
+    /// On Unix this signals every process in the group. Windows has no
+    /// polite signal for a windowless process, so every signal terminates
+    /// the child's job: the child and everything it started (through a
+    /// `.cmd` shim, the shim's `cmd.exe`, the real harness and its children).
+    /// After the child has been reaped this does nothing:
+    /// [`wait`](Self::wait) already swept the group.
     ///
     /// # Errors
     /// Fails if the OS refuses to deliver the signal.
@@ -121,7 +124,7 @@ impl Child {
         {
             self.group.signal(signal)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
             let _ = signal;
             self.inner.start_kill().map_err(SignalError::from)
@@ -141,27 +144,29 @@ impl Child {
         if let State::Reaped(code) = self.state {
             return Ok(code);
         }
-        let status = self.inner.wait().await?;
+        let status = os::wait_for_leader(&mut self.inner).await?;
         let code = status.code();
         self.state = State::Reaped(code);
-        #[cfg(unix)]
         self.sweep();
         Ok(code)
     }
 
     /// Kill leftovers of the group after the leader exited, so a harness's
     /// own children (MCP servers, shells) never outlive it.
-    #[cfg(unix)]
-    fn sweep(&self) {
-        if let Err(error) = self.group.signal(Signal::Kill) {
+    fn sweep(&mut self) {
+        #[cfg(unix)]
+        let swept = self.group.signal(Signal::Kill);
+        #[cfg(windows)]
+        let swept = self.inner.start_kill().map_err(SignalError::from);
+        if let Err(error) = swept {
             tracing::warn!(pid = self.pid, %error, "cannot sweep process group");
         }
     }
 }
 
 /// Unix: kill the whole group of a child dropped before it was reaped; the
-/// runtime's orphan queue then reaps the leader. (Windows relies on
-/// `kill_on_drop`, which terminates the direct child.)
+/// runtime's orphan queue then reaps the leader. (On Windows dropping the
+/// job handle does the same: the job is kill-on-close.)
 #[cfg(unix)]
 impl Drop for Child {
     fn drop(&mut self) {
@@ -170,5 +175,82 @@ impl Drop for Child {
         {
             tracing::warn!(pid = self.pid, %error, "cannot kill dropped process group");
         }
+    }
+}
+
+/// What differs between Unix process groups and Windows job objects.
+///
+/// [Decision Log]
+/// - Purpose: on Windows, npm installs `claude-agent-acp` and `codex-acp` as
+///   `.cmd` shims, so the direct child is `cmd.exe` and the adapter is its
+///   child. Terminating the direct child left the adapter running (spending
+///   API credit mid-turn) and holding the pipes, so a session never ended.
+/// - Alternatives: assign the running child to a job after spawning it
+///   (`win32job`; a child that starts its own children within the first
+///   milliseconds escapes, and closing that race needs `unsafe` thread
+///   resumption); our own Win32 FFI (the workspace forbids `unsafe`).
+/// - Choice: `process-wrap`'s `JobObject` and `KillOnDrop`: the child
+///   starts suspended, joins a new kill-on-close job, then resumes, so
+///   nothing escapes, and closing the job (dropping the [`Child`]) kills
+///   all of it.
+/// - Constraint: `process-wrap`'s own `wait` also waits for every process
+///   left in the job, which could block forever on a lingering grandchild.
+///   [`wait_for_leader`] waits for the child itself, as on Unix, and
+///   [`Child::sweep`] then terminates the job.
+#[cfg(unix)]
+mod os {
+    use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
+
+    pub(super) type Inner = tokio::process::Child;
+
+    pub(super) fn spawn(mut command: tokio::process::Command) -> std::io::Result<Inner> {
+        let _ = command.process_group(0);
+        command.spawn()
+    }
+
+    pub(super) const fn pipes(
+        inner: &mut Inner,
+    ) -> (Option<ChildStdin>, Option<ChildStdout>, Option<ChildStderr>) {
+        (inner.stdin.take(), inner.stdout.take(), inner.stderr.take())
+    }
+
+    pub(super) async fn wait_for_leader(
+        inner: &mut Inner,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        inner.wait().await
+    }
+}
+
+/// See the Unix `os` module for the Decision Log.
+#[cfg(windows)]
+mod os {
+    use process_wrap::tokio::{ChildWrapper, CommandWrap, JobObject, KillOnDrop};
+    use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
+
+    pub(super) type Inner = Box<dyn ChildWrapper>;
+
+    pub(super) fn spawn(command: tokio::process::Command) -> std::io::Result<Inner> {
+        let mut wrapped = CommandWrap::from(command);
+        let _ = wrapped.wrap(JobObject).wrap(KillOnDrop);
+        wrapped.spawn()
+    }
+
+    pub(super) fn pipes(
+        inner: &mut Inner,
+    ) -> (Option<ChildStdin>, Option<ChildStdout>, Option<ChildStderr>) {
+        (
+            inner.stdin().take(),
+            inner.stdout().take(),
+            inner.stderr().take(),
+        )
+    }
+
+    /// The child itself, not the whole job: `JobObject` wraps the plain
+    /// child directly (`KillOnDrop` only sets a flag), so its inner wrapper
+    /// is the process we started.
+    pub(super) async fn wait_for_leader(
+        inner: &mut Inner,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        inner.inner_mut().wait().await
     }
 }

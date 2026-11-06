@@ -23,6 +23,13 @@
 //!   stop and swept with `SIGKILL` once the leader exits; output then ends
 //!   because no process holds the PTY any more. On Windows the pseudo
 //!   console is closed when the program exits, which ends the output.
+//! - Windows gap: stopping terminates the direct child only (for an npm
+//!   `.cmd` shim that is `cmd.exe`). The harness under it is attached to
+//!   the same pseudo console and is told the console closed
+//!   (`CTRL_CLOSE_EVENT`), which ends programs that keep the default
+//!   handler. `vessel-proc` puts its children in job objects instead, but
+//!   `portable-pty` starts the program running, and joining a job
+//!   afterwards can miss children it starts in its first milliseconds.
 //!
 //! [`CommandSpec`]: vessel_proc::CommandSpec
 //! [`Bytes`]: bytes::Bytes

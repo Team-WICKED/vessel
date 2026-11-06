@@ -4,11 +4,15 @@
 //! stdout to EOF therefore proves the grandchild is gone too: the tests wait
 //! on that event instead of sleeping. Every test runs under a generous
 //! timeout so a regression fails instead of hanging CI.
+//!
+//! On Windows every test runs `fake-tui` through a `.cmd` shim, as npm
+//! installs harnesses there: the direct child is `cmd.exe`, the fake is its
+//! child and the sleeper its grandchild, and EOF proves all three are gone.
 
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use vessel_proc::{CommandSpec, Signal, Spawned, spawn};
 
-use support::{drain, fake_tui, finish, read_until, within};
+use support::{drain, fake_tui, read_until, within};
 
 /// Helpers live in a `#[cfg(test)]` module so clippy's test allowances
 /// (`unwrap`, `panic`) cover them as they cover the tests.
@@ -32,8 +36,25 @@ mod support {
             .expect("test timed out")
     }
 
+    #[cfg(unix)]
     pub(super) fn fake_tui() -> CommandSpec {
         CommandSpec::new(Fake::Tui.path().unwrap())
+    }
+
+    /// `fake-tui` behind a `.cmd` shim, written once per test process.
+    #[cfg(windows)]
+    pub(super) fn fake_tui() -> CommandSpec {
+        use std::path::PathBuf;
+        use std::sync::OnceLock;
+
+        static SHIM: OnceLock<PathBuf> = OnceLock::new();
+        let shim = SHIM.get_or_init(|| {
+            let dir =
+                std::env::temp_dir().join(format!("vessel-proc-tests-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            vessel_testkit::write_cmd_shim(&dir, "fake-tui", &Fake::Tui.path().unwrap()).unwrap()
+        });
+        CommandSpec::new(shim)
     }
 
     /// Read lines until one contains `needle`; returns every line read.
@@ -59,31 +80,12 @@ mod support {
         rest
     }
 
-    /// After the leader exited on its own: on Unix the sweep in `wait` killed
-    /// the grandchild, so stdout reaches EOF.
+    /// The exit code `wait` reports for a child that was stopped: none on
+    /// Unix (a signal), the job's termination code on Windows.
     #[cfg(unix)]
-    pub(super) async fn finish(lines: Lines<BufReader<ChildStdout>>, _seen: &str) {
-        drop(drain(lines).await);
-    }
-
-    /// On Windows the grandchild survives its parent (documented gap), so it
-    /// is removed by pid instead of waiting for EOF.
+    pub(super) const STOPPED: Option<i32> = None;
     #[cfg(windows)]
-    pub(super) async fn finish(lines: Lines<BufReader<ChildStdout>>, seen: &str) {
-        drop(lines);
-        let pid = seen
-            .lines()
-            .find_map(|line| line.split_once("grandchild ").map(|(_, pid)| pid))
-            .unwrap()
-            .trim()
-            .to_owned();
-        let status = tokio::process::Command::new("taskkill")
-            .args(["/F", "/PID", &pid])
-            .status()
-            .await
-            .unwrap();
-        assert!(status.success());
-    }
+    pub(super) const STOPPED: Option<i32> = Some(1);
 }
 
 #[tokio::test]
@@ -137,12 +139,13 @@ async fn environment_and_working_directory_are_applied() {
             .unwrap();
         assert_eq!(std::path::Path::new(reported).canonicalize().unwrap(), dir);
         assert_eq!(child.wait().await.unwrap(), Some(3));
-        finish(lines, &seen).await;
+        // The leader exited on its own; the sweep in `wait` removed the
+        // grandchild, so stdout reaches EOF.
+        drop(drain(lines).await);
     })
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn stopping_the_child_stops_its_group() {
     within(async {
@@ -152,7 +155,7 @@ async fn stopping_the_child_stops_its_group() {
         let mut lines = BufReader::new(stdout).lines();
         drop(read_until(&mut lines, "ready").await);
         child.signal(Signal::Terminate).unwrap();
-        assert_eq!(child.wait().await.unwrap(), None, "ended by a signal");
+        assert_eq!(child.wait().await.unwrap(), support::STOPPED);
         drop(drain(lines).await);
         // Signalling after the group is gone is a harmless no-op.
         child.signal(Signal::Kill).unwrap();
@@ -160,7 +163,6 @@ async fn stopping_the_child_stops_its_group() {
     .await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn dropping_an_unwaited_child_kills_its_group() {
     within(async {
@@ -169,22 +171,6 @@ async fn dropping_an_unwaited_child_kills_its_group() {
         drop(read_until(&mut lines, "ready").await);
         drop(child);
         drop(drain(lines).await);
-    })
-    .await;
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn stopping_the_child_ends_it() {
-    within(async {
-        let Spawned {
-            mut child, stdout, ..
-        } = spawn(&fake_tui()).unwrap();
-        let mut lines = BufReader::new(stdout).lines();
-        let seen = read_until(&mut lines, "ready").await.join("\n");
-        child.signal(Signal::Terminate).unwrap();
-        let _ = child.wait().await.unwrap();
-        finish(lines, &seen).await;
     })
     .await;
 }

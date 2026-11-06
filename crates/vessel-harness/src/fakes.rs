@@ -26,7 +26,11 @@ pub enum Role {
 /// Make `fake` reachable inside `dir` as `kind`'s program for `role`;
 /// returns the path created.
 ///
-/// Unix uses a symlink, Windows a copy (symlinks there need privileges).
+/// Unix uses a symlink. Windows writes `<name>.cmd`, a shim that runs the
+/// fake, because that is how npm installs `claude`, `codex`,
+/// `claude-agent-acp` and `codex-acp` there: the lookup then resolves the
+/// name through `PATHEXT` and the session's direct child is `cmd.exe`, with
+/// the fake as its child, as in production.
 ///
 /// # Errors
 /// Fails if the link or copy cannot be created (for example the name is
@@ -37,17 +41,32 @@ pub fn install(dir: &Path, kind: HarnessKind, role: Role, fake: &Path) -> io::Re
         (Role::Terminal, _) | (Role::Structured, Structured::Native { .. }) => descriptor.binary,
         (Role::Structured, Structured::Adapter { binary, .. }) => binary,
     };
-    let target = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    place(fake, &target)?;
-    Ok(target)
+    place(fake, dir, name)
 }
 
 #[cfg(unix)]
-fn place(fake: &Path, target: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(fake, target)
+fn place(fake: &Path, dir: &Path, name: &str) -> io::Result<PathBuf> {
+    let target = dir.join(name);
+    std::os::unix::fs::symlink(fake, &target)?;
+    Ok(target)
 }
 
-#[cfg(not(unix))]
-fn place(fake: &Path, target: &Path) -> io::Result<()> {
-    std::fs::copy(fake, target).map(drop)
+/// The shim runs the fake with every argument and returns its exit code.
+/// (The same shape as `vessel_testkit::write_cmd_shim`, which this crate
+/// cannot use: the testkit is a dev-dependency only.)
+#[cfg(windows)]
+fn place(fake: &Path, dir: &Path, name: &str) -> io::Result<PathBuf> {
+    use std::io::Write as _;
+
+    let target = dir.join(format!("{name}.cmd"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)?;
+    write!(
+        file,
+        "@echo off\r\n\"{}\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+        fake.display()
+    )?;
+    Ok(target)
 }
