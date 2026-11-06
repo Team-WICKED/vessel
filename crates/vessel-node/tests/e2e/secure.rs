@@ -259,9 +259,14 @@ async fn a_relay_drop_during_an_attach_resumes_on_the_next_relay() {
         until(&mut stream, &mut records, &mut notices, "> ").await;
         assert!(notices.is_empty());
 
+        // The channel notices a dropped record only when the next one
+        // arrives, so more output must follow the drop: under load the
+        // output of two lines can come as one record, and if that is the
+        // one dropped, nothing would. Wait for the drop, then type again.
         flaky.tamper(Toward::Client, Tamper::Drop);
-        drop(flaky);
         owner.send(session, keys("one\r")).await.unwrap();
+        flaky.applied(1).await;
+        drop(flaky);
         owner.send(session, keys("two\r")).await.unwrap();
         until(&mut stream, &mut records, &mut notices, "echo: two").await;
 
@@ -333,7 +338,9 @@ async fn a_revoked_device_loses_its_attach_and_others_carry_on() {
 
 /// A relay that corrupts, replays or reorders a device's records ends the
 /// connection, and no tampered frame reaches the node's RPC layer: a
-/// replayed input is applied once, a corrupted or reordered one never.
+/// replayed input is never applied twice (its genuine first copy may be,
+/// or may be dropped with the connection, ADR 0007), a corrupted or
+/// reordered one never.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
     within(async {
@@ -350,7 +357,7 @@ async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
         crate::support::collect_until(&mut watch, &mut seen, "> ").await;
         let laptop = device(&paired, &[], &[&flaky_url]);
         let markers = ["marker 0\r", "marker 1\r", "marker 2\r"];
-        let mut applied = 0;
+        let firsts = |seen: &[EventRecord]| output_of(seen).matches("echo: first").count();
 
         for (round, tamper) in [Tamper::Replay, Tamper::Corrupt, Tamper::Reorder]
             .into_iter()
@@ -368,18 +375,27 @@ async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
             let second = connection.send(session, keys("second\r")).await;
             let first = first.await.unwrap();
             assert!(matches!(second, Err(CallError::Disconnected)), "{tamper:?}");
-            if matches!(tamper, Tamper::Replay) {
-                applied += 1;
-            } else {
-                assert!(matches!(first, Err(CallError::Disconnected)), "{tamper:?}");
-            }
+            let before = firsts(&seen);
             // A marker from the owner: whatever the device's records did
             // reached the log before it.
             owner.send(session, keys(markers[round])).await.unwrap();
             let marker = format!("echo: marker {round}");
             crate::support::collect_until(&mut watch, &mut seen, &marker).await;
+            let applied = firsts(&seen).checked_sub(before).unwrap();
+            match tamper {
+                // The genuine copy may have been applied before the
+                // replayed one ended the connection: if the call says so,
+                // it was, once; if it failed, it may or may not have been.
+                // The copy is never applied.
+                Tamper::Replay if first.is_ok() => assert_eq!(applied, 1),
+                Tamper::Replay => assert!(applied <= 1, "applied {applied} times"),
+                // Nothing of a corrupted or reordered record is applied.
+                Tamper::Corrupt | Tamper::Reorder | Tamper::Drop | Tamper::Delay(_) => {
+                    assert!(matches!(first, Err(CallError::Disconnected)), "{tamper:?}");
+                    assert_eq!(applied, 0, "{tamper:?}");
+                }
+            }
             let output = output_of(&seen);
-            assert_eq!(output.matches("echo: first").count(), applied, "{tamper:?}");
             assert_eq!(output.matches("echo: second").count(), 0, "{tamper:?}");
         }
         node.stop().await.unwrap();
