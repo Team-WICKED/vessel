@@ -132,7 +132,7 @@ impl Node {
             closing: closing.clone(),
             connections: connections.clone(),
             unadmitted: Arc::new(Semaphore::new(MAX_UNADMITTED)),
-            unadmitted_relayed: Arc::new(Semaphore::new(vessel_relay::RELAYED_UNADMITTED)),
+            unadmitted_per_address: Arc::default(),
         };
         let teardown = Teardown {
             runtime,
@@ -500,6 +500,8 @@ async fn serve(
 ) -> Result<(), NodeError> {
     let http = async {
         if let Some((listener, router)) = tcp {
+            // The peer's address, for `/secure`'s per-address budget.
+            let router = router.into_make_service_with_connect_info::<SocketAddr>();
             axum::serve(listener, router)
                 .with_graceful_shutdown(stop.clone().cancelled_owned())
                 .await

@@ -8,11 +8,12 @@
 //! frames; axum's own graceful shutdown does not cover upgraded
 //! connections.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{ConnectInfo, State};
 use axum::http::header::WWW_AUTHENTICATE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse as _, Response};
@@ -95,7 +96,11 @@ pub(crate) const SECURE_PATH: &str = "/secure";
 /// pings a direct connection, so the node does: a half-open one (a client
 /// that slept, a NAT mapping that expired) is dropped after the silence
 /// limit, as a relay drops relayed ones.
-async fn secure(State(gateway): State<Gateway>, upgrade: WebSocketUpgrade) -> Response {
+async fn secure(
+    State(gateway): State<Gateway>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
     let connection = gateway.connections.token();
     upgrade
         .max_message_size(vessel_secure::MAX_RECORD)
@@ -106,7 +111,7 @@ async fn secure(State(gateway): State<Gateway>, upgrade: WebSocketUpgrade) -> Re
                 .secure
                 .accept_logged(
                     AxumCarrier::new(socket, Some(gateway.keepalive)),
-                    Route::Direct,
+                    Route::Direct(peer.ip()),
                 )
                 .await;
         })
