@@ -13,8 +13,8 @@ use tracing::Instrument as _;
 use vessel_agent::{AgentProcess, AgentSetup};
 use vessel_harness::{McpFile, Profile};
 use vessel_proto::{
-    Creator, EventRecord, HarnessSessionId, ModelId, ResolvedMcpServers, SessionId, SessionInfo,
-    SessionMode, SessionSpec, TerminalSize,
+    Creator, EventRecord, HarnessSessionId, ModelId, NodeId, ResolvedMcpServers, SessionId,
+    SessionInfo, SessionMode, SessionOrigin, SessionSpec, TerminalSize,
 };
 use vessel_pty::{PtyProcess, WindowSize};
 
@@ -92,12 +92,22 @@ pub struct LaunchOptions {
     /// (an agent credential is bound to it, ADR 0013); a fresh random one
     /// otherwise. An id the runtime already has is refused.
     pub id: Option<SessionId>,
+    /// Where the session came from when another node of the fleet had a
+    /// hand in it (protocol 6): a call forwarded from it, or an import of
+    /// one of its sessions. Recorded in `SessionInfo::origin`; `None` for
+    /// this node's own.
+    pub origin: Option<SessionOrigin>,
+    /// The home a creating call came through (protocol 6), recorded in
+    /// `SessionInfo::via`.
+    pub via: Option<NodeId>,
 }
 
 /// What a session records about its start besides its spec.
 struct Record {
     id: SessionId,
     created_by: Creator,
+    origin: Option<SessionOrigin>,
+    via: Option<NodeId>,
     notices: Vec<String>,
 }
 
@@ -190,6 +200,8 @@ impl SessionRuntime {
             created_by,
             notices,
             id,
+            origin,
+            via,
         } = options;
         let id = id.unwrap_or_else(SessionId::random);
         if self.get(id).is_some() {
@@ -198,6 +210,8 @@ impl SessionRuntime {
         let record = Record {
             id,
             created_by,
+            origin,
+            via,
             notices,
         };
         let profile = profile.unwrap_or_else(|| Profile::default_for(spec.harness));
@@ -434,9 +448,14 @@ impl SessionRuntime {
         let Record {
             id,
             created_by,
+            origin,
+            via,
             notices,
         } = record;
-        let (info, kill, shared) = self.shared(id, spec, created_by, input, control);
+        let mut info = SessionInfo::new(id, spec, Utc::now()).with_creator(created_by);
+        info.origin = origin;
+        info.via = via;
+        let (info, kill, shared) = self.shared(info, input, control);
         let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         Parts {
             life: Lifecycle {
@@ -452,14 +471,12 @@ impl SessionRuntime {
     /// Initial info and the state shared by the actor and its handles.
     fn shared(
         &self,
-        id: SessionId,
-        spec: SessionSpec,
-        created_by: Creator,
+        info: SessionInfo,
         input: Input,
         control: Option<mpsc::Sender<Control>>,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
-        let (info, info_receiver) =
-            watch::channel(SessionInfo::new(id, spec, Utc::now()).with_creator(created_by));
+        let id = info.id;
+        let (info, info_receiver) = watch::channel(info);
         let kill = self.shutdown.child_token();
         let shared = Arc::new(Shared {
             id,
