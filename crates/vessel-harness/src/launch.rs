@@ -3,6 +3,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use vessel_proc::CommandSpec;
 use vessel_proto::{McpServerName, ResolvedMcpServers, SessionMode, SessionSpec};
@@ -217,9 +218,7 @@ fn attach(
     };
     let dir = dir.ok_or(HarnessError::NoMcpDirectory)?;
     let mut argument = OsString::from(form.flag);
-    let file = McpFile::new(form, dir).map_err(|error| HarnessError::McpFile {
-        reason: error.to_string(),
-    })?;
+    let file = McpFile::new(form, dir).map_err(|error| HarnessError::McpFile(Arc::new(error)))?;
     argument.push(file.path());
     Ok((command.arg(argument), Some(file)))
 }
@@ -287,6 +286,7 @@ mod tests {
         parse_profiles(&file, Some(Path::new("/h")))
             .unwrap()
             .get(&"p".parse().unwrap())
+            .cloned()
             .unwrap()
     }
 
@@ -361,5 +361,47 @@ mod tests {
             );
         }
         assert_eq!(check(&[("PROXYLESS", "x")], &plain), Ok(()));
+    }
+
+    /// Review finding 7: the I/O error stays the source, and encoding
+    /// problems are typed.
+    #[test]
+    fn errors_keep_their_cause_and_type() {
+        let io = std::io::Error::other("no randomness");
+        let error = HarnessError::McpFile(Arc::new(io));
+        assert!(std::error::Error::source(&error).is_some());
+
+        #[cfg(unix)]
+        {
+            use std::collections::BTreeMap;
+            use std::os::unix::ffi::OsStrExt as _;
+
+            use vessel_proto::McpTransport;
+
+            use crate::harnesses::descriptor;
+            use crate::mcp::EncodeProblem;
+
+            let servers = BTreeMap::from([(
+                "odd".parse().unwrap(),
+                McpTransport::Stdio {
+                    command: PathBuf::from(std::ffi::OsStr::from_bytes(b"/opt/\xff")),
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                },
+            )]);
+            for harness in [
+                vessel_proto::HarnessKind::ClaudeCode,
+                vessel_proto::HarnessKind::Codex,
+            ] {
+                let render = descriptor(harness).terminal_mcp.unwrap();
+                assert_eq!(
+                    render(&servers).unwrap_err(),
+                    McpError::Encode {
+                        server: "odd".parse().unwrap(),
+                        problem: EncodeProblem::CommandNotUtf8,
+                    }
+                );
+            }
+        }
     }
 }

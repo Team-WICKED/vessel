@@ -31,7 +31,7 @@ use vessel_proto::{
 
 use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
-use crate::mcp::{McpError, TerminalMcp};
+use crate::mcp::{EncodeProblem, McpError, TerminalMcp};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -156,7 +156,7 @@ fn terminal_mcp(servers: &ResolvedMcpServers) -> Result<TerminalMcp, McpError> {
             } => {
                 let command = command.to_str().ok_or_else(|| McpError::Encode {
                     server: name.clone(),
-                    reason: "its command is not valid UTF-8".to_owned(),
+                    problem: EncodeProblem::CommandNotUtf8,
                 })?;
                 let _old = table.insert("command", Value::from(command));
                 if !args.is_empty() {
@@ -205,7 +205,7 @@ fn header_variable(
         .parse()
         .map_err(|_invalid| McpError::Encode {
             server: server.clone(),
-            reason: "no variable name for a header".to_owned(),
+            problem: EncodeProblem::HeaderVariable,
         })
 }
 
