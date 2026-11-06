@@ -52,6 +52,7 @@ pub(super) async fn run(init: &mut Init) -> Result<(), CliError> {
         }
         Err(error) => return Err(error),
     };
+    let granting = !grant.is_empty();
     let joined = fleet::join(&files, &offer, &crate::fleet::node_name(), grant).await?;
     let detail = format!(
         "joined the fleet of {} ({}) via {}",
@@ -60,6 +61,9 @@ pub(super) async fn run(init: &mut Init) -> Result<(), CliError> {
     init.report(Outcome::Done, "fleet", &detail).await?;
     if let Some(clash) = crate::fleet::named_like_home(&joined.home.name) {
         init.todo.push(clash.trim_end().to_owned());
+    }
+    if let Some(no_route) = crate::fleet::no_callback_route(&offer, granting) {
+        init.todo.push(no_route.trim_end().to_owned());
     }
     if !init.options.service {
         init.todo.push(

@@ -62,6 +62,8 @@ The fresh machine runs `vessel init --join` with the home's link, starts
 its node, and the script checks, timing each step:
 
 - `vessel init` made a profile for each extra account;
+- the home took the fresh machine's grant through the home's relay, so it
+  can call that node back (`--to`, `vessel mcp`'s `node`, `secret.copy`);
 - the fleet's instructions (`CLAUDE.md`, `AGENTS.md`) and skill are in all
   four homes;
 - both MCP servers reach a structured session in every profile, the one
@@ -92,10 +94,14 @@ docs/smoke/join.sh --local               # or here, under a temporary HOME
 - A run takes about ten seconds once the binaries are built; the
   `--deadline` for each step defaults to two minutes.
 - Expected in the output: `vessel init` lists Gemini CLI and OpenCode as
-  not installed (offered, never run), and `vessel fleet status` on the
-  fresh machine says the home did not take its grant (the fresh machine's
-  node has no route the home could call back on; syncing does not need
-  one).
+  not installed (offered, never run). The home runs with a relay on
+  loopback (`vesseld relay`, a throwaway token), and the fresh machine's
+  node, started with plain `vessel node start`, registers there too and
+  the home takes its grant (`fleet.callback`); before, it had no route the
+  home could call back on, and `vessel fleet status` said the home did
+  not take its grant. A home with no relay still syncs its members, and
+  `vessel init --join` and `vessel fleet status` say then that the home
+  cannot call them and how to add a route.
 - `--service` is not part of the run: in a container there is no user
   service manager, and on this machine it would install one. `vessel init
   --service` is covered by `vessel-cli`'s tests against a temporary home.

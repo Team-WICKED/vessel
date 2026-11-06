@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use vessel_node::fleet::{self, ConflictWhy, FleetFiles, FleetInit, FleetStatus, Role, SkipGlob};
-use vessel_proto::{FleetMember, ForgetNode, NodeForgotten, NodeId, Scope};
+use vessel_proto::{FleetMember, ForgetNode, NodeForgotten, NodeId, PairingOffer, Scope};
 
 use crate::args::{FleetCommand, MemoryCommand, Target};
 use crate::connect::{connect, data_dir};
@@ -139,6 +139,7 @@ async fn init(
 async fn join(files: FleetFiles, yes: bool, grant: Vec<Scope>) -> Result<(), CliError> {
     let question = join_question(&grant);
     let offer = pair::offer_from_stdin(yes, "vessel fleet invite", &question).await?;
+    let granting = !grant.is_empty();
     let joined = fleet::join(&files, &offer, &node_name(), grant).await?;
     io::note(&format!(
         "joined the fleet of {} ({}) via {}; this node follows it within a few seconds \
@@ -149,7 +150,25 @@ async fn join(files: FleetFiles, yes: bool, grant: Vec<Scope>) -> Result<(), Cli
     if let Some(clash) = named_like_home(&joined.home.name) {
         io::note(&clash).await?;
     }
+    if let Some(no_route) = no_callback_route(&offer, granting) {
+        io::note(&no_route).await?;
+    }
     Ok(())
+}
+
+/// A warning when the home will not be able to call this node back: a
+/// member with no route of its own registers with its home's relays, and
+/// this home's invitation names none. Nothing when the node grants the
+/// home nothing (it is never called then).
+pub(crate) fn no_callback_route(offer: &PairingOffer, granting: bool) -> Option<String> {
+    (granting && offer.relays.is_empty()).then(|| {
+        "the home's invitation names no relay, so unless this node runs with a route of its \
+         own (`vesseld --public ADDR`, or `--relay`), the home has none to call it back on: it \
+         syncs, but the home cannot run calls here (`--to`, `vessel mcp`'s `node`, \
+         `secret.copy`). Run the home with a relay (`vesseld --relay URL --relay-token-file \
+         FILE`) and its members register there too when they reconnect\n"
+            .to_owned()
+    })
 }
 
 /// A warning when this machine is named like the home it joined: a node
@@ -456,5 +475,32 @@ mod tests {
             quiet.contains("1 invitation outstanding on the home was withdrawn"),
             "{quiet}"
         );
+    }
+
+    #[test]
+    fn joining_a_home_without_a_relay_says_the_home_cannot_call_back() {
+        let mut offer = PairingOffer {
+            v: vessel_proto::OfferVersion,
+            node: NodeId::random(),
+            key: vessel_proto::NodePublicKey::from_bytes([7; 32]),
+            relays: Vec::new(),
+            direct: vec!["ws://192.0.2.10:7077".parse().unwrap()],
+            invite: vessel_proto::InvitationSecret::from_bytes([1; 16]),
+            expires: Utc::now(),
+        };
+        let said = no_callback_route(&offer, true).unwrap();
+        assert!(
+            said.contains("the home's invitation names no relay"),
+            "{said}"
+        );
+        assert!(
+            said.contains("`vesseld --relay URL --relay-token-file FILE`"),
+            "{said}"
+        );
+        // Nothing to call back when the home gets no access here.
+        assert_eq!(no_callback_route(&offer, false), None);
+        // A home with a relay shares it.
+        offer.relays = vec!["wss://relay.example/vessel".parse().unwrap()];
+        assert_eq!(no_callback_route(&offer, true), None);
     }
 }

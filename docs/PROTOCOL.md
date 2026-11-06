@@ -8,10 +8,11 @@ an entry here. Additive, optional fields do not need a bump.
 
 Nodes speak 2..=6; version 6 only adds. Milestone 4's F3, F4 and Track X
 implement it (`docs/plans/backend-m4.md`, "Protocol 6 (accepted)"), all
-built: the envelope, `fleet.grant`, `fleet.forget`, `fleet.peers`,
-`fleet.nodes`, `session.read` with `wait`, the transfers and the secret
-rows. (Until each landed, its methods answered `unsupported`, "not built
-on this node yet", after the scope check like every method.)
+built: the envelope, `fleet.grant`, `fleet.callback`, `fleet.forget`,
+`fleet.peers`, `fleet.nodes`, `session.read` with `wait`, the transfers
+and the secret rows. (Until each landed, its methods answered
+`unsupported`, "not built on this node yet", after the scope check like
+every method.)
 
 - Scope `relay`: passing calls on to other fleet nodes. Independent of
   `sync`, and a member gets it only when the home's owner asks (`vessel
@@ -61,8 +62,14 @@ on this node yet", after the scope check like every method.)
   one over a live member's name names that member; the home's log has the
   details. `conflict` also while the same device has a grant in
   progress; `invalid_request` to a link with no route or more than 8; and
-  `unavailable`, without details, when it cannot pair (within 30 s);
-  `fleet.peers` (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
+  `unavailable`, without details, when it cannot pair (within 30 s).
+  `fleet.callback` (sync; from a member device only, never forwarded)
+  returns `Callback { relays, token? }`: the relays the home registers
+  with and their registration token (none when the home has no relay). A
+  member whose node has no route of its own asks it on each connection
+  until it has one, registers with those relays and names them in its
+  grant's link; with none, it sends no grant and records why in its fleet
+  state. `fleet.peers` (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
   `protocol`, `reachable`), the home included.
 - Transfers (F4): `session.export { session, force? }` (operate,
   ownership-checked for agents) and `memory.export { profile?, project? }`

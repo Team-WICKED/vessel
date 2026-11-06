@@ -140,7 +140,7 @@ pub(crate) fn device_via(
     Arc::new(Pinned::new(connector, Some(node)))
 }
 
-fn direct_route(node: &Node) -> RouteUrl {
+pub(crate) fn direct_route(node: &Node) -> RouteUrl {
     format!("ws://{}", node.address().unwrap()).parse().unwrap()
 }
 

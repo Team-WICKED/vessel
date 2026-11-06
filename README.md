@@ -295,6 +295,18 @@ no more than that grant and the caller's own scopes. A member's calls
 reach the other members only if it was invited with `vessel fleet invite
 --relay`.
 
+The home calls a member back through a route the member names. A member
+with none of its own (started with `vessel node start` or the service
+`vessel init --service` installs, no `--relay` or `--public`) registers
+with the home's relays, which its home tells it, so run the home with a
+relay (`vesseld --relay URL --relay-token-file FILE`, see "A node behind
+NAT") and every member is reachable without flags. A home with no relay
+has none to share: its members still sync, but the home cannot run calls
+on them until one of the two gets a route (`vessel init --join` and
+`vessel fleet status` say so). Each member then holds the relay's
+registration token in memory; registering still needs the member's own
+key, so it cannot take another node's place there.
+
 ### Agent tools
 
 Every session's agent gets the `vessel` MCP server (`vessel mcp`, started

@@ -50,8 +50,8 @@ pub use fleet::{
     ResolvedValue, WatchFleet,
 };
 pub use forward::{
-    Deliver, FleetNode, ForgetNode, Forward, Forwarded, GrantHome, ListNodes, ListPeers,
-    NodeForgotten, Origin, OriginBy, RelayCall,
+    Callback, Deliver, FleetNode, ForgetNode, Forward, Forwarded, GetCallback, GrantHome,
+    ListNodes, ListPeers, NodeForgotten, Origin, OriginBy, RelayCall,
 };
 pub use harness::{Harness, HarnessKind, StructuredSupport, UnknownHarness};
 pub use id::{

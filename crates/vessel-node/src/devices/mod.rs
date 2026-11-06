@@ -53,7 +53,9 @@ pub(crate) struct Devices {
     node: NodeId,
     /// The node's public key, which pairing links carry.
     key: NodePublicKey,
-    routes: Routes,
+    /// Relays are added while the node runs (a fleet member's home's,
+    /// `crate::relays`); direct addresses are fixed at start.
+    routes: Mutex<Routes>,
     invitations: Mutex<Invitations>,
     /// Bumped whenever every pending invitation is withdrawn (a fleet home
     /// forgetting a node): a pairing whose invitation was redeemed before
@@ -69,7 +71,7 @@ impl Devices {
             store,
             node,
             key,
-            routes,
+            routes: Mutex::new(routes),
             invitations: Mutex::new(Invitations::default()),
             withdrawals: AtomicU64::new(0),
             connected: Arc::new(Connected::default()),
@@ -93,6 +95,25 @@ impl Devices {
     ) -> Result<(Invitation, oneshot::Receiver<DeviceId>), ServiceError> {
         let (paired, redeemed) = oneshot::channel();
         Ok((self.make_invitation(request, Some(paired))?, redeemed))
+    }
+
+    /// Where pairing links say this node can be reached, now.
+    pub(crate) fn routes(&self) -> Routes {
+        self.routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Add `relays` (those not there yet) to the routes pairing links name,
+    /// once the node links to them.
+    pub(crate) fn add_relays(&self, relays: &[RouteUrl]) {
+        let mut routes = self.routes.lock().unwrap_or_else(PoisonError::into_inner);
+        for relay in relays {
+            if !routes.relays.contains(relay) {
+                routes.relays.push(relay.clone());
+            }
+        }
     }
 
     /// Withdraw every pending invitation; how many there were. For a fleet
@@ -129,12 +150,13 @@ impl Devices {
         let mut bytes = [0_u8; 16];
         getrandom::fill(&mut bytes).map_err(ServiceError::Random)?;
         let invite = InvitationSecret::from_bytes(bytes);
+        let routes = self.routes();
         let offer = PairingOffer {
             v: OfferVersion,
             node: self.node,
             key,
-            relays: self.routes.relays.clone(),
-            direct: self.routes.direct.clone(),
+            relays: routes.relays,
+            direct: routes.direct,
             invite: invite.clone(),
             expires,
         };
