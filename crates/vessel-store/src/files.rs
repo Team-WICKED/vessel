@@ -131,6 +131,10 @@ pub(crate) enum Privacy {
     /// Already owner-only (always, on Windows).
     Private,
     /// Group or other access was removed; the old mode.
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "only Unix has mode bits to tighten")
+    )]
     Tightened { from: u32 },
 }
 

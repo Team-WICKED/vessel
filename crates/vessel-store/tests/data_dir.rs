@@ -89,6 +89,9 @@ async fn the_event_log_is_owner_only() {
     let opened = vessel_store::Store::open(&dir, vessel_store::StoreConfig::default())
         .await
         .unwrap();
+    // SQLite creates the WAL sidecars on the first transaction, not on open;
+    // a read makes sure they exist before their modes are checked.
+    assert!(opened.store.sessions().await.unwrap().is_empty());
     let database = dir.database_path();
     let sidecars = ["vessel.db-wal", "vessel.db-shm"].map(|name| temp.path().join(name));
     assert_eq!(mode(&database), 0o600);
