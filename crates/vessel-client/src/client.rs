@@ -1,13 +1,13 @@
 //! [`NodeClient`]: one typed method per protocol call.
 
 use vessel_proto::{
-    BlobChunk, BlobHash, BundlePath, ClientInfo, CreateSession, DeleteSecret, DeviceId,
-    DeviceInfo, EventPage, EventSeq, FleetMember, Generation, GetManifest, GetNode, GetSession,
-    Harness, HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
-    ListMembers, ListProfiles, ListSecrets, ListSessions, Manifest, MoveProfile, NodeInfo,
-    ProfileInfo, ProfileName, ProtocolVersion, ReadBlob, ReadEvents, ReloadProfiles,
-    ReportApplied, RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId,
-    SessionInfo, SessionInput, SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, WatchFleet,
+    BlobChunk, BlobHash, BundlePath, ClientInfo, CreateSession, DeleteSecret, DeviceId, DeviceInfo,
+    EventPage, EventSeq, FleetMember, Generation, GetManifest, GetNode, GetSession, Harness,
+    HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers,
+    ListProfiles, ListSecrets, ListSessions, Manifest, MoveProfile, NodeInfo, ProfileInfo,
+    ProfileName, ProtocolVersion, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied,
+    RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId, SessionInfo, SessionInput,
+    SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, WatchFleet,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 

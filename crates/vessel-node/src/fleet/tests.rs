@@ -405,7 +405,10 @@ async fn secrets_are_set_listed_and_deleted_by_admins_only() {
         )
         .await
         .unwrap();
-    assert_eq!(admin.secret_list().await.unwrap(), std::slice::from_ref(&name));
+    assert_eq!(
+        admin.secret_list().await.unwrap(),
+        std::slice::from_ref(&name)
+    );
     let file = read(&home.path("data/secrets.toml"));
     assert!(file.contains("set-over-the-wire"), "stored on the node");
 
