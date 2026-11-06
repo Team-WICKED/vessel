@@ -99,6 +99,12 @@ pub(crate) fn open_private(path: &Path) -> io::Result<File> {
     OpenOptions::new().read(true).write(true).open(path)
 }
 
+/// Open `path` for appending, creating it owner-only if it is missing.
+pub(crate) fn open_append_private(path: &Path) -> io::Result<File> {
+    create_private_file(path)?;
+    OpenOptions::new().append(true).open(path)
+}
+
 /// Create `path` as an empty owner-only file unless it exists.
 pub(crate) fn create_private_file(path: &Path) -> io::Result<()> {
     match open_new(path) {

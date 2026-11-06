@@ -94,6 +94,28 @@ impl NodeLock {
     }
 }
 
+/// Held by a `vesseld attach` while it starts a node, so two of them
+/// racing to start one do not both try: the second waits, then finds the
+/// node the first one started.
+#[derive(Debug)]
+pub struct StartLock {
+    /// Kept open: closing it releases the lock.
+    _file: File,
+}
+
+impl StartLock {
+    /// Wait for the start lock (blocking: call it off the async threads).
+    ///
+    /// # Errors
+    /// The lock file cannot be opened or locked.
+    pub fn acquire(dir: &DataDir) -> Result<Self, StoreError> {
+        let path = dir.start_lock_path();
+        let file = files::open_private(&path).map_err(StoreError::io(&path))?;
+        file.lock().map_err(StoreError::io(&path))?;
+        Ok(Self { _file: file })
+    }
+}
+
 /// The owner record, if readable. Only meaningful while the lock is held.
 fn read_owner(dir: &DataDir) -> Option<NodeOwner> {
     let path = dir.owner_path();
