@@ -371,21 +371,22 @@ member vesseld                         home vesseld
   receiving the definitions, a session's agent getting a server with
   this node's secret and starting without it once the secret is deleted
   (named in its log), and the CLI (stdin only, names only).
-- **F4 (same node done, 2026-11-06):** `session.export`,
-  `memory.export`, `transfer.read`/`close` and `session.import`/
-  `memory.import` between profiles of one node, the client's calls and
+- **F4 (done, 2026-11-06):** `session.export`, `memory.export`,
+  `transfer.read`/`close` and `session.import`/`memory.import`, between
+  profiles of one node and between fleet nodes, the client's calls and
   checked reader, `vessel session copy|move` and `vessel fleet memory
   copy` (ADR 0012, "As built (history and memory, F4)"). Imports pull
-  through a `Source` trait; another node answers `unsupported` until Track
-  X implements it with `fleet.forward`. Codex resuming in another
+  through a `Source`: this node, or another through the envelope
+  (`pass_on`) as the importing caller. Codex resuming in another
   directory is checked with fakes only (the rollout keeps its path,
   `session/load` gets the new directory); the real `codex-acp` is left to
   the manual smoke test. Tests: snapshot and place over temporary trees
   (links, FIFOs, limits, conflicts), the registry (holder, cap, expiry),
   end to end with `fake-acp` for Claude Code and Codex profiles, an
-  agent's ownership, and the CLI.
-- **Next:** F4 across nodes (the `Source` over Track X's envelope) and
-  `secret.copy`, once the envelope lands.
+  agent's ownership, a session moved and a memory copied between two
+  members through the home on an in-process relay, and the CLI.
+- **Next:** `secret.copy` (F3's last row), now that the envelope is
+  built.
 
 ## Track F: fleet and first run
 
