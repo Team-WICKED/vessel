@@ -24,6 +24,10 @@ use vessel_proto::{
     SessionSpec, SessionStatus, StopNode, StopWhen, Subscribe, Subscribed, SubscriptionEnd,
     TerminalSize, Unsubscribe, WireError,
 };
+use vessel_proto::{
+    BlobChunk, FleetMember, Generation, GetManifest, ListMembers, ListProfiles, Manifest,
+    MoveProfile, ProfileInfo, ReadBlob, ReloadProfiles, ReportApplied, WatchFleet,
+};
 use vessel_rpc::memory::Disconnected;
 use vessel_rpc::{ClientConfig, Outbound, OutboundError, Server, ServerConfig};
 
@@ -69,21 +73,22 @@ fn node() -> NodeInfo {
 }
 
 fn info() -> SessionInfo {
-    SessionInfo {
-        id: session_id(),
-        spec: SessionSpec {
-            harness: HarnessKind::OpenCode,
-            cwd: Some(PathBuf::from("/work")),
-            mode: SessionMode::Terminal {
-                args: Vec::new(),
-                size: TerminalSize::default(),
-            },
-        },
-        status: SessionStatus::Running,
-        created_at: DateTime::UNIX_EPOCH,
-        ended_at: None,
-        next_seq: EventSeq::new(LOG_LEN),
-        harness_session: None,
+    {
+        let mut info = SessionInfo::new(
+            session_id(),
+            SessionSpec::new(
+                HarnessKind::OpenCode,
+                SessionMode::Terminal {
+                    args: Vec::new(),
+                    size: TerminalSize::default(),
+                },
+            )
+            .with_cwd(PathBuf::from("/work")),
+            DateTime::UNIX_EPOCH,
+        );
+        info.status = SessionStatus::Running;
+        info.next_seq = EventSeq::new(LOG_LEN);
+        info
     }
 }
 
@@ -272,6 +277,70 @@ impl Handler for FakeNode {
         _request: RevokeDevice,
     ) -> Result<Ack, WireError> {
         Ok(Ack)
+    }
+
+    async fn list_profiles(
+        &self,
+        _context: &Context,
+        _request: ListProfiles,
+    ) -> Result<Vec<ProfileInfo>, WireError> {
+        Err(unsupported())
+    }
+
+    async fn reload_profiles(
+        &self,
+        _context: &Context,
+        _request: ReloadProfiles,
+    ) -> Result<Vec<ProfileInfo>, WireError> {
+        Err(unsupported())
+    }
+
+    async fn move_profile(
+        &self,
+        _context: &Context,
+        _request: MoveProfile,
+    ) -> Result<SessionInfo, WireError> {
+        Err(unsupported())
+    }
+
+    async fn get_manifest(
+        &self,
+        _context: &Context,
+        _request: GetManifest,
+    ) -> Result<Manifest, WireError> {
+        Err(unsupported())
+    }
+
+    async fn read_blob(
+        &self,
+        _context: &Context,
+        _request: ReadBlob,
+    ) -> Result<BlobChunk, WireError> {
+        Err(unsupported())
+    }
+
+    async fn watch_fleet(
+        &self,
+        _context: &Context,
+        _request: WatchFleet,
+    ) -> Result<Generation, WireError> {
+        Err(unsupported())
+    }
+
+    async fn report_applied(
+        &self,
+        _context: &Context,
+        _request: ReportApplied,
+    ) -> Result<Ack, WireError> {
+        Err(unsupported())
+    }
+
+    async fn list_members(
+        &self,
+        _context: &Context,
+        _request: ListMembers,
+    ) -> Result<Vec<FleetMember>, WireError> {
+        Err(unsupported())
     }
 }
 

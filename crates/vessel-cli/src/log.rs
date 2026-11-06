@@ -98,7 +98,9 @@ fn render(
     for record in records {
         match &record.event {
             SessionEvent::Terminal(output) => push(Stream::Out, output.data.bytes()),
-            SessionEvent::Status { .. } => push(Stream::Note, conversation.show(record).as_bytes()),
+            SessionEvent::Status { .. } | SessionEvent::ProfileChanged { .. } => {
+                push(Stream::Note, conversation.show(record).as_bytes());
+            }
             SessionEvent::Agent { .. } => push(Stream::Out, conversation.show(record).as_bytes()),
         }
     }
@@ -181,6 +183,27 @@ mod tests {
                 (Stream::Out, "hello".to_owned()),
                 (Stream::Note, "\n[session interrupted]\n".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn a_profile_change_is_a_note() {
+        let records = [
+            record(
+                0,
+                SessionEvent::ProfileChanged {
+                    from: None,
+                    to: Some("alt".parse().unwrap()),
+                },
+            ),
+            status(1, SessionStatus::Running),
+        ];
+        assert_eq!(
+            runs(&records, 0),
+            [(
+                Stream::Note,
+                "[profile default -> alt]\n[session running]\n".to_owned()
+            )]
         );
     }
 

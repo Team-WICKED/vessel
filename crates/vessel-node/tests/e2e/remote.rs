@@ -163,14 +163,14 @@ async fn control(child: &mut Child) -> Connection {
 }
 
 fn terminal(home: &Path) -> SessionSpec {
-    SessionSpec {
-        harness: HarnessKind::ClaudeCode,
-        cwd: Some(home.to_path_buf()),
-        mode: SessionMode::Terminal {
+    SessionSpec::new(
+        HarnessKind::ClaudeCode,
+        SessionMode::Terminal {
             args: Vec::new(),
             size: TerminalSize::default(),
         },
-    }
+    )
+    .with_cwd(home.to_path_buf())
 }
 
 /// `attach` finds no node, starts one in the background through a login

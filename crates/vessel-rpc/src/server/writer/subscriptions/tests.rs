@@ -27,35 +27,34 @@ fn open(
 }
 
 fn reply(subscription: SubscriptionId) -> Outgoing {
-    let info = vessel_proto::SessionInfo {
-        id: vessel_proto::SessionId::random(),
-        spec: vessel_proto::SessionSpec {
-            harness: vessel_proto::HarnessKind::Codex,
-            cwd: None,
-            mode: vessel_proto::SessionMode::Terminal {
+    let mut info = vessel_proto::SessionInfo::new(
+        vessel_proto::SessionId::random(),
+        vessel_proto::SessionSpec::new(
+            vessel_proto::HarnessKind::Codex,
+            vessel_proto::SessionMode::Terminal {
                 args: Vec::new(),
                 size: vessel_proto::TerminalSize::default(),
             },
-        },
-        status: vessel_proto::SessionStatus::Running,
-        created_at: chrono::DateTime::UNIX_EPOCH,
-        ended_at: None,
-        next_seq: EventSeq::ZERO,
-        harness_session: None,
-    };
+        ),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    info.status = vessel_proto::SessionStatus::Running;
     Outgoing::Response {
         id: vessel_proto::RequestId::new(1),
-        outcome: Outcome::Ok(Reply::Subscribe(vessel_proto::Subscribed {
+        outcome: Box::new(Outcome::Ok(Reply::Subscribe(vessel_proto::Subscribed {
             subscription,
             info,
-        })),
+        }))),
     }
 }
 
 fn ended(frame: Option<&Frame>) -> Option<&SubscriptionEnd> {
-    match frame {
-        Some(Frame::Server(ServerFrame::SubscriptionEnded { end, .. })) => Some(end),
-        Some(Frame::Server(_) | Frame::Event { .. }) | None => None,
+    if let Some(Frame::Server(frame)) = frame
+        && let ServerFrame::SubscriptionEnded { end, .. } = &**frame
+    {
+        Some(end)
+    } else {
+        None
     }
 }
 
@@ -77,8 +76,8 @@ fn a_reply_for_a_released_subscription_resumes_from_its_start() {
 
     let frames = subscriptions.apply(reply(id), &mut departures);
     assert!(matches!(
-        frames[0],
-        Some(Frame::Server(ServerFrame::Response { .. }))
+        &frames[0],
+        Some(Frame::Server(frame)) if matches!(**frame, ServerFrame::Response { .. })
     ));
     assert_eq!(
         ended(frames[1].as_ref()),

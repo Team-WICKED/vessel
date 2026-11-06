@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::agent::{ContentBlock, PermissionOutcome};
 use crate::harness::HarnessKind;
 use crate::id::{EventSeq, HarnessSessionId, ModelId, PermissionId, SessionId};
+use crate::name::ProfileName;
+use crate::profile::Creator;
 use crate::terminal::{TerminalInput, TerminalSize};
 
 /// How a harness is driven.
@@ -47,16 +49,54 @@ pub enum SessionMode {
 }
 
 /// What to run. Body of `session.create`.
+///
+/// `#[non_exhaustive]` with a constructor (protocol 5): every field added
+/// since protocol 2 broke each struct literal in the workspace. Build one
+/// with [`SessionSpec::new`] and the `with_*` methods; fields stay public
+/// for reading and for changing after construction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionSpec {
     /// Harness to launch.
     pub harness: HarnessKind,
     /// Working directory. Defaults to the node's home directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// The profile to launch with (protocol 5, ADR 0011); `None` is the
+    /// harness's default, which is how every earlier session ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileName>,
     /// How to drive it.
     #[serde(flatten)]
     pub mode: SessionMode,
+}
+
+impl SessionSpec {
+    /// Run `harness` in `mode`, in the node's home directory, with the
+    /// default profile.
+    #[must_use]
+    pub const fn new(harness: HarnessKind, mode: SessionMode) -> Self {
+        Self {
+            harness,
+            cwd: None,
+            profile: None,
+            mode,
+        }
+    }
+
+    /// In this working directory.
+    #[must_use]
+    pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    /// With this profile.
+    #[must_use]
+    pub fn with_profile(mut self, profile: ProfileName) -> Self {
+        self.profile = Some(profile);
+        self
+    }
 }
 
 /// Lifecycle of the harness process behind a session.
@@ -95,12 +135,24 @@ impl SessionStatus {
 }
 
 /// A session as reported by the node.
+///
+/// `#[non_exhaustive]` for the reason given on [`SessionSpec`]; build one
+/// with [`SessionInfo::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionInfo {
     /// Session id.
     pub id: SessionId,
     /// What was asked for.
     pub spec: SessionSpec,
+    /// The profile the harness runs with now: `spec.profile` until
+    /// `session.move_profile` changes it (protocol 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileName>,
+    /// Who created it (protocol 5, ADR 0013). Absent from older nodes, which
+    /// only ever had the owner.
+    #[serde(default)]
+    pub created_by: Creator,
     /// Current process state.
     pub status: SessionStatus,
     /// When the session was created.
@@ -113,6 +165,32 @@ pub struct SessionInfo {
     /// The harness's own session id, once a structured session has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_session: Option<HarnessSessionId>,
+}
+
+impl SessionInfo {
+    /// A session that is just starting: no events yet, running the profile
+    /// it asked for, created by the owner.
+    #[must_use]
+    pub fn new(id: SessionId, spec: SessionSpec, created_at: DateTime<Utc>) -> Self {
+        Self {
+            id,
+            profile: spec.profile.clone(),
+            spec,
+            created_by: Creator::Owner,
+            status: SessionStatus::Starting,
+            created_at,
+            ended_at: None,
+            next_seq: EventSeq::ZERO,
+            harness_session: None,
+        }
+    }
+
+    /// Created by `creator`.
+    #[must_use]
+    pub fn with_creator(mut self, creator: Creator) -> Self {
+        self.created_by = creator;
+        self
+    }
 }
 
 /// Something a client sends into a live session. Body of `session.send`.

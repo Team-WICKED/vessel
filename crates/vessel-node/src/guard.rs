@@ -22,10 +22,11 @@
 //!   the compiler keeps them in step.
 
 use vessel_proto::{
-    Ack, CreateSession, DeviceInfo, EventPage, GetNode, GetSession, Handler, Harness, Invitation,
-    InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions, NodeInfo, ReadEvents,
-    Request, RevokeDevice, SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe,
-    WireError,
+    Ack, BlobChunk, CreateSession, DeviceInfo, EventPage, FleetMember, Generation, GetManifest,
+    GetNode, GetSession, Handler, Harness, Invitation, InviteDevice, KillSession, ListDevices,
+    ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile, NodeInfo,
+    ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, Request, RevokeDevice,
+    SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet, WireError,
 };
 
 use crate::service::{Connection, NodeService};
@@ -69,6 +70,14 @@ guarded! {
     invite_device: InviteDevice => Invitation;
     list_devices: ListDevices => Vec<DeviceInfo>;
     revoke_device: RevokeDevice => Ack;
+    list_profiles: ListProfiles => Vec<ProfileInfo>;
+    reload_profiles: ReloadProfiles => Vec<ProfileInfo>;
+    move_profile: MoveProfile => SessionInfo;
+    get_manifest: GetManifest => Manifest;
+    read_blob: ReadBlob => BlobChunk;
+    watch_fleet: WatchFleet => Generation;
+    report_applied: ReportApplied => Ack;
+    list_members: ListMembers => Vec<FleetMember>;
 }
 
 #[cfg(test)]

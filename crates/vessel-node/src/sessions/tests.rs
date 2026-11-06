@@ -67,14 +67,14 @@ impl Fixture {
     }
 
     fn spec(&self) -> SessionSpec {
-        SessionSpec {
-            harness: HarnessKind::ClaudeCode,
-            cwd: Some(self.data.path().to_path_buf()),
-            mode: SessionMode::Terminal {
+        SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Terminal {
                 args: Vec::new(),
                 size: TerminalSize::default(),
             },
-        }
+        )
+        .with_cwd(self.data.path().to_path_buf())
     }
 
     fn listed(&self) -> Vec<SessionId> {

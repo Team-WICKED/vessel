@@ -14,8 +14,12 @@ use crate::error::OutboundError;
 
 /// One item for the writer.
 pub(super) enum Outgoing {
-    /// The answer to a call.
-    Response { id: RequestId, outcome: Outcome },
+    /// The answer to a call. Boxed for the reason `Frame::Server` is: the
+    /// queue's slots would otherwise all be sized for the largest reply.
+    Response {
+        id: RequestId,
+        outcome: Box<Outcome>,
+    },
     /// A handler opened a subscription; its events wait for `announce`.
     Open {
         subscription: SubscriptionId,

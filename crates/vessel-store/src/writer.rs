@@ -45,8 +45,9 @@ pub(crate) enum WriteOp {
 /// A change to the database.
 #[derive(Debug)]
 pub(crate) enum Write {
-    /// Store a new session.
-    Create { info: SessionInfo, done: Done },
+    /// Store a new session. Boxed: operations wait in a bounded queue, and
+    /// an inline `SessionInfo` would size every slot for this rare one.
+    Create { info: Box<SessionInfo>, done: Done },
     /// Append records to a session's log. Shared with the session runtime's
     /// ring and subscribers, so persisting them copies nothing.
     Append {

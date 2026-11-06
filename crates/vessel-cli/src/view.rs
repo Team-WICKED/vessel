@@ -74,6 +74,11 @@ impl Conversation {
             // A structured session has no terminal output; nothing to show.
             SessionEvent::Terminal(_) => String::new(),
             SessionEvent::Agent { event } => self.agent(event),
+            SessionEvent::ProfileChanged { from, to } => self.line(format!(
+                "[profile {} -> {}]",
+                render::profile(from.as_ref()),
+                render::profile(to.as_ref())
+            )),
         }
     }
 

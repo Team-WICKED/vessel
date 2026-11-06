@@ -47,24 +47,30 @@ mod support {
 }
 
 fn terminal(harness: HarnessKind, args: &[&str], cwd: Option<PathBuf>) -> SessionSpec {
-    SessionSpec {
-        harness,
-        cwd,
-        mode: SessionMode::Terminal {
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-            size: TerminalSize::default(),
-        },
+    {
+        let mut spec = SessionSpec::new(
+            harness,
+            SessionMode::Terminal {
+                args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+                size: TerminalSize::default(),
+            },
+        );
+        spec.cwd = cwd;
+        spec
     }
 }
 
 fn structured(harness: HarnessKind, cwd: Option<PathBuf>) -> SessionSpec {
-    SessionSpec {
-        harness,
-        cwd,
-        mode: SessionMode::Structured {
-            model: Some(ModelId::new("cheap")),
-            resume: None,
-        },
+    {
+        let mut spec = SessionSpec::new(
+            harness,
+            SessionMode::Structured {
+                model: Some(ModelId::new("cheap")),
+                resume: None,
+            },
+        );
+        spec.cwd = cwd;
+        spec
     }
 }
 

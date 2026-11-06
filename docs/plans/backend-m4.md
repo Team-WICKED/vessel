@@ -92,10 +92,13 @@ Protocol 5, all additive. Nodes speak 2..=5.
 - **Agents**: the local socket preamble gains
   `{ "type": "agent", "session", "secret" }`; the principal kind `agent`.
 - **Fleet**: scope `sync`; `fleet.manifest`, `fleet.blob {hash}` (chunked),
-  `fleet.watch` (subscription to new generations), `fleet.members`,
+  `fleet.watch` (as built: a long poll for a newer generation), `fleet.members`,
   `fleet.push` (admin), `fleet.forward { node, call }` (the call's own
   scope, intersected), `session.export`, `session.import`, `secret.copy`
-  (admin).
+  (admin). As built, protocol 5 carries the profile, agent and fleet-core
+  rows and `fleet.report`; `fleet.push`, `fleet.forward`, `session.export`,
+  `session.import` and `secret.copy` follow in a later version ("Contract
+  as built" below).
 - `PROTOCOL.md` gets a version 5 entry; the method table gains the rows and
   their scopes.
 
@@ -114,12 +117,14 @@ merged and the session structs (which Track P also touches) change once.
   is never a JSON object. The `secret!` macro moved from `device.rs` to
   `key.rs` so `AgentSecret` shares it with `DeviceSecret` and
   `InvitationSecret`. `PROTOCOL_VERSION` stays 4.
-- **Step 1b (after Track P merges):** the `SessionSpec`/`SessionInfo`
-  fields (`profile`, `created_by` with a default of `owner`), the
-  `profile.*` and `session.move_profile` methods, `ProfileChanged`, the
-  `PROTOCOL.md` entry, and `PROTOCOL_VERSION = 5`. Both structs move to
-  constructor APIs in the same step, so later fields stop breaking every
-  literal in the workspace.
+- **Step 1b (2026-11-06, with 2b: `PROTOCOL_VERSION = 5`):** `SessionSpec`
+  gains `profile` and `SessionInfo` gains `profile` and `created_by`; both
+  are `#[non_exhaustive]` with constructors (`SessionSpec::new(harness,
+  mode).with_cwd(..).with_profile(..)`, `SessionInfo::new(id, spec,
+  created_at)`), and every literal in the workspace moved to them. The
+  methods `profile.list`, `profile.reload`, `session.move_profile`; the
+  event `ProfileChanged`, which the session runtime already projects into
+  `SessionInfo.profile` (the store does with schema 3, Track H).
 - **Step 2a (2026-11-06, additive types only):** validated names in
   `vessel_proto::name`, one implementation and one `InvalidName { kind,
   value }` error: `ProfileName` (moved here; `InvalidProfileName` is gone),
@@ -140,10 +145,21 @@ merged and the session structs (which Track P also touches) change once.
   needed; Track F's resolve is `McpTransport::try_map_values`. The hex
   helpers (`hex_array`, `write_hex`) moved into `key.rs` and serve
   `RoutingId`, `ConnId` and `BlobHash`.
-- **Step 2b (with step 1b's version bump):** scope `sync` and the fleet
-  rows (`fleet.manifest`, `fleet.blob`, `fleet.watch`, `fleet.members`,
-  `fleet.push`, `fleet.forward`, `session.export`/`import`,
-  `secret.copy`). One bump to protocol 5 carries steps 1b and 2b.
+- **Step 2b (2026-11-06, the same bump):** scope `Sync`
+  (`Scope::DEVICE_DEFAULT` keeps invitations at read, operate and admin;
+  `InviteDevice.scopes` asks for others), and the rows `fleet.manifest`,
+  `fleet.blob` (`ReadBlob`/`BlobChunk`, 1 MiB chunks), `fleet.watch` (a
+  long poll, not a subscription: no new frame type), `fleet.report` (what a
+  member applied and its conflicts) and `fleet.members`. Not in protocol 5:
+  `fleet.push`, `fleet.forward`, `session.export`/`import`, `secret.copy`;
+  they come with Tracks F4 and X as a later version.
+- **Versioning, from protocol 5 on:** every table row names its first
+  version (`[Scope, since]`), and `Call::since` raises it for later fields.
+  `vessel-rpc` enforces both on both sides and adapts outgoing frames to an
+  older connection (`ServerFrame::for_protocol`: event stand-ins with the
+  same `seq`, newer scopes left out of `device.list`). The client's
+  per-method version constants are gone. The node answers the new methods
+  `unsupported` until the tracks implement them.
 
 ## Crates (ADR 0001)
 
