@@ -566,6 +566,16 @@ reproduced problems, fixed in this order:
 - **6 (low): a grant made the home dial any routes.** A link names at most
   8 routes, and a failure to pair answers in general terms; the details go
   to the home's log (`e2e/grants.rs`).
+- **Documented, not changed** (ADR 0013, "Known limits"): an agent's
+  limits are per node, so 8 live sessions on each node it reaches (8 × N);
+  and a relaying member's own scopes on the home do not cap the calls it
+  relays (no read-only relay; a capped relay grant is sketched there).
+- **Found sound by the review:** deny-by-default forwarding, no nesting,
+  the origin built from the principal and not the request, deliveries only
+  from the recorded home device, the scope intersection, ownership and
+  depth across hops, the transfer holder binding, the waiting read's
+  wake-up, and the isolation of library code from the process
+  environment.
 
 ## Protocol 6 (accepted)
 
