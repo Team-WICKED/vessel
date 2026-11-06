@@ -262,3 +262,67 @@ async fn tiny_rings_force_store_gap_fills_and_lag_without_losing_records() {
     })
     .await;
 }
+
+/// Regression: with retention pruning the store past the ring, a late
+/// follower from zero used to make the node ask the ring for the same gap
+/// forever. It now gets the pruned range reported once, then the ring, then
+/// the end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows() {
+    within(async {
+        let fixture = Fixture::new();
+        let node = fixture
+            .start_with(|config| {
+                config.ring_capacity = std::num::NonZeroUsize::new(4).unwrap();
+                config.store.retention.max_session_bytes = vessel_node::ByteCount::new(1);
+            })
+            .await;
+        let client = fixture.connect(&node).await;
+        let id = client
+            .create_session(terminal_spec(&fixture, HarnessKind::ClaudeCode))
+            .await
+            .unwrap()
+            .id;
+        let mut first = client.follow(id, EventSeq::ZERO).await.unwrap();
+        let mut seen = Vec::new();
+        collect_until(&mut first, &mut seen, "> ").await;
+        for line in ["one\n", "two\n", "three\n", "exit\n"] {
+            client.send(id, keys(line)).await.unwrap();
+        }
+        // The first follower lags too; it only has to reach the end.
+        let mut last = EventSeq::ZERO;
+        while let Some(record) = first.next().await {
+            match record {
+                Ok(record) => last = record.seq,
+                Err(error) => assert!(!error.is_fatal(), "{error}"),
+            }
+        }
+        assert!(last.get() >= 8, "too few records to leave a gap: {last}");
+
+        let late = fixture.connect(&node).await;
+        let mut replay = late.follow(id, EventSeq::ZERO).await.unwrap();
+        let oldest_cached = EventSeq::new(last.get() - 3);
+        match replay.next().await {
+            Some(Err(vessel_client::StreamError::Missing {
+                expected,
+                resumed_at,
+            })) => {
+                assert_eq!(expected, EventSeq::ZERO);
+                assert_eq!(resumed_at, oldest_cached);
+            }
+            other => panic!("expected the pruned range first, got {other:?}"),
+        }
+        let mut rest = Vec::new();
+        while let Some(record) = replay.next().await {
+            rest.push(record.unwrap());
+        }
+        let expected: Vec<u64> = (oldest_cached.get()..=last.get()).collect();
+        assert_eq!(seqs(&rest), expected);
+        assert!(matches!(
+            rest.last().and_then(status_of),
+            Some(SessionStatus::Exited { .. })
+        ));
+        node.stop().await.unwrap();
+    })
+    .await;
+}
