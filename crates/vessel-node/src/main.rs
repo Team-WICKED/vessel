@@ -76,6 +76,21 @@ struct Run {
     /// Nothing is guessed: without it, devices go through a relay.
     #[arg(long = "public", value_name = "ADDR", value_parser = public_route)]
     public: Vec<RouteUrl>,
+    /// Behind a reverse proxy, the header in which it passes the client's
+    /// address (`X-Real-IP`), so the direct route's limits are per client.
+    /// Believed only from --trusted-proxy, which it needs; the proxy must
+    /// overwrite it with one bare address.
+    #[arg(long, env = "VESSEL_CLIENT_ADDRESS_HEADER")]
+    client_address_header: Option<axum::http::HeaderName>,
+    /// A reverse proxy whose --client-address-header is believed: an
+    /// address or a network in CIDR form (`127.0.0.1`, `10.0.0.0/8`).
+    /// Repeatable; comma-separated in the environment.
+    #[arg(
+        long = "trusted-proxy",
+        env = "VESSEL_TRUSTED_PROXY",
+        value_delimiter = ','
+    )]
+    trusted_proxies: Vec<vessel_relay::TrustedProxy>,
     /// Started in the background by `vesseld attach`: announce readiness
     /// on stdout and keep running when the SSH session hangs up.
     #[arg(long, hide = true)]
@@ -381,6 +396,8 @@ async fn run(dir: DataDir, args: Run) -> ExitCode {
     config.relays = args.relays;
     config.relay_token_file = args.relay_token_file;
     config.public = args.public;
+    config.client_address_header = args.client_address_header;
+    config.trusted_proxies = args.trusted_proxies;
     config.vessel_mcp = vessel_beside_me();
 
     // Before the node starts, so a hang-up during start-up cannot kill it.

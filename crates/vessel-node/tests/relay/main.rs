@@ -1,7 +1,8 @@
 //! `vesseld relay`, the real binary: it starts with a token file and no
 //! data directory, answers `/health`, stops on a signal, and refuses to
 //! start without a usable token. The relay's behaviour itself is tested in
-//! `vessel-relay`.
+//! `vessel-relay`. Also the node's own proxy flags, which mirror the
+//! relay's (`--client-address-header`, `--trusted-proxy`).
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -289,6 +290,60 @@ async fn listening_after(
     })
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn vesseld_believes_a_client_address_header_only_with_a_trusted_proxy() {
+    let home = tempfile::tempdir().unwrap();
+    let node = |data: &std::path::Path, extra: &'static [&'static str]| {
+        let mut command = vesseld();
+        let _command = command
+            .env("HOME", home.path())
+            .arg("--data-dir")
+            .arg(data)
+            .args(["--bind", "127.0.0.1:0"])
+            .args(extra);
+        command
+    };
+    // The header alone: anyone could pick their address. Refused.
+    let refused = tempfile::tempdir().unwrap();
+    let output = tokio::time::timeout(
+        SAFETY,
+        node(refused.path(), &["--client-address-header", "x-real-ip"]).output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--trusted-proxy"), "{stderr}");
+    // With a proxy named, it starts.
+    let started = tempfile::tempdir().unwrap();
+    let mut child = node(
+        started.path(),
+        &[
+            "--client-address-header",
+            "x-real-ip",
+            "--trusted-proxy",
+            "127.0.0.1",
+        ],
+    )
+    .spawn()
+    .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let mut lines = BufReader::new(stderr).lines();
+    let listening = tokio::time::timeout(SAFETY, async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.contains("node listening") {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap();
+    assert!(listening, "the node ended before listening");
+    child.kill().await.unwrap();
 }
 
 #[cfg(unix)]
