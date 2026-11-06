@@ -3,9 +3,9 @@
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, EventPage, EventSeq, GetNode, GetSession,
     Harness, HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
-    ListProfiles, ListSessions, NodeInfo, ProfileInfo, ProtocolVersion, ReadEvents, ReloadProfiles,
-    RevokeDevice, SendInput, SessionId, SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen,
-    Subscribe,
+    ListProfiles, ListSessions, MoveProfile, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion,
+    ReadEvents, ReloadProfiles, RevokeDevice, SendInput, SessionId, SessionInfo, SessionInput,
+    SessionSpec, StopNode, StopWhen, Subscribe,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 
@@ -265,6 +265,34 @@ impl NodeClient {
     /// protocol 5; otherwise see [`CallError`].
     pub async fn reload_profiles(&self) -> Result<Vec<ProfileInfo>, CallError> {
         self.connection.call(ReloadProfiles).await
+    }
+
+    /// `session.move_profile` (ADR 0011): the structured session `session`
+    /// resumes its conversation under `profile` (`None`: the harness's
+    /// default profile); a running turn is cancelled only with `force`.
+    /// Answers with the session as it is after the move.
+    ///
+    /// # Errors
+    /// `Conflict` mid-turn without `force`, when the target profile is not
+    /// logged in, or when the session's files cannot be moved;
+    /// `InvalidRequest` for an unknown profile or another harness's;
+    /// `Unsupported` for a terminal session, or on a node before protocol
+    /// 5; `SpawnFailed` when the agent did not start under the new profile
+    /// (the session goes on under the old one). Otherwise see
+    /// [`CallError`].
+    pub async fn move_profile(
+        &self,
+        session: SessionId,
+        profile: Option<ProfileName>,
+        force: bool,
+    ) -> Result<SessionInfo, CallError> {
+        self.connection
+            .call(MoveProfile {
+                session,
+                profile,
+                force,
+            })
+            .await
     }
 
     /// Every record of a session from `from` on, gap-free, ending when the

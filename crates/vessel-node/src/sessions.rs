@@ -30,7 +30,9 @@ use tokio_util::task::TaskTracker;
 use vessel_proto::{
     EventPage, EventRecord, EventSeq, SessionId, SessionInfo, SessionInput, SessionSpec,
 };
-use vessel_session::{Created, FollowError, LaunchOptions, SessionHandle, SessionRuntime};
+use vessel_session::{
+    Created, FollowError, LaunchOptions, ProfileMove, SessionHandle, SessionRuntime,
+};
 use vessel_store::Store;
 
 use crate::error::ServiceError;
@@ -229,6 +231,21 @@ impl Sessions {
     ) -> Result<(), ServiceError> {
         match self.find(id).await? {
             Found::Live { handle, .. } => Ok(handle.send(input).await?),
+            Found::Stored(_) => Err(ServiceError::Ended(id)),
+        }
+    }
+
+    /// Move a live session to another profile (`profiles::moving` plans it).
+    pub(crate) async fn move_profile(
+        &self,
+        id: SessionId,
+        plan: impl AsyncFnOnce(&SessionInfo) -> Result<ProfileMove, ServiceError>,
+    ) -> Result<SessionInfo, ServiceError> {
+        match self.find(id).await? {
+            Found::Live { handle, .. } => {
+                let request = plan(&handle.info()).await?;
+                Ok(self.runtime.move_profile(id, request).await?)
+            }
             Found::Stored(_) => Err(ServiceError::Ended(id)),
         }
     }

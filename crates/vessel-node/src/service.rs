@@ -19,8 +19,8 @@ use crate::devices::Devices;
 use crate::error::ServiceError;
 use crate::lifecycle::Lifecycle;
 use crate::principal::Principal;
-use crate::profiles::NodeProfiles;
 use crate::profiles::launch::Launcher;
+use crate::profiles::{NodeProfiles, moving};
 use crate::sessions::Sessions;
 use crate::subscribe;
 
@@ -319,6 +319,24 @@ impl NodeService {
             .map_err(|error| wire(&ServiceError::Task(error)))?
             .map_err(|error| wire(&ServiceError::Profiles(error)))
     }
+
+    /// `session.move_profile` (H2): a live structured session resumes its
+    /// conversation under another profile (`profiles::moving`, then the
+    /// session runtime).
+    pub(crate) async fn move_profile(
+        &self,
+        _: &Connection,
+        request: MoveProfile,
+    ) -> Result<SessionInfo, WireError> {
+        let profiles = &self.profiles;
+        let lookup = &self.lookup;
+        self.sessions
+            .move_profile(request.session, async |info: &SessionInfo| {
+                moving::plan(profiles, lookup, info, &request).await
+            })
+            .await
+            .map_err(|error| wire(&error))
+    }
 }
 
 /// Protocol 5 methods whose implementations come with milestone 4's tracks
@@ -331,14 +349,6 @@ impl NodeService {
     reason = "every call has the same async shape, so the guard's rows are uniform"
 )]
 impl NodeService {
-    pub(crate) async fn move_profile(
-        &self,
-        _: &Connection,
-        _: MoveProfile,
-    ) -> Result<SessionInfo, WireError> {
-        Err(not_yet::<MoveProfile>())
-    }
-
     pub(crate) async fn get_manifest(
         &self,
         _: &Connection,

@@ -36,7 +36,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`, `profiles.toml`, `mcp/`), SQLite event log (schema 3: sessions' current profile and creator), retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with) (milestone 4). | proto, rpc, harness, session, store, secure, relay |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to) (milestone 4). | proto, rpc, harness, session, store, secure, relay |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
@@ -78,6 +78,13 @@ they started.
    resizes, or prompts, cancels and permission answers. The first answer to a
    permission request wins; the resolution is an event, so every client sees
    it.
+6. `session.move_profile` (ADR 0011) moves a structured session to another
+   profile: the node resolves the target, finds both homes and runs the
+   target's login check (`profiles::moving`); the session's actor holds
+   input, refuses or cancels a running turn, hard-links the session's
+   files into the target home, stops the agent and starts it again under
+   the new profile with `session/load`, then publishes `ProfileChanged`.
+   The session keeps its id, log and subscribers.
 6. On shutdown the node kills each session's process group, waits for final
    statuses, and flushes the store. On the next start, sessions that were live
    are marked `Interrupted`. Their logs stay readable, and structured ones can
@@ -280,7 +287,8 @@ they started.
     state). `--public` adds direct routes to pairing links. Device labels
     lose control and invisible formatting characters.
   - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
-    `sessions`, `run`, `attach`, `send`, `log`, `kill`; sessions named by
+    `sessions`, `run`, `attach`, `send`, `log`, `kill` (and, since
+    milestone 4, `profiles` and `session move-profile`); sessions named by
     id prefix; terminal attach in raw mode with `Ctrl-]` to detach, also
     under the kitty keyboard protocol and `modifyOtherKeys`, and on
     `SIGTERM`/`SIGHUP`/`SIGINT`; the terminal is reset on every way out;
@@ -432,6 +440,18 @@ they started.
     HTTP servers only when the agent advertises them.
   - `vessel-session`: `create_with(spec, LaunchOptions { profile,
     mcp_servers, mcp_dir, created_by })`; `create` is the defaults.
+    `move_profile(id, ProfileMove)` (H2, `moving`): a structured actor
+    takes a `Control::Move` while it runs. Input is held (`Moving`,
+    `conflict`) for the move's length; the driver's `turn_running` answers
+    in order with the commands before it, so a prompt already sent
+    counts. Mid-turn is `MoveError::TurnInProgress` unless forced (then
+    the turn is cancelled, waited for up to 10 s); the files are linked
+    while the old agent still runs; the agent is stopped (`SIGTERM`, then
+    `SIGKILL` after 5 s) and the new one started with `session/load`, its
+    replay dropped until it is ready. If it does not start, the previous
+    command starts again on the same conversation and the move fails
+    (`spawn_failed`) without `ProfileChanged`.
+  - `vessel-agent`: `AgentInput::turn_running`, answered by the driver.
   - `vessel-node` (H1): the `profiles` module reads `profiles.toml` at
     start (a broken file stops the node) and on `profile.reload` (a broken
     one leaves the set in effect); `profiles::launch` turns a spec and the
@@ -440,6 +460,18 @@ they started.
     MCP servers will come in. The store's schema 3 keeps each session's
     current profile (following `ProfileChanged`) and its creator. The terminal actor holds the
     MCP file until the session ends.
+  - `vessel-node` (H2): `profiles::moving::plan` resolves the target
+    (none: the harness's default; unknown or another harness's:
+    `invalid_request`) and the session's current profile (gone from
+    `profiles.toml`: `conflict`), computes both homes with the node's
+    environment, and runs the target's login check with its environment,
+    bounded by 30 s (not logged in, or no answer: `conflict`). Terminal
+    sessions are refused first (`unsupported`), before any harness runs.
+    `Sessions::move_profile` moves live sessions; an ended one is
+    `conflict`. MCP servers for the new agent come from the same seam as
+    `session.create`'s.
+  - `vessel-client`: `move_profile`; `vessel-cli`: `vessel session
+    move-profile <session> <profile> [--force]`.
 
 ## Later
 

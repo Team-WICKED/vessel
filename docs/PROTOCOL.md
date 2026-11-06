@@ -30,7 +30,15 @@ session as created by the owner, and never emit `profile_changed`.
   to? }`. Errors: `session.create` naming an unknown profile, or one of
   another harness, is `invalid_request`; `profile.reload` against a file
   that does not parse is `conflict` (the profiles in effect stay, and the
-  message says where without quoting a value).
+  message says where without quoting a value). `session.move_profile`:
+  an unknown profile or one of another harness is `invalid_request`; a
+  terminal session, or a harness whose session files Vessel cannot move,
+  is `unsupported`; a running turn without `force`, a target profile that
+  is not logged in, an ended session, a session that is still starting,
+  missing or conflicting session files, and input sent while a move runs
+  are `conflict`; an agent that does not start under the new profile is
+  `spawn_failed` (the session goes on under its previous profile, with
+  no `profile_changed`).
 - Fleet (ADR 0012), scope `sync`: `fleet.manifest` returns the `Manifest`
   (`generation`, `files`: bundle path to `{hash, size, executable?}`,
   `mcp`: server name to transport, with `{"secret": "NAME"}` references,

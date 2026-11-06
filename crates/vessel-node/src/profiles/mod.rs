@@ -20,6 +20,7 @@
 //!   instead of the one reload call).
 
 pub(crate) mod launch;
+pub(crate) mod moving;
 
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -92,6 +93,11 @@ impl NodeProfiles {
     /// The profile named `name`, a defined one or a harness's default.
     pub(crate) fn get(&self, name: &ProfileName) -> Option<Profile> {
         self.snapshot().get(name).cloned()
+    }
+
+    /// What `~/` expands to, and where default homes are.
+    pub(crate) fn user_home(&self) -> Option<&std::path::Path> {
+        self.user_home.as_deref()
     }
 
     fn snapshot(&self) -> Arc<Profiles> {
