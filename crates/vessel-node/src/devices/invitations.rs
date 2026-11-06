@@ -124,6 +124,13 @@ impl Invitations {
             })
     }
 
+    /// Forget every pending invitation; how many there were.
+    pub(crate) fn withdraw_all(&mut self) -> usize {
+        let pending = self.pending.len();
+        self.pending.clear();
+        pending
+    }
+
     /// Forget an invitation before it is used; whether it was pending.
     pub(crate) fn withdraw(&mut self, secret: &InvitationSecret) -> bool {
         self.pending.remove(&key(secret)).is_some()

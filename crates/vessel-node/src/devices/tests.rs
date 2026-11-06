@@ -767,3 +767,70 @@ async fn an_invitation_grants_the_scopes_it_names() {
     ));
     node.stop().await.unwrap();
 }
+
+/// Review round 5, the reviewer's race kept as a regression test.
+/// `fleet.forget` withdraws every invitation and then lists the devices
+/// that exist as the ones that may not take the forgotten id. A pairing
+/// that redeemed its invitation before the withdrawal can store its device
+/// after that list; `pair` must then revoke it and refuse, or a device made
+/// from an invitation older than the forget would be "paired after" it.
+///
+/// Many pairings race one withdrawal per round. Whether a round lands a
+/// device after the list depends on scheduling (about one round in six on
+/// the reviewer's machine), so the test does not require it; it requires
+/// that no round ends with such a device live or its pairing answered.
+/// With `pair`'s generation check taken out it failed within the first
+/// dozen rounds every time, on one CPU too; all 150 take well under a
+/// second. The deterministic half, an invitation withdrawn by a forget,
+/// is `e2e/grants.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_pairing_that_raced_a_withdrawal_outlives_it() {
+    const ROUNDS: usize = 150;
+    const PAIRINGS: usize = 12;
+    let (_temp, node) = node().await;
+    let devices = Arc::clone(&node.secure.devices);
+    for round in 0..ROUNDS {
+        let offers: Vec<PairingOffer> = (0..PAIRINGS).map(|_| invite(&node, None)).collect();
+        let pairings: Vec<_> = offers
+            .into_iter()
+            .map(|offer| {
+                let devices = Arc::clone(&devices);
+                tokio::spawn(async move {
+                    let closing = CancellationToken::new();
+                    let registration = devices.connect(DeviceId::random(), &closing);
+                    let paired = devices.pair(&registration, &offer.invite, "racer").await;
+                    (registration.device(), paired.is_ok())
+                })
+            })
+            .collect();
+        tokio::task::yield_now().await;
+        let _withdrawn = devices.withdraw_all();
+        let before: Vec<DeviceId> = devices
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|device| device.id)
+            .collect();
+        for pairing in pairings {
+            let (id, paired) = pairing.await.unwrap();
+            assert!(
+                !paired || before.contains(&id),
+                "round {round}: device {id} was stored after the list and its pairing answered"
+            );
+        }
+        let live_after: Vec<DeviceId> = devices
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|device| device.revoked_at.is_none() && !before.contains(&device.id))
+            .map(|device| device.id)
+            .collect();
+        assert!(
+            live_after.is_empty(),
+            "round {round}: devices stored after the list stay live: {live_after:?}"
+        );
+    }
+    node.stop().await.unwrap();
+}

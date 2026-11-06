@@ -2,11 +2,14 @@
 //! joining members, and showing where the fleet stands.
 //!
 //! [Decision Log]
-//! - Local and remote: `init`, `join`, `leave`, `status`, `restore` and
-//!   `forget` act on this machine's node through its data directory
+//! - Local and remote: `init`, `join`, `leave`, `status` and `restore`
+//!   act on this machine's node through its data directory
 //!   (`vessel_node::fleet`), so they work whether the node runs or not,
-//!   and a running node picks the change up within seconds. `invite` and
-//!   `members` are calls to a node (`--node`), normally the home.
+//!   and a running node picks the change up within seconds. `invite`,
+//!   `members` and `forget` are calls to a node (`--node`), the home.
+//!   `forget` is the home's own act: it withdraws the invitations
+//!   outstanding and records the devices that exist at that moment, which
+//!   a change to its files alone could not do.
 //! - `join` reads the link from standard input and confirms the home's
 //!   key fingerprint, exactly as `vessel nodes add --pair` does (shared in
 //!   `pair`): the link is a single-use secret.
@@ -17,7 +20,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use vessel_node::fleet::{self, ConflictWhy, FleetFiles, FleetInit, FleetStatus, Role, SkipGlob};
-use vessel_proto::{FleetMember, NodeId, Scope};
+use vessel_proto::{FleetMember, ForgetNode, NodeForgotten, NodeId, Scope};
 
 use crate::args::{FleetCommand, MemoryCommand, Target};
 use crate::connect::{connect, data_dir};
@@ -57,7 +60,7 @@ pub(crate) async fn command(target: &Target, command: FleetCommand) -> Result<()
             .await?;
             Ok(())
         }
-        FleetCommand::Forget { node } => forget(files, node).await,
+        FleetCommand::Forget { node } => forget(target, node).await,
         FleetCommand::Status => {
             let status = blocking(move || fleet::status(&files).map_err(CliError::from)).await?;
             io::out(render_status(&status).as_bytes()).await?;
@@ -143,7 +146,27 @@ async fn join(files: FleetFiles, yes: bool, grant: Vec<Scope>) -> Result<(), Cli
         joined.home.name, joined.home.id, joined.route
     ))
     .await?;
+    if let Some(clash) = named_like_home(&joined.home.name) {
+        io::note(&clash).await?;
+    }
     Ok(())
+}
+
+/// A warning when this machine is named like the home it joined: a node
+/// takes the machine's name unless told otherwise, and the home refuses a
+/// member named like a node of the fleet (machines cloned from one image
+/// share a name). Other members' names show later, in `vessel fleet
+/// status`, if the home refuses.
+pub(crate) fn named_like_home(home: &str) -> Option<String> {
+    let name = node_name();
+    (name == home).then(|| {
+        format!(
+            "this machine is named `{name}`, as the fleet's home is: unless this node runs \
+             with a name of its own, the home refuses its grant. Start it with `vessel node \
+             start --name <name>` (or `VESSEL_NAME`; for the service `vessel init --service` \
+             installed, add `--name <name>` after `node start` in its unit)\n"
+        )
+    })
 }
 
 /// The question before joining, saying what the home will get here.
@@ -264,6 +287,9 @@ fn render_status(status: &FleetStatus) -> String {
     if let Some(error) = &state.error {
         let _infallible = writeln!(text, "error      {error}");
     }
+    if let Some(refused) = &state.grant {
+        let _infallible = writeln!(text, "grant      not taken by the home: {refused}");
+    }
     text
 }
 
@@ -292,28 +318,51 @@ fn render_members(members: &[FleetMember]) -> String {
     text
 }
 
-/// `vessel fleet forget <node>` (the home): its binding and grants.
-async fn forget(files: FleetFiles, node: NodeId) -> Result<(), CliError> {
-    let forgot = blocking(move || fleet::forget(&files, node).map_err(CliError::from)).await?;
-    let said = match forgot {
-        None => format!("this home has no binding for node {node}\n"),
-        Some(forgot) => {
-            let mut said = format!(
-                "forgot node {node}'s key {}; it may grant again under a new one\n",
-                forgot.key
-            );
-            for device in &forgot.devices {
-                let _ok = writeln!(
-                    said,
-                    "  member device {device} granted for it: its grant is deleted; revoke the \
-                     device if it should not sync any more"
-                );
-            }
-            said
-        }
-    };
-    io::note(&said).await?;
+/// `vessel fleet forget <node>`: `fleet.forget` on the home.
+async fn forget(target: &Target, node: NodeId) -> Result<(), CliError> {
+    let client = connect(target).await?.client;
+    let forgot = client.call(ForgetNode { node }).await?;
+    io::note(&render_forgot(node, &forgot)).await?;
     Ok(())
+}
+
+/// What `forget` did, and the one thing the owner must do next: after a
+/// forget, the first member device invited that claims the id and name
+/// keeps them (review round 5, accepted by design), so the node is invited
+/// before anything else.
+fn render_forgot(node: NodeId, forgot: &NodeForgotten) -> String {
+    let mut said = format!(
+        "forgot node {node}'s key {}{}\n\
+         any member device invited from now on may take that id and name, and the first to \
+         claim them keeps them: invite only that node next (`vessel fleet invite`), join it \
+         from there, and invite others after it has joined\n",
+        forgot.key,
+        forgot
+            .name
+            .as_deref()
+            .map_or_else(String::new, |name| format!(" and its name `{name}`"))
+    );
+    if forgot.withdrawn > 0 {
+        let (invitations, were) = if forgot.withdrawn == 1 {
+            ("invitation", "was")
+        } else {
+            ("invitations", "were")
+        };
+        let _ok = writeln!(
+            said,
+            "  {} {invitations} outstanding on the home {were} withdrawn, whoever they were \
+             for; make new ones once that node has joined",
+            forgot.withdrawn
+        );
+    }
+    for device in &forgot.devices {
+        let _ok = writeln!(
+            said,
+            "  member device {device} granted for it: its grant is deleted; revoke the device \
+             if it should not sync any more"
+        );
+    }
+    said
 }
 
 #[cfg(test)]
@@ -360,6 +409,52 @@ mod tests {
         assert!(
             text.contains("(vessel fleet secret set DOCS_TOKEN)"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn forget_says_to_invite_only_that_node_next() {
+        let node = NodeId::random();
+        let device = vessel_proto::DeviceId::random();
+        let forgot = NodeForgotten {
+            key: vessel_proto::NodePublicKey::from_bytes([7; 32]),
+            name: Some("desktop".to_owned()),
+            devices: vec![device],
+            withdrawn: 2,
+        };
+        let text = render_forgot(node, &forgot);
+        assert!(
+            text.contains(&format!("forgot node {node}'s key ")),
+            "{text}"
+        );
+        assert!(text.contains("and its name `desktop`"), "{text}");
+        assert!(
+            text.contains("any member device invited from now on may take that id and name"),
+            "{text}"
+        );
+        assert!(text.contains("invite only that node next"), "{text}");
+        assert!(
+            text.contains("2 invitations outstanding on the home were withdrawn"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("member device {device} granted")),
+            "{text}"
+        );
+
+        let quiet = render_forgot(
+            node,
+            &NodeForgotten {
+                name: None,
+                devices: Vec::new(),
+                withdrawn: 1,
+                ..forgot
+            },
+        );
+        assert!(!quiet.contains("its name"), "{quiet}");
+        assert!(
+            quiet.contains("1 invitation outstanding on the home was withdrawn"),
+            "{quiet}"
         );
     }
 }

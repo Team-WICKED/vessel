@@ -275,9 +275,10 @@ async fn agents_are_held_to_the_count_and_depth_limits() {
 
 /// Once a session's end is visible, its agent is done here, even before
 /// the node retires it (which waits for the actor to finish): a new
-/// connection is refused, and one still open can start nothing. Without
-/// the `has_ended` checks this failed only when the test won the race
-/// against `retire`; with them it holds every time.
+/// connection is refused, and one still open can neither start a session
+/// nor drive the one it started. Without the `has_ended` checks this
+/// failed only when the test won the race against `retire`; with them it
+/// holds every time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_ended_sessions_agent_starts_nothing() {
     within(async {
@@ -289,6 +290,11 @@ async fn an_ended_sessions_agent_starts_nothing() {
         let mut session = structured(&owner, &fixture).await;
         let (_program, socket, auth) = credential(&owner, &mut session).await;
         let agent = as_agent(&socket, &auth).await;
+        let child = agent
+            .create_session(terminal_spec(&fixture, HarnessKind::ClaudeCode))
+            .await
+            .unwrap()
+            .id;
 
         owner.kill(session.id).await.unwrap();
         read_until(&mut session.stream, &mut session.seen, |record| {
@@ -302,6 +308,9 @@ async fn an_ended_sessions_agent_starts_nothing() {
                 .await
                 .is_err()
         );
+        assert!(agent.send(child, keys("late\r")).await.is_err());
+        assert!(agent.kill(child).await.is_err());
+        owner.kill(child).await.unwrap();
         assert!(refused(
             NodeClient::connect_local(&socket, &LocalCredential::Agent(auth), client()).await
         ));
