@@ -6,20 +6,21 @@ use std::sync::Arc;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, CreateSession, ErrorCode, EventPage, GetNode, GetSession, Handler, Harness, KillSession,
+    Ack, CreateSession, EventPage, GetNode, GetSession, Handler, Harness, KillSession,
     ListHarnesses, ListSessions, NodeInfo, ReadEvents, SendInput, SessionInfo, StopNode, Subscribe,
     Subscribed, Unsubscribe, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
 use crate::error::ServiceError;
+use crate::lifecycle::Lifecycle;
 use crate::sessions::Sessions;
 use crate::subscribe;
 
 /// The node's protocol implementation.
 #[derive(Debug)]
 pub(crate) struct NodeService {
-    info: NodeInfo,
+    lifecycle: Lifecycle,
     lookup: Lookup,
     sessions: Arc<Sessions>,
     /// Subscription forwarders, so shutdown can let them queue their last
@@ -29,13 +30,13 @@ pub(crate) struct NodeService {
 
 impl NodeService {
     pub(crate) const fn new(
-        info: NodeInfo,
+        lifecycle: Lifecycle,
         lookup: Lookup,
         sessions: Arc<Sessions>,
         forwarders: TaskTracker,
     ) -> Self {
         Self {
-            info,
+            lifecycle,
             lookup,
             sessions,
             forwarders,
@@ -66,7 +67,7 @@ impl Handler for NodeService {
     type Context = Connection;
 
     async fn node_info(&self, _: &Connection, _: GetNode) -> Result<NodeInfo, WireError> {
-        Ok(self.info.clone())
+        Ok(self.lifecycle.info())
     }
 
     async fn list_harnesses(
@@ -101,6 +102,9 @@ impl Handler for NodeService {
         _: &Connection,
         request: CreateSession,
     ) -> Result<SessionInfo, WireError> {
+        if self.lifecycle.is_draining() {
+            return Err(wire(&ServiceError::Draining));
+        }
         self.sessions
             .create(request.spec)
             .await
@@ -162,18 +166,11 @@ impl Handler for NodeService {
             .map_err(|error| wire(&error.into()))
     }
 
-    /// Protocol 3 added `node.stop` for remote update (ADR 0008). Draining
-    /// and remote stop are milestone 2 work (`docs/plans/backend-m2.md`,
-    /// Track N); until then the node says so with a typed refusal rather
-    /// than guessing at a partial behaviour.
-    async fn stop_node(
-        &self,
-        _connection: &Connection,
-        _request: StopNode,
-    ) -> Result<Ack, WireError> {
-        Err(WireError::new(
-            ErrorCode::Unsupported,
-            "node.stop is not implemented by this node yet (milestone 2)",
-        ))
+    /// `node.stop` (protocol 3, ADR 0008): stop now, or drain and stop once
+    /// idle. Answered before the node stops; the shutdown order flushes the
+    /// answer before connections close.
+    async fn stop_node(&self, _: &Connection, request: StopNode) -> Result<Ack, WireError> {
+        self.lifecycle.stop(request.when);
+        Ok(Ack)
     }
 }

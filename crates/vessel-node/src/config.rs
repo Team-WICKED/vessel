@@ -13,9 +13,11 @@ use vessel_store::{DataDir, StoreConfig};
 /// override fields as needed.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Address to listen on. Loopback by default; anything else is reachable
-    /// by other machines and logs a warning naming the token file.
-    pub bind: SocketAddr,
+    /// TCP address for the websocket (`/rpc`). Loopback by default;
+    /// anything else is reachable by other machines and logs a warning
+    /// naming the token file. `None` serves the local socket only (reached
+    /// through `vesseld attach`, for example over SSH; ADR 0007).
+    pub bind: Option<SocketAddr>,
     /// Name shown to clients; the hostname when `None`.
     pub name: Option<String>,
     /// Identity, token and event log.
@@ -38,7 +40,7 @@ impl Config {
     #[must_use]
     pub fn new(data_dir: DataDir) -> Self {
         Self {
-            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT)),
+            bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT))),
             name: None,
             data_dir,
             harness_lookup: Lookup::from_env(),

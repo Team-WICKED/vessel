@@ -1,14 +1,15 @@
 //! `vesseld`: one node per machine, serving its harness sessions over
-//! protocol 2.
+//! the protocol (versions 2 and 3).
 //!
 //! This crate assembles the others; it holds wiring and node policy, not
 //! mechanisms:
 //!
 //! ```text
-//!  client --ws /rpc (bearer token)--> server ---> vessel-rpc Server
-//!                                                    | Handler
-//!                                                 service (routing only)
-//!                                                    |
+//!  client --ws /rpc (bearer token)-----------------> server ---+
+//!  ssh -> vesseld attach --local socket (token)----> ipc ------+--> vessel-rpc Server
+//!                                                                    | Handler
+//!                                                     service (routing only), lifecycle
+//!                                                                    |
 //!            sessions: live runtime sessions + stored ones (ended, handed over)
 //!              |  create ---> vessel-session ---durable records---> persist ---> vessel-store
 //!              |  subscribe -> follow (ring) + store gap fill ---> Outbound
@@ -25,7 +26,13 @@
 //!   publishes how far it is committed; once a log is complete, `sessions`
 //!   removes the session from the runtime and the store serves it.
 //! - `subscribe`: forwards a session's records to one subscription.
-//! - `node`, `shutdown`: start, and stop in an order that loses nothing.
+//! - `ipc`: the local socket (or named pipe) `vesseld attach` reaches.
+//! - `attach`: that proxy, which also starts the node when none runs.
+//! - `lifecycle`: `node.stop` and draining (protocol 3).
+//! - `cleanup`: `vesseld cleanup`, removing installed binaries nothing
+//!   needs (ADR 0008).
+//! - `node`, `shutdown`: start (taking the data directory's node lock), and
+//!   stop in an order that loses nothing.
 //!
 //! [Decision Log]
 //! - Purpose: the node is the product (ARCHITECTURE "Design rules"); it must
@@ -44,10 +51,14 @@
 //!   flush their last frames; close the store. Subscribers therefore see
 //!   the final status, and a restart finds every log complete.
 
+pub mod attach;
 mod auth;
+pub mod cleanup;
 mod config;
 mod error;
 mod identity;
+mod ipc;
+mod lifecycle;
 mod node;
 mod persist;
 mod server;
@@ -58,6 +69,10 @@ mod subscribe;
 mod transport;
 
 pub use config::Config;
+
+/// This binary's version and target triple, as `vesseld version` prints
+/// them: what the remote installer checks (ADR 0008).
+pub const VERSION_LINE: &str = concat!(env!("CARGO_PKG_VERSION"), " ", env!("VESSEL_TARGET"));
 pub use error::NodeError;
 pub use node::Node;
 pub use shutdown::signal;

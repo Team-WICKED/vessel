@@ -23,7 +23,8 @@ Nodes speak 2..=3. Version 3 only adds, so version 2 peers keep working.
   is a big-endian `u32` length, then that many bytes of UTF-8 JSON (the
   same text as a websocket frame). The maximum is 16 MiB, checked before
   allocating. On the local socket only, the first frame carries the token
-  (ADR 0007), then the usual `hello`.
+  (ADR 0007), then the usual `hello`. A wrong or missing token is answered
+  with `rejected` (`unauthorized`), and the connection closes.
 
 ## Version 2 (2026-11-05)
 

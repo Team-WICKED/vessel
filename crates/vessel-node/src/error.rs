@@ -19,6 +19,18 @@ pub enum NodeError {
     /// The event log could not be opened.
     #[error("the event log could not be opened")]
     Store(#[source] StoreError),
+    /// Another node already uses this data directory.
+    #[error("another node already uses this data directory")]
+    AlreadyRunning(#[source] StoreError),
+    /// The local socket (or named pipe) could not be bound.
+    #[error("cannot listen on the local socket {}", path.display())]
+    LocalSocket {
+        /// The socket path or pipe name.
+        path: std::path::PathBuf,
+        /// Why.
+        #[source]
+        source: std::io::Error,
+    },
     /// The listen address could not be bound.
     #[error("cannot listen on {address}")]
     Bind {
@@ -58,6 +70,9 @@ pub(crate) enum ServiceError {
         /// The log's length.
         next: EventSeq,
     },
+    /// The node is draining for an update and starts no new sessions.
+    #[error("the node is draining for an update and starts no new sessions")]
+    Draining,
     /// The session runtime refused or failed.
     #[error(transparent)]
     Session(#[from] SessionError),
@@ -82,6 +97,7 @@ impl ServiceError {
         let code = match self {
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::Ended(_) => ErrorCode::Conflict,
+            Self::Draining => ErrorCode::Unavailable,
             Self::Ahead { .. } => ErrorCode::InvalidRequest,
             Self::Session(error) => error.code(),
             Self::Store(error) => error.code(),

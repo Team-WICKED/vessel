@@ -71,7 +71,7 @@ mod support {
             let acp = Fake::Acp.path().unwrap();
             drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Structured, &acp).unwrap());
             let mut config = Config::new(DataDir::new(data.path()));
-            config.bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+            config.bind = Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
             config.harness_lookup = Lookup::new([bin.path().to_path_buf()]);
             let node = Node::start(config).await.unwrap();
             Self {
@@ -90,13 +90,13 @@ mod support {
         }
 
         pub(super) fn node_address(&self) -> String {
-            self.node.address().to_string()
+            self.node.address().unwrap().to_string()
         }
 
         /// Run `vessel <args>` against this fixture's node with `stdin` as
         /// its input.
         pub(super) async fn vessel(&self, args: &[&str], stdin: &[u8]) -> Ran {
-            let node = self.node.address().to_string();
+            let node = self.node.address().unwrap().to_string();
             self.vessel_at(&node, self.data.path(), args, stdin).await
         }
 
@@ -123,7 +123,7 @@ mod support {
         /// Run `vessel <args>` with stdout and stderr going to one file, as
         /// `2>&1` does; returns what was written, in the order written.
         pub(super) async fn vessel_merged(&self, args: &[&str]) -> String {
-            let node = self.node.address().to_string();
+            let node = self.node.address().unwrap().to_string();
             let merged = self.data.path().join("merged-output");
             let file = std::fs::File::create(&merged).unwrap();
             let status = command(&node, self.data.path(), self.data.path(), args)
@@ -141,7 +141,7 @@ mod support {
         /// stdio, for tests that interact with it while it runs.
         #[cfg(unix)]
         pub(super) fn spawn_vessel(&self, args: &[&str]) -> tokio::process::Child {
-            let node = self.node.address().to_string();
+            let node = self.node.address().unwrap().to_string();
             command(&node, self.data.path(), self.data.path(), args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

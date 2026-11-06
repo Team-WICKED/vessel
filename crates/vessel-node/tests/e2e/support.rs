@@ -62,7 +62,7 @@ impl Fixture {
 
     pub(crate) async fn start_with(&self, adjust: impl FnOnce(&mut Config)) -> Node {
         let mut config = Config::new(self.data_dir());
-        config.bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        config.bind = Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
         config.harness_lookup = Lookup::new([self.bin.path().to_path_buf()]);
         adjust(&mut config);
         Node::start(config).await.unwrap()
@@ -89,7 +89,7 @@ impl Fixture {
 }
 
 pub(crate) fn url(node: &Node) -> NodeUrl {
-    node.address().to_string().parse().unwrap()
+    node.address().unwrap().to_string().parse().unwrap()
 }
 
 pub(crate) fn client() -> ClientInfo {
