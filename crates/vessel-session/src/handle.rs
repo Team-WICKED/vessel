@@ -1,5 +1,6 @@
 //! [`SessionHandle`]: the cheap, cloneable view of one session.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::{mpsc, watch};
@@ -31,6 +32,9 @@ pub(crate) struct Shared {
     pub(crate) kill: CancellationToken,
     /// Orders for the actor (structured sessions: moves).
     pub(crate) control: Option<mpsc::Sender<Control>>,
+    /// Set just before the final status is published (`Publisher::commit`),
+    /// so whoever sees that record finds it set ([`SessionHandle::has_ended`]).
+    pub(crate) ended: AtomicBool,
 }
 
 impl Shared {
@@ -80,6 +84,16 @@ impl SessionHandle {
     #[must_use]
     pub fn id(&self) -> SessionId {
         self.0.id
+    }
+
+    /// Whether the session has ended: true from just before its final
+    /// status (`Exited`, `Failed`, `Interrupted`) is visible to followers,
+    /// readers and info watchers, so anyone who saw it end finds this true.
+    /// What frees an ended session's places (the node's agent limits) checks
+    /// this rather than waiting for the actor to finish.
+    #[must_use]
+    pub fn has_ended(&self) -> bool {
+        self.0.ended.load(Ordering::Acquire)
     }
 
     /// A snapshot of the session's info (one clone of the current value).
