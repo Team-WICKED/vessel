@@ -116,7 +116,9 @@ pub fn launch_in(
                 Some(_) if mcp.is_empty() => {}
                 Some(render) => {
                     let rendered = render(mcp)?;
-                    check_environment(&rendered, profile, descriptor.home.variable)?;
+                    check_environment(&rendered, profile, descriptor.home.variable, &|name| {
+                        std::env::var_os(name)
+                    })?;
                     let (with_servers, file) = attach(command, rendered, mcp_dir)?;
                     command = with_servers;
                     mcp_file = file;
@@ -164,24 +166,59 @@ pub(crate) fn with_profile(command: CommandSpec, profile: &Profile) -> CommandSp
     })
 }
 
-/// An MCP variable must not change what the profile decides, nor move the
-/// harness's home: in Codex's environment it applies to Codex itself too.
-fn check_environment(
+/// An MCP variable goes into the harness's own environment (Codex), so it
+/// must not change the harness itself: no variable that steers it (its
+/// home, search path, loader, proxies, credentials), and no variable the
+/// harness would otherwise get with another value, from the profile or
+/// from the environment it inherits (`inherited`, the node's own). A
+/// variable the profile removes may not come back either.
+pub(crate) fn check_environment(
     rendered: &TerminalMcp,
     profile: &Profile,
     home_variable: Option<&str>,
+    inherited: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<(), McpError> {
     for (name, value) in &rendered.env {
-        let same = |other: &str| other.eq_ignore_ascii_case(name.as_str());
-        let set_differently = profile
+        let same = |other: &str| same_variable(other, name.as_str());
+        if protected(name.as_str()) || home_variable.is_some_and(same) {
+            return Err(McpError::ProtectedVariable { name: name.clone() });
+        }
+        let profile_value = profile
             .env()
-            .any(|(key, set)| same(key.as_str()) && set != value.expose());
+            .find(|(key, _)| same(key.as_str()))
+            .map(|(_, set)| OsString::from(set));
         let removed = profile.unset().any(|key| same(key.as_str()));
-        if set_differently || removed || home_variable.is_some_and(same) {
+        let current = profile_value.or_else(|| inherited(name.as_str()));
+        let differs = current.is_some_and(|current| current != value.expose());
+        if removed || differs {
             return Err(McpError::SharedVariable { name: name.clone() });
         }
     }
     Ok(())
+}
+
+/// Whether two variable names are one variable here: ignoring ASCII case
+/// on Windows, as its environment does, and exactly elsewhere.
+pub(crate) fn same_variable(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
+}
+
+/// Variables that steer a harness rather than configure an MCP server.
+/// Compared ignoring case everywhere: `http_proxy` is as live as
+/// `HTTP_PROXY`.
+fn protected(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    matches!(
+        name.as_str(),
+        "PATH" | "PATHEXT" | "HOME" | "USERPROFILE" | "NODE_OPTIONS"
+    ) || ["LD_", "DYLD_", "OPENAI_", "CODEX_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || name.ends_with("_PROXY")
 }
 
 /// The rendered form on the command: its arguments, its variables, and the
@@ -237,5 +274,111 @@ fn working_dir(spec: &SessionSpec) -> Result<Option<PathBuf>, HarnessError> {
         Ok(Some(cwd))
     } else {
         Err(HarnessError::NoSuchDirectory { cwd })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use vessel_proto::{EnvName, ResolvedValue};
+
+    use super::*;
+    use crate::profile::parse_profiles;
+
+    fn rendered(pairs: &[(&str, &str)]) -> TerminalMcp {
+        TerminalMcp {
+            env: pairs
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.parse::<EnvName>().unwrap(),
+                        ResolvedValue::new((*value).to_owned()),
+                    )
+                })
+                .collect(),
+            ..TerminalMcp::default()
+        }
+    }
+
+    fn profile(text: &str) -> Profile {
+        let file = format!("[profiles.p]\nharness = \"codex\"\n{text}\n");
+        parse_profiles(&file, Some(Path::new("/h")))
+            .unwrap()
+            .get(&"p".parse().unwrap())
+            .unwrap()
+    }
+
+    /// The node's environment, for these tests.
+    fn node_env(name: &str) -> Option<OsString> {
+        match name {
+            "DOCS_TOKEN" => Some("inherited".into()),
+            "SAME" => Some("same".into()),
+            _ => None,
+        }
+    }
+
+    fn check(pairs: &[(&str, &str)], profile: &Profile) -> Result<(), McpError> {
+        check_environment(&rendered(pairs), profile, Some("CODEX_HOME"), &node_env)
+    }
+
+    fn shared(name: &str) -> McpError {
+        McpError::SharedVariable {
+            name: name.parse().unwrap(),
+        }
+    }
+
+    fn protected_name(name: &str) -> McpError {
+        McpError::ProtectedVariable {
+            name: name.parse().unwrap(),
+        }
+    }
+
+    /// Review finding 2: a server's variable must not override what Codex
+    /// inherits.
+    #[test]
+    fn a_variable_the_harness_inherits_keeps_its_value() {
+        let plain = Profile::default_for(vessel_proto::HarnessKind::Codex);
+        assert_eq!(
+            check(&[("DOCS_TOKEN", "mine")], &plain),
+            Err(shared("DOCS_TOKEN"))
+        );
+        assert_eq!(check(&[("SAME", "same")], &plain), Ok(()));
+        assert_eq!(check(&[("FRESH", "x")], &plain), Ok(()));
+        // The profile decides first: its value, or its removal.
+        let sets = profile("env = { DOCS_TOKEN = \"mine\" }");
+        assert_eq!(check(&[("DOCS_TOKEN", "mine")], &sets), Ok(()));
+        assert_eq!(
+            check(&[("DOCS_TOKEN", "other")], &sets),
+            Err(shared("DOCS_TOKEN"))
+        );
+        let removes = profile("unset = [\"FRESH\"]");
+        assert_eq!(check(&[("FRESH", "x")], &removes), Err(shared("FRESH")));
+    }
+
+    #[test]
+    fn variables_that_steer_the_harness_are_refused() {
+        let plain = Profile::default_for(vessel_proto::HarnessKind::Codex);
+        for name in [
+            "PATH",
+            "Path",
+            "HOME",
+            "USERPROFILE",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "NODE_OPTIONS",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "OPENAI_API_KEY",
+            "CODEX_HOME",
+            "CODEX_SANDBOX",
+        ] {
+            assert_eq!(
+                check(&[(name, "x")], &plain),
+                Err(protected_name(name)),
+                "{name}"
+            );
+        }
+        assert_eq!(check(&[("PROXYLESS", "x")], &plain), Ok(()));
     }
 }
