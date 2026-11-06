@@ -194,6 +194,11 @@ pub async fn respond<C: Carrier>(carrier: C, keypair: &NodeKeypair) -> Result<Se
 /// Stream<Item = Result<String, SecureError>> + Sink<String, Error = SecureError>:
 /// a FrameTransport.
 pub struct SecureChannel<C>;
+impl<C> SecureChannel<C> {
+    pub fn max_frame(&self) -> u32;
+    /// From the next frame announcement on, both directions (see below).
+    pub fn set_max_frame(&mut self, max_frame: u32);
+}
 
 pub enum SecureError {
     Handshake(snow::Error), HandshakeMessage { len }, Timeout(Duration),
@@ -235,6 +240,16 @@ pub fn answer_proof(keypair: &NodeKeypair, challenge: &HandshakeMessage) -> Resu
   `Tampered`, as do `TooLarge` from the peer, `NotUtf8` and `Exhausted`.
   Then the stream ends and sends fail with `Closed`. Refusing to send an
   oversized frame is the one error that leaves the channel open.
+- The frame limit can change on an open channel (`set_max_frame`, added
+  after the security review of Track P, finding 4): the node's gateway
+  runs the device preamble under 64 KiB, so an unauthenticated client
+  cannot make it buffer 16 MiB, and raises the limit once the client is
+  admitted.
+  - It applies to the next frame announcement: the next `FIRST` chunk
+    read (frames the peer pipelined but this end has not read yet are
+    judged when read), and the next frame sent.
+  - A frame already announced, half received or half sent, finishes under
+    the limit it was announced with; lowering the limit never fails it.
 - A carrier that ends between frames ends the stream; one that ends inside
   a frame is `Carrier(UnexpectedEof)`.
 - Fingerprint: the routing id's 16 bytes in eight groups of four hex
