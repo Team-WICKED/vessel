@@ -122,12 +122,42 @@ impl Child {
         }
         #[cfg(unix)]
         {
-            self.group.signal(signal)
+            match self.group.signal(signal) {
+                Err(refused) if refused.is_refused() => self.exited_already(refused),
+                delivered => delivered,
+            }
         }
         #[cfg(windows)]
         {
             let _ = signal;
             self.inner.start_kill().map_err(SignalError::from)
+        }
+    }
+
+    /// The group refused a signal (`EPERM`). macOS answers that when every
+    /// member of the group has exited but is not reaped yet, which for our
+    /// leader means it is already gone: if it has exited, reap it now (its
+    /// code is kept for [`wait`](Self::wait)), sweep, and count the signal
+    /// as delivered. Otherwise the refusal is real (a member runs as
+    /// another user) and is returned.
+    ///
+    /// [Decision Log]
+    /// - Seen on CI (macOS): an agent that exited by itself between the
+    ///   session's decision to stop it and the signal made `kill` fail.
+    /// - Alternatives: map every `EPERM` to success (hides a real refusal);
+    ///   ask the OS whether the leader is a zombie (no portable call that
+    ///   does not reap it: `waitid` with `WNOWAIT` is missing on macOS).
+    /// - Choice: `try_wait`, which never blocks and only succeeds for an
+    ///   exited leader; reaping it here is what `wait` would do next anyway.
+    #[cfg(unix)]
+    fn exited_already(&mut self, refused: SignalError) -> Result<(), SignalError> {
+        match self.inner.try_wait() {
+            Ok(Some(status)) => {
+                self.state = State::Reaped(status.code());
+                self.sweep();
+                Ok(())
+            }
+            Ok(None) | Err(_) => Err(refused),
         }
     }
 

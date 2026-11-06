@@ -23,8 +23,9 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema as acp;
 use agent_client_protocol::{Agent, Error};
-use vessel_proto::{HarnessSessionId, ModelId};
+use vessel_proto::{HarnessSessionId, ModelId, ResolvedMcpServers};
 
+use crate::mcp;
 use crate::model::{self, ModelError};
 
 /// The default for [`AgentSetup::handshake_timeout`].
@@ -40,6 +41,10 @@ pub struct AgentSetup {
     /// Resume this harness session (`session/load`) instead of starting a
     /// new one.
     pub resume: Option<HarnessSessionId>,
+    /// MCP servers the session gets, in `session/new` or `session/load`.
+    /// Values reach the agent over its stdin, never its command line; an
+    /// HTTP server is left out (and logged) if the agent cannot take HTTP.
+    pub mcp_servers: ResolvedMcpServers,
     /// Longest the whole handshake may take (normally
     /// [`DEFAULT_HANDSHAKE_TIMEOUT`]); past it the connection ends with
     /// `Disconnect::Handshake`.
@@ -103,20 +108,32 @@ pub(crate) async fn run(
         return Err(HandshakeError::Version(initialized.protocol_version));
     }
 
+    let (servers, left_out) = mcp::to_acp(
+        &setup.mcp_servers,
+        &initialized.agent_capabilities.mcp_capabilities,
+    );
+    if !left_out.is_empty() {
+        tracing::warn!(
+            servers = ?left_out,
+            "the agent does not take HTTP MCP servers; the session starts without them"
+        );
+    }
     let (session, options) = if let Some(resume) = &setup.resume {
         if !initialized.agent_capabilities.load_session {
             return Err(HandshakeError::CannotResume);
         }
         let session = acp::SessionId::new(resume.as_str());
         let loaded = cx
-            .send_request(acp::LoadSessionRequest::new(session.clone(), &setup.cwd))
+            .send_request(
+                acp::LoadSessionRequest::new(session.clone(), &setup.cwd).mcp_servers(servers),
+            )
             .block_task()
             .await
             .map_err(HandshakeError::LoadSession)?;
         (session, loaded.config_options)
     } else {
         let created = cx
-            .send_request(acp::NewSessionRequest::new(&setup.cwd))
+            .send_request(acp::NewSessionRequest::new(&setup.cwd).mcp_servers(servers))
             .block_task()
             .await
             .map_err(HandshakeError::NewSession)?;

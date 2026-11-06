@@ -14,6 +14,7 @@
 //! - `transport`: the agent's stdio as the SDK's line transport, holding
 //!   lines back while the driver is behind (backpressure);
 //! - `handshake`: `initialize`, `session/new` or `session/load`, model;
+//! - `mcp`: Vessel's MCP server definitions as ACP's, for those requests;
 //! - `model`: picking the requested model among ACP config options;
 //! - `permissions`: pending permission requests, first answer wins;
 //! - `mapper`: pure ACP-to-Vessel conversions, tested with fixtures;
@@ -41,6 +42,7 @@ mod error;
 mod handshake;
 mod input;
 mod mapper;
+mod mcp;
 mod model;
 mod output;
 mod permissions;
