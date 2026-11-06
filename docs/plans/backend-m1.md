@@ -46,7 +46,7 @@ parts, `TerminalBytes`/`TerminalInput`/`TerminalSize`, `Harness`/
 - Each track rebases onto `backend/m1` when the coordinator says so. Never
   push; never force-update `backend/m1`.
 
-## Track R: runtime (agent "오오푸스2", provider `claude-alt`)
+## Track R: runtime (agent "오오푸스2", on a second Claude account)
 
 Owns: `vessel-proc`, `vessel-harness`, `vessel-pty`, `vessel-agent`,
 `vessel-session`, `vessel-testkit`.
@@ -243,7 +243,7 @@ impl SessionError { pub fn code(&self) -> vessel_proto::ErrorCode; }
   adapter can be installed (`npm i -g @agentclientprotocol/claude-agent-acp`);
   one terminal `codex --version`.
 
-## Track S: spine (agent "오오푸스3", provider `claude-alalt`)
+## Track S: spine (agent "오오푸스3", on a third Claude account)
 
 Owns: `vessel-rpc`, `vessel-store`, `vessel-node`, `vessel-client`,
 `vessel-cli`. Start with S1-S3, which do not need Track R. Re-add
