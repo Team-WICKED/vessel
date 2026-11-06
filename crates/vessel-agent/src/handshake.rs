@@ -1,7 +1,23 @@
 //! The ACP handshake: `initialize`, then `session/new` or `session/load`,
-//! then the model.
+//! then the model, all within [`AgentSetup::handshake_timeout`].
+//!
+//! [Decision Log]
+//! - Purpose: an adapter that never answers `initialize`, `session/new` or
+//!   `session/load` (hung, waiting for a login prompt nobody sees) left the
+//!   session `Starting` forever, and every input sent to it waited, holding
+//!   one of its connection's in-flight call slots on the node.
+//! - Choice: one deadline for the whole handshake. When it passes, the
+//!   handshake fails like any other (`Disconnect::Handshake`), the session
+//!   stops the process and ends `Failed`, and waiting input is refused.
+//! - Why the whole handshake rather than each request: the steps are
+//!   sequential and none of them is useful alone; one budget is what a user
+//!   waiting for "ready" experiences.
+//! - Why 60 s by default: `session/load` replays the whole conversation
+//!   before it answers, and a long one through a slow store can take tens of
+//!   seconds; a healthy adapter starts in a few.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
@@ -10,6 +26,9 @@ use agent_client_protocol::{Agent, Error};
 use vessel_proto::{HarnessSessionId, ModelId};
 
 use crate::model::{self, ModelError};
+
+/// The default for [`AgentSetup::handshake_timeout`].
+pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What the session should start with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +40,10 @@ pub struct AgentSetup {
     /// Resume this harness session (`session/load`) instead of starting a
     /// new one.
     pub resume: Option<HarnessSessionId>,
+    /// Longest the whole handshake may take (normally
+    /// [`DEFAULT_HANDSHAKE_TIMEOUT`]); past it the connection ends with
+    /// `Disconnect::Handshake`.
+    pub handshake_timeout: Duration,
 }
 
 /// Why the handshake failed.
@@ -40,6 +63,19 @@ pub(crate) enum HandshakeError {
     Model(#[from] ModelError),
     #[error("selecting the model failed")]
     SetModel(#[source] Error),
+    #[error("the agent did not complete the ACP handshake within {} s", .0.as_secs())]
+    TimedOut(Duration),
+}
+
+/// [`run`], bounded by `setup.handshake_timeout`.
+pub(crate) async fn run_within(
+    cx: &ConnectionTo<Agent>,
+    setup: &AgentSetup,
+) -> Result<acp::SessionId, HandshakeError> {
+    let limit = setup.handshake_timeout;
+    tokio::time::timeout(limit, run(cx, setup))
+        .await
+        .unwrap_or(Err(HandshakeError::TimedOut(limit)))
 }
 
 /// Run the handshake; returns the ACP session id.

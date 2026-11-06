@@ -38,6 +38,7 @@ mod support {
             cwd: std::env::temp_dir(),
             model: model.map(ModelId::new),
             resume: None,
+            handshake_timeout: vessel_agent::DEFAULT_HANDSHAKE_TIMEOUT,
         }
     }
 
@@ -102,6 +103,26 @@ mod support {
                 };
                 if wanted(&event) {
                     return event;
+                }
+            }
+        }
+
+        /// Read outputs until the connection ends (the process may live on);
+        /// returns why it ended.
+        pub(super) async fn disconnected(&mut self) -> Disconnect {
+            loop {
+                match self
+                    .outputs
+                    .next()
+                    .await
+                    .expect("outputs ended before the disconnect")
+                {
+                    AgentOutput::Event(AgentEvent::HarnessLog { line }) => self.log.push(line),
+                    AgentOutput::Event(event) => self.events.push(event),
+                    AgentOutput::Disconnected(disconnect) => {
+                        self.disconnect = Some(disconnect.clone());
+                        return disconnect;
+                    }
                 }
             }
         }
@@ -413,6 +434,40 @@ async fn an_agent_that_dies_at_start_reports_its_stderr_and_exit_code() {
         );
         assert_eq!(agent.log, ["fake-acp: not logged in"]);
         assert_eq!(agent.process.wait().await, Some(3));
+    })
+    .await;
+}
+
+/// An adapter stuck at start fails the handshake after the deadline, so
+/// the session does not stay `Starting` and input is refused, not held.
+#[tokio::test]
+async fn an_agent_stuck_in_the_handshake_fails_at_the_deadline() {
+    within(async {
+        for step in ["initialize", "session/new"] {
+            let command = vessel_proc::CommandSpec::new(vessel_testkit::Fake::Acp.path().unwrap())
+                .env("FAKE_ACP_HANG", step);
+            let mut agent = Agent::start_with(
+                &command,
+                AgentSetup {
+                    handshake_timeout: std::time::Duration::from_millis(300),
+                    ..setup(None)
+                },
+            );
+            let Disconnect::Handshake { message } = agent.disconnected().await else {
+                panic!("a stuck {step} must fail the handshake");
+            };
+            assert!(
+                message.contains("did not complete the ACP handshake within"),
+                "{step}: {message}"
+            );
+            assert!(agent.events.is_empty(), "never ready: {:?}", agent.events);
+            let error = agent.input.prompt(text("hello")).await.unwrap_err();
+            assert!(matches!(error, InputError::Closed), "{error:?}");
+            // The process is stuck too; stopping it (the session's job) ends
+            // the outputs.
+            agent.process.signal(Signal::Kill).unwrap();
+            drop(agent.until_end().await);
+        }
     })
     .await;
 }

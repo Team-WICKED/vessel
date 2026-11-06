@@ -7,6 +7,8 @@
 //!   set it writes `fake-acp: not logged in` to stderr and exits 3 before
 //!   speaking ACP (a harness that fails at start). Otherwise it writes
 //!   `fake-acp starting` to stderr and serves ACP v1 until stdin closes.
+//! - With `FAKE_ACP_HANG` set to `initialize` or `session/new`, that request
+//!   is never answered (an adapter stuck at start).
 //! - `initialize`: protocol v1, `loadSession` supported.
 //! - `session/new`: session `fake-session-<n>`, with one `model` select
 //!   option (`fake-small`, the default, or `fake-large`).
@@ -96,6 +98,9 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 )]
 async fn serve() -> ExitCode {
     complain("fake-acp starting");
+    let hang = std::env::var("FAKE_ACP_HANG").unwrap_or_default();
+    let hang_at_initialize = hang == "initialize";
+    let hang_at_new = hang == "session/new";
     let state = Shared::default();
     let transport = ByteStreams::new(
         tokio::io::stdout().compat_write(),
@@ -106,6 +111,9 @@ async fn serve() -> ExitCode {
         .name("fake-acp")
         .on_receive_request(
             async move |request: InitializeRequest, responder, _cx| {
+                if hang_at_initialize {
+                    std::future::pending::<()>().await;
+                }
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(AgentCapabilities::new().load_session(true))
@@ -118,6 +126,9 @@ async fn serve() -> ExitCode {
             {
                 let state = Arc::clone(&state);
                 async move |_request: NewSessionRequest, responder, _cx| {
+                    if hang_at_new {
+                        std::future::pending::<()>().await;
+                    }
                     let (id, model) = {
                         let mut state = lock(&state);
                         state.sessions = state.sessions.saturating_add(1);

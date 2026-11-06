@@ -106,7 +106,9 @@ depend on the node, so there is no cycle).
     permission answers with typed refusals), `AgentOutputs` (bounded).
     A single driver loop owns the session; handlers forward into one
     ordered channel. The model is chosen through the `model` config option.
-    The `mapper` is pure and tested against fixtures in
+    The whole handshake has a deadline (`AgentSetup::handshake_timeout`,
+    60 s by default); a stuck adapter fails the session instead of leaving
+    it `Starting`. The `mapper` is pure and tested against fixtures in
     `crates/vessel-agent/tests/fixtures/acp/`.
   - `vessel-session`: the R6 API (`SessionRuntime`, `SessionHandle`,
     `Follow`/`FollowError`, `Created::durable`; records shared as
