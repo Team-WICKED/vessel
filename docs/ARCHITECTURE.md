@@ -31,20 +31,20 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-proto` | Wire contract: ids, sessions, events, agent timeline, errors, typed RPC table; keys, devices, pairing links, relay control (milestone 3); validated names, profiles, creators, agent credentials, fleet manifests and MCP server definitions (milestone 4); protocol 6's envelope (`forward`: `Origin`, `fleet.forward`/`relay`/`deliver`), transfers (`transfer`, with the size limits) and secrets on the wire (`secret`: `SecretValue`, redacted). No I/O. | - |
 | `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. From protocol 5 it holds both sides to the negotiated version: a call newer than the connection (`Call::since`) is refused by the client before sending and by the server before dispatch, and outgoing frames are adapted to an older client where they are encoded (`ServerFrame::for_protocol`). | proto |
 | `vessel-proc` | Command specs, spawning in a process group, killing the group. | - |
-| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, MCP servers for terminal sessions, and what `vessel init` offers (install and login commands, other accounts' homes). | proto, proc |
+| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, a profile's memory files and renaming a path for another working directory (transfers, protocol 6), MCP servers for terminal sessions, and what `vessel init` offers (install and login commands, other accounts' homes). | proto, proc |
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize. | proc |
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`, `profiles.toml`, `mcp/`), SQLite event log (schema 3: sessions' current profile and creator; schema 4: where a session came from, `origin` and `via`, protocol 6), retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting) (milestone 4); `unbuilt`: the protocol 6 methods not built yet, each answering `unsupported` behind the guard until its track (F3, F4, X) replaces it. | proto, rpc, harness, session, store, secure, relay, fleet, client |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting; this node's secrets) (milestone 4); transfers (`transfers`: `session.export`/`memory.export` snapshots held for whoever opened them, `transfer.read`/`close`, expiry, and `session.import`/`memory.import` pulling through a `Source`, this node until Track X's envelope reaches others) (protocol 6, F4); `unbuilt`: the protocol 6 methods not built yet, each answering `unsupported` behind the guard until its track (F3, X) replaces it. | proto, rpc, harness, session, store, secure, relay, fleet, client |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
-| `vessel-fleet` | Fleet bundles (milestone 4, ADR 0012): the home's sources into a manifest and a content-addressed blob store; plan and apply into harness homes with recorded hashes (`managed.json`), local edits kept with the incoming version beside them, symlinks never followed, targets linked to the sources left alone; skills named by `SKILL.md`; MCP secret references resolved at launch. | proto, harness |
+| `vessel-fleet` | Fleet bundles (milestone 4, ADR 0012): the home's sources into a manifest and a content-addressed blob store; plan and apply into harness homes with recorded hashes (`managed.json`), local edits kept with the incoming version beside them, symlinks never followed, targets linked to the sources left alone; skills named by `SKILL.md`; MCP secret references resolved at launch; transfers as file sets (`snapshot` into a staging store within protocol 6's limits, `place` into a home never overwriting: a session whole or not at all, memory beside what differs). | proto, harness |
 | `vessel-mcp` | `vessel mcp` (milestone 4, ADR 0013): the MCP server (stdio, on `rmcp`) a node attaches to every session as `vessel`; each tool is one call through the session's agent principal. | proto, client |
 | `vessel-cli` | `vessel` binary: commands, interactive attach, `vessel mcp`, `vessel init` (first-run setup, milestone 4). | proto, client, node, remote, mcp, harness |
-| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. The fakes report the environment, arguments, MCP servers and loaded session id they got (milestone 4). | - |
+| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. The fakes report the environment, arguments, MCP servers, loaded session id and working directory they got (milestone 4). | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
 that ADR and this table. Test-only edges: `vessel-node`'s end-to-end tests
@@ -458,7 +458,34 @@ they started.
     secrets, a snapshot the fleet loop replaces, resolved per launch with
     `vessel_fleet::resolve`. A session's agent gets every fleet server with
     this node's values; one missing a secret is left out and named in the
-    session's log (end to end with `fake-acp`).
+    session's log (end to end with `fake-acp`). Protocol 6's `secret.set`,
+    `secret.list` and `secret.delete` (admin) call the same functions;
+    `secret.copy` waits for Track X's envelope.
+  - Transfers on one node (F4, 2026-11-06): `vessel-harness` knows which
+    files (`SessionFiles::regular_files`, the files a profile move links,
+    never `memory/`; `memory_files`, Claude Code's per project and Codex's
+    `memories/`) and how a path is renamed for another working directory
+    (`rebase`: Claude Code's project directory, whatever spelling the
+    source used; Codex's dated rollouts stay). `vessel-fleet` copies them
+    into a staging blob store (`snapshot`, opened through directories held
+    open, no link followed, 256 MiB per file and 2 GiB in all checked as
+    read) and writes a received set (`place`, never overwriting).
+    `vessel-node` `transfers` keeps snapshots under
+    `<data_dir>/transfers/<id>/` for the caller that opened them (another
+    caller gets `not_found`), at most 16 at once, for 10 idle minutes, and
+    empties the directory at start; `session.export` refuses a live
+    session mid-turn unless forced (`SessionHandle::turn_running`) and
+    terminal sessions; `session.import` and `memory.import` pull through a
+    `Source` (this node's own export for the caller, an agent only from
+    sessions it started), fetch with hashes checked (`fleet::chunks`,
+    shared with the member's pull), rename and place, and with `start`
+    create the session through `session.create`'s path with `origin:
+    imported`. Another node answers `unsupported` until Track X. The client
+    has the calls and a reader that checks hashes; the CLI `vessel session
+    copy|move [--to NODE] [--profile] [--cwd]` (a move kills the source once
+    the copy started) and `vessel fleet memory copy`. Tested end to end with
+    `fake-acp` (Claude Code and Codex profiles in temporary homes) and
+    through the CLI.
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

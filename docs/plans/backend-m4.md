@@ -365,14 +365,27 @@ member vesseld                         home vesseld
   follow an edit, leave), and the CLI through a relay.
 - **F3 (done, except `secret.copy`):** `secrets.toml`, `vessel fleet
   secret set|list|delete`, and the fleet's `McpSource` (`FleetMcp`) in
-  place of `NoMcpServers`; `secret.copy` and the `secret.*` rows wait for
-  protocol 6, whose handlers will call the same store. Tests: the store
+  place of `NoMcpServers`; the `secret.set|list|delete` rows call the same
+  store (protocol 6); `secret.copy` waits for Track X's envelope. Tests: the store
   (comments kept, owner-only, errors never quoting a value), a member
   receiving the definitions, a session's agent getting a server with
   this node's secret and starting without it once the secret is deleted
   (named in its log), and the CLI (stdin only, names only).
-- **Next:** F4 (history and memory transfer), once Track R's protocol 6
-  contract lands.
+- **F4 (same node done, 2026-11-06):** `session.export`,
+  `memory.export`, `transfer.read`/`close` and `session.import`/
+  `memory.import` between profiles of one node, the client's calls and
+  checked reader, `vessel session copy|move` and `vessel fleet memory
+  copy` (ADR 0012, "As built (history and memory, F4)"). Imports pull
+  through a `Source` trait; another node answers `unsupported` until Track
+  X implements it with `fleet.forward`. Codex resuming in another
+  directory is checked with fakes only (the rollout keeps its path,
+  `session/load` gets the new directory); the real `codex-acp` is left to
+  the manual smoke test. Tests: snapshot and place over temporary trees
+  (links, FIFOs, limits, conflicts), the registry (holder, cap, expiry),
+  end to end with `fake-acp` for Claude Code and Codex profiles, an
+  agent's ownership, and the CLI.
+- **Next:** F4 across nodes (the `Source` over Track X's envelope) and
+  `secret.copy`, once the envelope lands.
 
 ## Track F: fleet and first run
 
