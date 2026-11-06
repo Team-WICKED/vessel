@@ -226,21 +226,46 @@ impl FromStr for BundlePath {
     }
 }
 
-/// An `http://` or `https://` URL with a host.
+/// An `http://` or `https://` URL with a host and no credentials in it.
+///
+/// A URL is public: it travels in manifests and, for some harnesses, on a
+/// command line that every local user can read (`ps`). So `user:pass@` is
+/// refused; a credential goes in a header, as a secret reference
+/// (`ConfigValue::Secret`). A token in the query string cannot be told from
+/// an ordinary parameter, so the same rule is stated here rather than
+/// enforced: keep secrets out of URLs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HttpUrl(String);
 
-/// A URL that is not `http://` or `https://` with a host.
+/// A URL that is not `http://` or `https://` with a host, or that carries
+/// credentials (`user:pass@`). Holds the URL with its credentials already
+/// replaced, so neither `Display` nor `Debug` can repeat them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidHttpUrl(pub String);
 
 impl fmt::Display for InvalidHttpUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "`{}` is not an http:// or https:// URL", self.0)
+        write!(
+            f,
+            "not an http:// or https:// URL with a host and without credentials: `{}`",
+            self.0
+        )
     }
 }
 
 impl std::error::Error for InvalidHttpUrl {}
+
+/// The URL with anything before an `@` in its authority replaced, so an
+/// error about a URL never repeats the credentials it was refused for.
+fn redact_userinfo(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    match authority.rsplit_once('@') {
+        Some((_, host)) => format!("{scheme}://<redacted>@{host}{tail}"),
+        None => url.to_owned(),
+    }
+}
 
 impl HttpUrl {
     /// The URL text.
@@ -263,11 +288,13 @@ impl FromStr for HttpUrl {
         let rest = s
             .strip_prefix("https://")
             .or_else(|| s.strip_prefix("http://"));
-        let has_host = rest.is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'));
-        if has_host && !s.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        let authority = rest.map(|rest| rest.split(['/', '?', '#']).next().unwrap_or(rest));
+        let has_host = authority.is_some_and(|authority| !authority.is_empty());
+        let has_credentials = authority.is_some_and(|authority| authority.contains('@'));
+        if has_host && !has_credentials && !s.chars().any(|c| c.is_control() || c.is_whitespace()) {
             Ok(Self(s.to_owned()))
         } else {
-            Err(InvalidHttpUrl(s.to_owned()))
+            Err(InvalidHttpUrl(redact_userinfo(s)))
         }
     }
 }
@@ -706,5 +733,15 @@ mod tests {
         ] {
             assert!(bad.parse::<HttpUrl>().is_err(), "{bad}");
         }
+        assert!("https://mcp.example/a@b?c=@".parse::<HttpUrl>().is_ok());
+        let error = "https://me:s3cret@mcp.example/v1"
+            .parse::<HttpUrl>()
+            .unwrap_err();
+        assert!(!error.to_string().contains("s3cret"), "{error}");
+        assert!(!format!("{error:?}").contains("s3cret"), "{error:?}");
+        assert!(
+            error.to_string().contains("<redacted>@mcp.example/v1"),
+            "{error}"
+        );
     }
 }
