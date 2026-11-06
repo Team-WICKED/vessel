@@ -12,6 +12,13 @@
 //! [nodes.lab]
 //! url = "ws://10.0.0.5:7077"
 //! token = { file = "~/.vessel/tokens/lab" }
+//!
+//! [nodes.laptop-at-home]          # paired (milestone 3, ADR 0010)
+//! key = "x25519:..."              # pinned at pairing; the channel checks it
+//! relay = ["wss://relay.example/vessel"]
+//! direct = ["ws://203.0.113.5:7077"]
+//! credential = { file = "~/.config/vessel/credentials/<id>.secret" }
+//! id = "6f1c..."
 //! ```
 //!
 //! ```toml
@@ -47,6 +54,11 @@
 //!   different node answering at the same address (a reinstalled machine,
 //!   a DNS change) is refused instead of being sent the user's commands
 //!   ([`crate::Pinned`]).
+//! - A node is reached exactly one way: `ssh`, `url`, or `key` with its
+//!   routes (milestone 3). A `key` node needs a `credential` file and at
+//!   least one route. The book never holds a secret: tokens and device
+//!   credentials are files it points to, since the book is meant to be
+//!   edited by hand and shared between machines (ADR 0010).
 
 mod content;
 mod file;
@@ -61,6 +73,7 @@ use std::str::FromStr;
 use vessel_proto::NodeId;
 
 use crate::address::{InvalidAddress, InvalidRemotePath, InvalidSshTarget, NodeAddress};
+use crate::credential::CredentialSource;
 use crate::url::NodeUrl;
 
 pub use file::{BookFile, ProjectConfig};
@@ -129,6 +142,8 @@ pub struct BookEntry {
     pub address: NodeAddress,
     /// Where its token is (websocket nodes; an SSH node needs none).
     pub token: Option<TokenSource>,
+    /// Where its device credential is (paired nodes only).
+    pub credential: Option<CredentialSource>,
     /// The node's id, once it has been seen.
     pub id: Option<NodeId>,
 }
@@ -167,6 +182,8 @@ pub struct Resolved {
     pub address: NodeAddress,
     /// The book's token source for it.
     pub token: Option<TokenSource>,
+    /// The book's device credential for it (paired nodes).
+    pub credential: Option<CredentialSource>,
     /// The id the book pinned for it.
     pub pinned: Option<NodeId>,
     /// Which layer chose it.
@@ -277,12 +294,38 @@ pub enum EntryProblem {
     /// The key is not a usable name.
     #[error(transparent)]
     Name(#[from] InvalidNodeName),
-    /// Neither `ssh` nor `url`.
-    #[error("needs `ssh = \"[user@]host\"` or `url = \"ws://...\"`")]
+    /// None of `ssh`, `url` and `key`.
+    #[error(
+        "needs `ssh = \"[user@]host\"`, `url = \"ws://...\"`, or a paired node's `key` \
+         (`vessel nodes add NAME --pair LINK` writes one)"
+    )]
     NoTransport,
-    /// Both `ssh` and `url`.
-    #[error("has both `ssh` and `url`; a node is reached one way")]
-    BothTransports,
+    /// More than one of `ssh`, `url` and `key`.
+    #[error("has more than one of `ssh`, `url` and `key`; a node is reached one way")]
+    ManyTransports,
+    /// A paired node without its credential file.
+    #[error("a `key` node needs `credential = {{ file = \"...\" }}`, written when it was paired")]
+    NoCredential,
+    /// A paired node without a route.
+    #[error("a `key` node needs at least one `relay` or `direct` route")]
+    NoRoute,
+    /// `credential`, `relay` or `direct` on a node that is not paired.
+    #[error("`credential`, `relay` and `direct` belong to a paired node's `key`")]
+    SecureFieldsWithoutKey,
+    /// A token or remote data directory on a paired node.
+    #[error(
+        "a `key` node authenticates with its device credential; it has no `token` or `data_dir`"
+    )]
+    WsFieldsWithKey,
+    /// `key` is not a node key.
+    #[error("key: {0}")]
+    Key(String),
+    /// A route that is not a `ws://` or `wss://` URL.
+    #[error("route: {0}")]
+    Route(String),
+    /// A credential file path that is not UTF-8 (cannot be written to TOML).
+    #[error("credential: the file path is not UTF-8")]
+    CredentialPath,
     /// A token for an SSH node.
     #[error("an SSH node needs no `token`: the node reads its own (ADR 0007)")]
     TokenOverSsh,
@@ -335,6 +378,7 @@ pub fn resolve(
             name: None,
             address,
             token: None,
+            credential: None,
             pinned: None,
             origin: Origin::Named,
         });
@@ -364,6 +408,7 @@ pub fn resolve(
         name: None,
         address: NodeAddress::Ws(local.clone()),
         token: None,
+        credential: None,
         pinned: None,
         origin: Origin::Default,
     })
@@ -374,6 +419,7 @@ fn from_entry(name: &NodeName, entry: &BookEntry, origin: Origin) -> Resolved {
         name: Some(name.clone()),
         address: entry.address.clone(),
         token: entry.token.clone(),
+        credential: entry.credential.clone(),
         pinned: entry.id,
         origin,
     }

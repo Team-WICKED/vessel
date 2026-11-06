@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use vessel_client::book::{
     BookEntry, BookError, BookFile, NodeBook, NodeName, ProjectConfig, Resolved, TokenSource,
 };
-use vessel_client::{NodeAddress, NodeUrl, RemotePath};
+use vessel_client::{CredentialSource, NodeAddress, NodeUrl, RemotePath};
 use vessel_proto::DEFAULT_PORT;
 
 use crate::args::{NodesCommand, Target};
@@ -167,10 +167,17 @@ fn entry(
                 ));
             }
         }
+        // Text never names a paired node; pairing writes those entries.
+        NodeAddress::Secure(_) => {
+            return Err(CliError::Usage(
+                "a paired node is added with `vessel nodes add NAME --pair LINK`",
+            ));
+        }
     }
     Ok(BookEntry {
         address,
         token: token_file.map(TokenSource::File),
+        credential: None,
         id: None,
     })
 }
@@ -212,6 +219,18 @@ fn show(name: &NodeName, entry: &BookEntry, default: bool) -> String {
             let _infallible = writeln!(text, "url: {url}");
             if let Some(TokenSource::File(file)) = &entry.token {
                 let _infallible = writeln!(text, "token file: {}", file.display());
+            }
+        }
+        NodeAddress::Secure(target) => {
+            let _infallible = writeln!(text, "key: {}", target.key);
+            for route in &target.direct {
+                let _infallible = writeln!(text, "direct: {route}");
+            }
+            for route in &target.relays {
+                let _infallible = writeln!(text, "relay: {route}");
+            }
+            if let Some(CredentialSource::File(file)) = &entry.credential {
+                let _infallible = writeln!(text, "credential file: {}", file.display());
             }
         }
     }

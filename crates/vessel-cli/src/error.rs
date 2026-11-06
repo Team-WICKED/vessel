@@ -80,6 +80,13 @@ pub(crate) enum CliError {
          machine, and the next connection starts the new version"
     )]
     TooOldToStop(String),
+    /// A paired node, which needs the secure channel (milestone 3,
+    /// `vessel-secure`), in a build that cannot open one yet.
+    #[error(
+        "{node} is a paired node, reached over a secure channel; this build of vessel cannot \
+         open one yet"
+    )]
+    NoSecureChannel { node: String },
     /// A command that needs an SSH node got another kind.
     #[error("{node} is not an SSH node; {what} works only over SSH")]
     NotSsh { node: String, what: &'static str },

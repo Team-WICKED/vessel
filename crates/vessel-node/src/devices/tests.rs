@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use tempfile::TempDir;
+use vessel_client::pairing::{self, PreambleError};
 use vessel_harness::Lookup;
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, HarnessKind,
@@ -75,62 +76,39 @@ fn invite(node: &Node, label: Option<&str>) -> PairingOffer {
         .unwrap()
 }
 
-/// Pair through a fresh channel; returns the device, its secret, and the
-/// protocol connection that follows on the same channel.
+/// Pair through a fresh channel with the client's own `pair`; returns the
+/// device, its secret, and the protocol connection that follows on the same
+/// channel.
 async fn pair(node: &Node, invite: InvitationSecret) -> (DeviceId, DeviceSecret, Connection) {
-    let mut channel = channel(node);
-    let reply = preamble(
-        &mut channel,
-        &Preamble::PairRequest {
-            invite,
-            device_name: "laptop".to_owned(),
-        },
-    )
-    .await;
-    let PreambleReply::Paired {
-        device,
-        secret,
-        node: info,
-    } = reply
-    else {
-        panic!("expected paired, got {reply:?}");
-    };
-    assert_eq!(info.id, node.info().id);
+    let (paired, channel) = pairing::pair(channel(node), &invite, "laptop")
+        .await
+        .unwrap();
+    assert_eq!(paired.node.id, node.info().id);
     let connection = Connection::connect(channel, client(), &ClientConfig::default())
         .await
         .unwrap();
-    (device, secret, connection)
+    (
+        paired.credential.device,
+        paired.credential.secret,
+        connection,
+    )
 }
 
-/// Authenticate through a fresh channel.
+/// Authenticate through a fresh channel with the client's `authenticate`.
 async fn authenticate(
     node: &Node,
     device: DeviceId,
     secret: &DeviceSecret,
 ) -> Result<Connection, RefusalReason> {
-    let mut channel = channel(node);
-    let reply = preamble(
-        &mut channel,
-        &Preamble::DeviceAuth {
-            device,
-            secret: secret.clone(),
-        },
-    )
-    .await;
-    match reply {
-        PreambleReply::Authenticated { device: answered } => {
-            assert_eq!(answered, device);
-            Ok(
-                Connection::connect(channel, client(), &ClientConfig::default())
-                    .await
-                    .unwrap(),
-            )
-        }
-        PreambleReply::Refused { reason } => {
-            assert!(channel.next().await.is_none(), "closed after refusing");
-            Err(reason)
-        }
-        PreambleReply::Paired { .. } => panic!("paired on a device auth"),
+    let credential = pairing::credential(device, secret.clone());
+    match pairing::authenticate(channel(node), &credential).await {
+        Ok(channel) => Ok(
+            Connection::connect(channel, client(), &ClientConfig::default())
+                .await
+                .unwrap(),
+        ),
+        Err(PreambleError::Refused(reason)) => Err(reason),
+        Err(other) => panic!("expected an answer, got {other}"),
     }
 }
 
@@ -216,6 +194,7 @@ async fn pairing_creates_a_device_once_and_its_credential_authenticates_it() {
             reason: RefusalReason::InvalidInvitation
         }
     );
+    assert!(again.next().await.is_none(), "closed after refusing");
 
     // The credential works; a wrong one and an unknown device do not, and
     // are indistinguishable.

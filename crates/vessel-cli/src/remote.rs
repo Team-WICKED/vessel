@@ -82,7 +82,7 @@ pub(crate) fn ssh_target<'a>(
 ) -> Result<&'a SshTarget, CliError> {
     match &resolved.address {
         NodeAddress::Ssh(node) => Ok(node),
-        NodeAddress::Ws(_) => Err(CliError::NotSsh {
+        NodeAddress::Ws(_) | NodeAddress::Secure(_) => Err(CliError::NotSsh {
             node: nodes::label(resolved),
             what,
         }),

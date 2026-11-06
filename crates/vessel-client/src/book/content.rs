@@ -6,11 +6,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use toml_edit::{InlineTable, Table, value};
-use vessel_proto::NodeId;
+use toml_edit::{Array, InlineTable, Table, value};
+use vessel_proto::{NodeId, NodePublicKey, RouteUrl};
 
 use super::{BookEntry, BookError, EntryProblem, NodeBook, NodeName, TokenSource};
-use crate::address::{NodeAddress, RemotePath, SshTarget};
+use crate::address::{NodeAddress, RemotePath, SecureTarget, SshTarget};
+use crate::credential::CredentialSource;
 use crate::url::NodeUrl;
 
 /// The user's book file as written: every field optional.
@@ -27,14 +28,19 @@ pub(super) struct BookContent {
 pub(super) struct EntryContent {
     ssh: Option<String>,
     url: Option<String>,
+    key: Option<String>,
     data_dir: Option<String>,
-    token: Option<TokenContent>,
+    token: Option<FileContent>,
+    relay: Option<Vec<String>>,
+    direct: Option<Vec<String>>,
+    credential: Option<FileContent>,
     id: Option<String>,
 }
 
+/// `{ file = "..." }`: where a token or credential is kept.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct TokenContent {
+pub(super) struct FileContent {
     file: PathBuf,
 }
 
@@ -87,10 +93,17 @@ fn check_entry(entry: EntryContent) -> Result<BookEntry, EntryProblem> {
                 .map_err(|_invalid| EntryProblem::Id(id))
         })
         .transpose()?;
-    let address = match (entry.ssh, entry.url) {
-        (None, None) => return Err(EntryProblem::NoTransport),
-        (Some(_), Some(_)) => return Err(EntryProblem::BothTransports),
-        (Some(ssh), None) => {
+    let secure_fields =
+        entry.credential.is_some() || entry.relay.is_some() || entry.direct.is_some();
+    let address = match (entry.ssh, entry.url, entry.key) {
+        (None, None, None) => return Err(EntryProblem::NoTransport),
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => {
+            return Err(EntryProblem::ManyTransports);
+        }
+        (Some(ssh), None, None) => {
+            if secure_fields {
+                return Err(EntryProblem::SecureFieldsWithoutKey);
+            }
             if entry.token.is_some() {
                 return Err(EntryProblem::TokenOverSsh);
             }
@@ -101,7 +114,10 @@ fn check_entry(entry: EntryContent) -> Result<BookEntry, EntryProblem> {
                 .transpose()?;
             NodeAddress::Ssh(target)
         }
-        (None, Some(url)) => {
+        (None, Some(url), None) => {
+            if secure_fields {
+                return Err(EntryProblem::SecureFieldsWithoutKey);
+            }
             if entry.data_dir.is_some() {
                 return Err(EntryProblem::DataDirOverWs);
             }
@@ -110,12 +126,45 @@ fn check_entry(entry: EntryContent) -> Result<BookEntry, EntryProblem> {
             })?;
             NodeAddress::Ws(url)
         }
+        (None, None, Some(key)) => {
+            if entry.token.is_some() || entry.data_dir.is_some() {
+                return Err(EntryProblem::WsFieldsWithKey);
+            }
+            if entry.credential.is_none() {
+                return Err(EntryProblem::NoCredential);
+            }
+            let target = SecureTarget {
+                key: key
+                    .parse::<NodePublicKey>()
+                    .map_err(|error| EntryProblem::Key(error.to_string()))?,
+                relays: routes(entry.relay)?,
+                direct: routes(entry.direct)?,
+            };
+            if target.routes().next().is_none() {
+                return Err(EntryProblem::NoRoute);
+            }
+            NodeAddress::Secure(target)
+        }
     };
     Ok(BookEntry {
         address,
         token: entry.token.map(|token| TokenSource::File(token.file)),
+        credential: entry
+            .credential
+            .map(|credential| CredentialSource::File(credential.file)),
         id,
     })
+}
+
+fn routes(texts: Option<Vec<String>>) -> Result<Vec<RouteUrl>, EntryProblem> {
+    texts
+        .unwrap_or_default()
+        .iter()
+        .map(|text| {
+            text.parse()
+                .map_err(|error: vessel_proto::InvalidRoute| EntryProblem::Route(error.to_string()))
+        })
+        .collect()
 }
 
 /// `entry` as a `[nodes.<name>]` table.
@@ -139,6 +188,25 @@ pub(super) fn entry_table(entry: &BookEntry) -> Result<Table, EntryProblem> {
                 let _new = token.insert("file", file.into());
                 let _new = table.insert("token", value(token));
             }
+        }
+        NodeAddress::Secure(target) => {
+            if entry.token.is_some() {
+                return Err(EntryProblem::WsFieldsWithKey);
+            }
+            let Some(CredentialSource::File(file)) = &entry.credential else {
+                return Err(EntryProblem::NoCredential);
+            };
+            let _new = table.insert("key", value(target.key.to_string()));
+            for (field, routes) in [("relay", &target.relays), ("direct", &target.direct)] {
+                if !routes.is_empty() {
+                    let list: Array = routes.iter().map(RouteUrl::as_str).collect();
+                    let _new = table.insert(field, value(list));
+                }
+            }
+            let file = file.to_str().ok_or(EntryProblem::CredentialPath)?;
+            let mut credential = InlineTable::new();
+            let _new = credential.insert("file", file.into());
+            let _new = table.insert("credential", value(credential));
         }
     }
     if let Some(id) = entry.id {

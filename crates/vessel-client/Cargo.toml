@@ -13,6 +13,8 @@ vessel-rpc.workspace = true
 
 futures-util = { workspace = true, features = ["sink"] }
 serde.workspace = true
+# The device preamble's frames (ADR 0010), before `vessel-rpc` takes over.
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
@@ -21,7 +23,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-util.workspace = true

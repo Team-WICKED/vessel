@@ -98,7 +98,7 @@ fn typos_and_bad_entries_are_errors_that_say_where() {
         ("[nodes.box]\n", EntryProblem::NoTransport),
         (
             "[nodes.box]\nssh = \"box\"\nurl = \"ws://box\"\n",
-            EntryProblem::BothTransports,
+            EntryProblem::ManyTransports,
         ),
         (
             "[nodes.box]\nssh = \"box\"\ntoken = { file = \"t\" }\n",
@@ -274,6 +274,7 @@ fn edits_keep_comments_and_layout() {
     let entry = BookEntry {
         address: NodeAddress::Ssh(target),
         token: None,
+        credential: None,
         id: None,
     };
     file.add(&name("build"), &entry).unwrap();
@@ -318,6 +319,7 @@ fn edits_refuse_what_does_not_fit() {
     let ws = BookEntry {
         address: NodeAddress::Ws("ws://10.0.0.5:7077".parse().unwrap()),
         token: Some(TokenSource::File(PathBuf::from("~/.vessel/tokens/lab"))),
+        credential: None,
         id: None,
     };
     file.add(&name("lab"), &ws).unwrap();
@@ -337,6 +339,7 @@ fn edits_refuse_what_does_not_fit() {
     let ssh_with_token = BookEntry {
         address: NodeAddress::Ssh("box".parse().unwrap()),
         token: Some(TokenSource::File(PathBuf::from("t"))),
+        credential: None,
         id: None,
     };
     assert!(matches!(
@@ -365,6 +368,7 @@ fn an_inline_nodes_table_is_edited_in_place() {
         &BookEntry {
             address: NodeAddress::Ssh("b".parse().unwrap()),
             token: None,
+            credential: None,
             id: None,
         },
     )
@@ -372,4 +376,116 @@ fn an_inline_nodes_table_is_edited_in_place() {
     let reread = BookFile::open(&path).unwrap();
     assert!(reread.book().get("a").is_some());
     assert!(reread.book().get("b").is_some());
+}
+
+const KEY: &str = "x25519:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+
+/// A paired node: `key`, routes, and a credential file; nothing secret in
+/// the book itself.
+#[test]
+fn paired_nodes_have_a_key_routes_and_a_credential_file() {
+    let file = open(&format!(
+        "[nodes.home]\nkey = \"{KEY}\"\nrelay = [\"wss://relay.example/vessel\"]\n\
+         direct = [\"ws://203.0.113.5:7077\"]\ncredential = {{ file = \"~/c.secret\" }}\n\
+         id = \"{ID}\"\n"
+    ))
+    .unwrap();
+    let (_name, entry) = file.book().get("home").unwrap();
+    let NodeAddress::Secure(target) = &entry.address else {
+        panic!("{entry:?}");
+    };
+    assert_eq!(target.key.to_string(), KEY);
+    let routes: Vec<&str> = target
+        .routes()
+        .map(vessel_proto::RouteUrl::as_str)
+        .collect();
+    assert_eq!(
+        routes,
+        ["ws://203.0.113.5:7077", "wss://relay.example/vessel"]
+    );
+    assert_eq!(
+        entry
+            .credential
+            .as_ref()
+            .unwrap()
+            .path(Some(Path::new("/home/me"))),
+        PathBuf::from("/home/me/c.secret")
+    );
+    assert!(
+        entry
+            .address
+            .to_string()
+            .contains("via ws://203.0.113.5:7077 (+1)")
+    );
+
+    let relay_only = format!(
+        "[nodes.box]\nkey = \"{KEY}\"\nrelay = [\"ws://r\"]\ncredential = {{ file = \"c\" }}\n"
+    );
+    assert!(open(&relay_only).is_ok());
+
+    let cases = [
+        (
+            format!("[nodes.box]\nkey = \"{KEY}\"\nrelay = [\"ws://r\"]\n"),
+            EntryProblem::NoCredential,
+        ),
+        (
+            format!("[nodes.box]\nkey = \"{KEY}\"\ncredential = {{ file = \"c\" }}\n"),
+            EntryProblem::NoRoute,
+        ),
+        (
+            format!("[nodes.box]\nkey = \"{KEY}\"\nurl = \"ws://box\"\n"),
+            EntryProblem::ManyTransports,
+        ),
+        (
+            "[nodes.box]\nssh = \"box\"\nrelay = [\"ws://r\"]\n".to_owned(),
+            EntryProblem::SecureFieldsWithoutKey,
+        ),
+        (
+            format!(
+                "[nodes.box]\nkey = \"{KEY}\"\nrelay = [\"ws://r\"]\n\
+                 credential = {{ file = \"c\" }}\ntoken = {{ file = \"t\" }}\n"
+            ),
+            EntryProblem::WsFieldsWithKey,
+        ),
+    ];
+    for (text, expected) in cases {
+        let error = open(&text).unwrap_err();
+        let BookError::Entry { problem, .. } = &error else {
+            panic!("{text}: {error:?}");
+        };
+        assert_eq!(problem, &expected, "{text}");
+    }
+    for text in [
+        "[nodes.box]\nkey = \"rsa:abc\"\nrelay = [\"ws://r\"]\ncredential = { file = \"c\" }\n",
+        &format!(
+            "[nodes.box]\nkey = \"{KEY}\"\nrelay = [\"https://r\"]\ncredential = {{ file = \"c\" }}\n"
+        ),
+    ] {
+        assert!(matches!(open(text), Err(BookError::Entry { .. })), "{text}");
+    }
+}
+
+#[test]
+fn a_paired_node_is_written_and_read_back() {
+    let (_dir, path) = book_with("# mine\n");
+    let mut file = BookFile::open(&path).unwrap();
+    let entry = BookEntry {
+        address: NodeAddress::Secure(crate::SecureTarget {
+            key: KEY.parse().unwrap(),
+            relays: vec!["wss://relay.example/vessel".parse().unwrap()],
+            direct: Vec::new(),
+        }),
+        token: None,
+        credential: Some(CredentialSource::File(PathBuf::from("/cfg/c.secret"))),
+        id: Some(ID.parse().unwrap()),
+    };
+    file.add(&name("home"), &entry).unwrap();
+    let reread = BookFile::open(&path).unwrap();
+    assert_eq!(reread.book().get("home").unwrap().1, &entry);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("relay = [\"wss://relay.example/vessel\"]"),
+        "{text}"
+    );
+    assert!(!text.contains("direct"), "{text}");
 }
