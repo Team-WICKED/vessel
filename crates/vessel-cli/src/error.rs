@@ -3,9 +3,13 @@
 use std::path::PathBuf;
 
 use vessel_client::book::BookError;
-use vessel_client::{CallError, ConnectError, InvalidAddress, NodeUrl, PinnedError, StreamError};
+use vessel_client::{CallError, ConnectError, InvalidAddress, NodeUrl, StreamError};
 use vessel_node::NodeError;
-use vessel_remote::{BuildError, InstallError, PlatformError, ReleaseError, SshError};
+use vessel_proto::NodeId;
+use vessel_remote::{
+    BuildError, InstallError, PlatformError, ProvisionError, ReleaseError, SshConnectError,
+    SshError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
@@ -51,8 +55,31 @@ pub(crate) enum CliError {
         source: InvalidAddress,
     },
     /// A different node answered than the one the book pinned.
+    #[error(
+        "a different node answered (id {found}, expected {expected}); if the machine was \
+         reinstalled on purpose, remove the node's `id` from your book ({book})"
+    )]
+    Changed {
+        expected: NodeId,
+        found: NodeId,
+        book: String,
+    },
+    /// Connecting over SSH failed.
     #[error(transparent)]
-    Changed(PinnedError<ConnectError>),
+    Remote(#[from] SshConnectError),
+    /// Installing vesseld failed.
+    #[error(transparent)]
+    Provision(#[from] ProvisionError),
+    /// `vessel node update` found live sessions and no `--when-idle` or
+    /// `--now` (they are listed on stdout).
+    #[error("not updated: {0} live session(s); see the list above")]
+    LiveSessions(usize),
+    /// The node speaks protocol 2: it cannot be stopped remotely.
+    #[error(
+        "the running node (vesseld {0}) is too old to be stopped remotely; stop it on its \
+         machine, and the next connection starts the new version"
+    )]
+    TooOldToStop(String),
     /// A command that needs an SSH node got another kind.
     #[error("{node} is not an SSH node; {what} works only over SSH")]
     NotSsh { node: String, what: &'static str },
@@ -69,10 +96,7 @@ pub(crate) enum CliError {
     Release(#[from] ReleaseError),
     #[error(transparent)]
     Build(#[from] BuildError),
-    /// SSH nodes are reached through `vessel-remote`'s connector, which
-    /// comes with the node side's framed transport (milestone 2, C5).
-    #[error("{0} is an SSH node; connecting to SSH nodes is not available in this build yet")]
-    SshNotYet(String),
+
     /// The local token file holds something a client cannot send.
     #[error("the token in {} cannot be sent as a bearer token", .0.display())]
     UnusableToken(PathBuf),

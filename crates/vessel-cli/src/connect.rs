@@ -17,9 +17,11 @@ use vessel_client::{
 use vessel_node::DataDir;
 use vessel_proto::ClientInfo;
 
+use vessel_remote::{SshConnectError, SshConnector};
+
 use crate::args::Target;
 use crate::error::CliError;
-use crate::nodes;
+use crate::{nodes, remote};
 
 /// The local data directory: `--data-dir`, or `~/.vessel`.
 pub(crate) fn data_dir(target: &Target) -> Result<DataDir, CliError> {
@@ -50,6 +52,7 @@ pub(crate) struct Connected {
 #[derive(Debug)]
 pub(crate) enum NodeConnector {
     Ws(Pinned<WsConnector>),
+    Ssh(Pinned<SshConnector>),
 }
 
 /// Why [`NodeConnector`] could not connect.
@@ -57,6 +60,8 @@ pub(crate) enum NodeConnector {
 pub(crate) enum NodeConnectError {
     #[error(transparent)]
     Ws(PinnedError<ConnectError>),
+    #[error(transparent)]
+    Ssh(PinnedError<SshConnectError>),
 }
 
 impl Connector for NodeConnector {
@@ -68,21 +73,39 @@ impl Connector for NodeConnector {
                 .connect(client)
                 .await
                 .map_err(NodeConnectError::Ws),
+            Self::Ssh(connector) => connector
+                .connect(client)
+                .await
+                .map_err(NodeConnectError::Ssh),
         }
     }
 
     fn is_transient(&self, error: &NodeConnectError) -> bool {
         match (self, error) {
             (Self::Ws(connector), NodeConnectError::Ws(error)) => connector.is_transient(error),
+            (Self::Ssh(connector), NodeConnectError::Ssh(error)) => connector.is_transient(error),
+            // A connector only returns its own errors.
+            (Self::Ws(_), NodeConnectError::Ssh(_)) | (Self::Ssh(_), NodeConnectError::Ws(_)) => {
+                false
+            }
         }
     }
 }
 
-impl From<NodeConnectError> for CliError {
-    fn from(error: NodeConnectError) -> Self {
-        match error {
-            NodeConnectError::Ws(PinnedError::Connect(error)) => Self::Connect(error),
-            NodeConnectError::Ws(changed) => Self::Changed(changed),
+/// `error` as the CLI reports it; `book` is named when a pinned id did
+/// not match.
+fn report(error: NodeConnectError, book: &std::path::Path) -> CliError {
+    let changed = |expected, found| CliError::Changed {
+        expected,
+        found,
+        book: book.display().to_string(),
+    };
+    match error {
+        NodeConnectError::Ws(PinnedError::Connect(error)) => CliError::Connect(error),
+        NodeConnectError::Ssh(PinnedError::Connect(error)) => CliError::Remote(error),
+        NodeConnectError::Ws(PinnedError::Changed { expected, found })
+        | NodeConnectError::Ssh(PinnedError::Changed { expected, found }) => {
+            changed(expected, found)
         }
     }
 }
@@ -108,9 +131,15 @@ pub(crate) async fn connect_to(
                 resolved.pinned,
             ))
         }
-        NodeAddress::Ssh(_) => return Err(CliError::SshNotYet(nodes::label(resolved))),
+        NodeAddress::Ssh(node) => NodeConnector::Ssh(Pinned::new(
+            remote::connector(target, node).await?,
+            resolved.pinned,
+        )),
     };
-    let client = connector.connect(client_info()).await?;
+    let client = connector
+        .connect(client_info())
+        .await
+        .map_err(|error| report(error, book))?;
     if let Some(name) = &resolved.name
         && resolved.pinned.is_none()
     {
