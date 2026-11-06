@@ -13,9 +13,11 @@ mod agent;
 mod device;
 mod error;
 mod event;
+mod fleet;
 mod harness;
 mod id;
 mod key;
+mod name;
 mod node;
 mod pairing;
 mod profile;
@@ -37,17 +39,25 @@ pub use device::{
 };
 pub use error::{ErrorCode, WireError};
 pub use event::{EventRecord, SessionEvent};
+pub use fleet::{
+    BlobHash, BundleFile, BundlePath, BundlePathRule, ConfigValue, Generation, HttpUrl,
+    InvalidBundlePath, InvalidHttpUrl, Manifest, McpDefinitions, McpServers, McpTransport,
+    ResolvedMcpServers, ResolvedValue,
+};
 pub use harness::{Harness, HarnessKind, StructuredSupport, UnknownHarness};
 pub use id::{
     DeviceId, EventSeq, HarnessSessionId, ModelId, NodeId, PermissionId, PermissionOptionId,
     RequestId, SessionId, SubscriptionId, ToolCallId,
 };
 pub use key::{KeyTextError, NodePublicKey, RoutingId};
+pub use name::{
+    EnvName, HeaderName, InvalidName, McpServerName, NameKind, ProfileName, SecretName,
+};
 pub use node::{
     MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,
 };
 pub use pairing::{InvalidRoute, LinkError, OfferVersion, PairingLink, PairingOffer, RouteUrl};
-pub use profile::{AgentAuth, AgentSecret, Creator, InvalidProfileName, ProfileInfo, ProfileName};
+pub use profile::{AgentAuth, AgentSecret, Creator, ProfileInfo};
 pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use relay::{

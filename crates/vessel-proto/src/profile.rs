@@ -7,73 +7,12 @@
 //! and `created_by`, and the `profile.*` methods follow in the next contract
 //! step (docs/plans/backend-m4.md, "Contract as built").
 
-use std::fmt;
-use std::str::FromStr;
-
 use serde::{Deserialize, Serialize};
 
 use crate::harness::HarnessKind;
 use crate::id::{DeviceId, NodeId, SessionId};
-use crate::key::{secret, serde_via_text};
-
-/// A profile's name: what `--profile` and `profiles.toml` use.
-///
-/// Letters, digits, `.`, `_` and `-`, 1 to 64 characters, so it is safe in
-/// file names, command lines and TOML keys without quoting.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ProfileName(String);
-
-/// A profile name with characters outside the allowed set, or of the wrong
-/// length.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidProfileName(pub String);
-
-impl fmt::Display for InvalidProfileName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "`{}` is not a profile name (1-64 letters, digits, `.`, `_`, `-`)",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for InvalidProfileName {}
-
-impl ProfileName {
-    /// Longest allowed name.
-    pub const MAX_LEN: usize = 64;
-
-    /// The name.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ProfileName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl FromStr for ProfileName {
-    type Err = InvalidProfileName;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let valid = !s.is_empty()
-            && s.len() <= Self::MAX_LEN
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-        if valid {
-            Ok(Self(s.to_owned()))
-        } else {
-            Err(InvalidProfileName(s.to_owned()))
-        }
-    }
-}
-
-serde_via_text!(ProfileName);
+use crate::key::secret;
+use crate::name::{EnvName, ProfileName};
 
 /// A profile as a node reports it. Names of the variables it sets are
 /// listed; their values never leave the node (they may be secrets or paths
@@ -89,7 +28,7 @@ pub struct ProfileInfo {
     pub harness: HarnessKind,
     /// Names of the environment variables it sets.
     #[serde(default)]
-    pub sets: Vec<String>,
+    pub sets: Vec<EnvName>,
 }
 
 /// Who created a session (ADR 0013): the owner, a paired device, or an agent
@@ -141,16 +80,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_names_are_plain_words() {
-        for good in ["work", "claude-alt", "a.b_c", &"x".repeat(64)] {
-            assert_eq!(good.parse::<ProfileName>().unwrap().as_str(), good);
-        }
-        for bad in ["", "two words", "a/b", "é", &"x".repeat(65)] {
-            assert!(bad.parse::<ProfileName>().is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
     fn creators_default_to_the_owner_and_are_tagged() {
         assert_eq!(Creator::default(), Creator::Owner);
         let agent = Creator::Agent {
@@ -180,7 +109,7 @@ mod tests {
             name: "alt".parse().unwrap(),
             label: Some("help@example".to_owned()),
             harness: HarnessKind::ClaudeCode,
-            sets: vec!["CLAUDE_CONFIG_DIR".to_owned()],
+            sets: vec!["CLAUDE_CONFIG_DIR".parse().unwrap()],
         };
         let json = serde_json::to_string(&info).unwrap();
         assert_eq!(serde_json::from_str::<ProfileInfo>(&json).unwrap(), info);
