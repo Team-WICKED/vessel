@@ -617,6 +617,16 @@ reproduced problems, fixed in this order:
     member's binding to their own device: a denial of service and a change
     of provenance, with no scope gained; the record keeps the old device
     from claiming anything else.
+- **Names stay unique (coordinator's decision, 2026-11-06).** Names pick
+  nodes (`--to`, `vessel mcp`'s `node`), so a duplicate is ambiguous and
+  the home keeps refusing it (fail closed). The operator's path is
+  explicit: the refusal names the clashing name and the fix (`vessel node
+  start --name`, `VESSEL_NAME`, or `--name` in the service's unit, then a
+  restart; the member asks again when it reconnects); the member keeps it
+  in its fleet state, shown by `vessel fleet status` and by `vessel init`
+  run again; `vessel fleet join` and `vessel init --join` warn at once
+  when the machine is named like the home; the README says to name nodes
+  cloned from one image.
 - **Documented, not changed** (ADR 0013, "Known limits"): an agent's
   limits are per node, so 8 live sessions on each node it reaches (8 × N);
   and a relaying member's own scopes on the home do not cap the calls it

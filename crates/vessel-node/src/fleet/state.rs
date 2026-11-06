@@ -52,6 +52,11 @@ pub struct FleetState {
     /// cleared by the next success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// On a member: why its last grant to the home failed (a refusal says
+    /// how to fix it), until one succeeds. Kept apart from `error`, which
+    /// the next successful pull clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<String>,
 }
 
 /// A file left as it is.

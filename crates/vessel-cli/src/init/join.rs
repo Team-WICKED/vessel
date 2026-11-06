@@ -18,8 +18,14 @@ pub(super) async fn run(init: &mut Init) -> Result<(), CliError> {
     };
     match status.role {
         Role::Member { home, .. } => {
-            init.report(Outcome::Already, "fleet", &format!("a member of {home}"))
-                .await?;
+            let detail = match &status.state.grant {
+                None => format!("a member of {home}"),
+                Some(refused) => format!(
+                    "a member of {home}, but its home has not taken this node's grant: \
+                     {refused}"
+                ),
+            };
+            init.report(Outcome::Already, "fleet", &detail).await?;
             return Ok(());
         }
         Role::Home { .. } => {
@@ -52,6 +58,9 @@ pub(super) async fn run(init: &mut Init) -> Result<(), CliError> {
         joined.home.name, joined.home.id, joined.route
     );
     init.report(Outcome::Done, "fleet", &detail).await?;
+    if let Some(clash) = crate::fleet::named_like_home(&joined.home.name) {
+        init.todo.push(clash.trim_end().to_owned());
+    }
     if !init.options.service {
         init.todo.push(
             "the node follows the fleet once it runs: `vessel node start`, or `vessel init \

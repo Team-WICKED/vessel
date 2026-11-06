@@ -210,6 +210,12 @@ vessel fleet members
   An agent's `vessel` tools take `node` (a name from `list_nodes`) to
   start and drive its own sessions on another member; a member's calls
   reach the other members only if it was invited with `--relay`.
+- Names pick nodes (`--to`, the agents' `node`), so the home refuses a
+  member named like itself or another member. A node takes its machine's
+  name unless told otherwise, and machines cloned from one image share
+  one: name each node when you join it (`vessel node start --name <name>`
+  or `VESSEL_NAME`). A refused member says why in `vessel fleet status`
+  and asks again after a restart under its new name.
 - The home binds each member's node id to its key for good. A member
   reinstalled with a new key is refused until you run `vessel fleet forget
   <node id>` on the home (`--data-dir` of the home's node); revoke its old
