@@ -29,6 +29,10 @@
 //! - `ipc`: the local socket (or named pipe) `vesseld attach` reaches.
 //! - `attach`: that proxy, which also starts the node when none runs.
 //! - `lifecycle`: `node.stop` and draining (protocol 3).
+//! - `fleet`: fleet sync (ADR 0012): the home publishing `fleet.toml`'s
+//!   sources and serving `fleet.*`, members pulling and applying into every
+//!   profile's home; `init`, `join`, `leave`, `status`, `restore` for the
+//!   CLI.
 //! - `cleanup`: `vesseld cleanup`, removing installed binaries nothing
 //!   needs (ADR 0008).
 //! - `node`, `shutdown`: start (taking the data directory's node lock), and
@@ -58,6 +62,7 @@ pub mod cleanup;
 mod config;
 mod devices;
 mod error;
+pub mod fleet;
 mod guard;
 mod identity;
 mod ipc;
@@ -80,6 +85,7 @@ pub use config::{Config, VesselMcp};
 /// them: what the remote installer checks (ADR 0008).
 pub const VERSION_LINE: &str = concat!(env!("CARGO_PKG_VERSION"), " ", env!("VESSEL_TARGET"));
 pub use error::NodeError;
+pub use fleet::{FleetConfig, FleetTargets};
 pub use node::Node;
 pub use profiles::ProfilesFileError;
 pub use shutdown::signal;

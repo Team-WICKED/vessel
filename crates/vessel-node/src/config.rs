@@ -12,6 +12,8 @@ use vessel_rpc::ServerConfig;
 use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY};
 use vessel_store::{DataDir, StoreConfig};
 
+use crate::fleet::FleetConfig;
+
 /// Everything a node needs to start. Build with [`Config::new`] and
 /// override fields as needed.
 #[derive(Debug, Clone)]
@@ -61,6 +63,9 @@ pub struct Config {
     /// get neither. `vessel node start` sets its own executable; `vesseld`
     /// a `vessel` beside it.
     pub vessel_mcp: Option<VesselMcp>,
+    /// Fleet sync (ADR 0012): where bundles are written and how often the
+    /// node looks; the defaults suit a real node.
+    pub fleet: FleetConfig,
 }
 
 /// A command that runs `vessel mcp` ([`Config::vessel_mcp`]).
@@ -102,6 +107,7 @@ impl Config {
             public: Vec::new(),
             keepalive: Keepalive::DEFAULT,
             vessel_mcp: None,
+            fleet: FleetConfig::default(),
         }
     }
 }
