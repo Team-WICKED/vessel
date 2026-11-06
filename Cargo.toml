@@ -127,6 +127,9 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal
 # built until the relay picks one with an explicit crypto provider (ADR 0005).
 tokio-tungstenite = "0.29"
 tokio-util = "0.7"
+# The node book (vessel-client): typed reading through serde and edits that
+# keep the user's comments and layout (`vessel nodes add`, pinned ids).
+toml_edit = { version = "0.25", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
