@@ -56,3 +56,38 @@ fn blobs_are_stored_once_read_in_chunks_and_checked_on_arrival() {
     assert_eq!(store.retain(&BTreeSet::from([kept])).unwrap(), 1);
     assert!(store.contains(&kept) && !store.contains(&hash));
 }
+
+#[test]
+fn clean_up_leaves_a_blob_being_written_alone() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = BlobStore::open(temp.path().join("blobs")).unwrap();
+    let kept = store.insert(b"kept").unwrap();
+    let content = b"arriving in chunks";
+    let other = BlobStore::open(temp.path().join("other")).unwrap();
+    let hash = other.insert(content).unwrap();
+
+    let mut writer = store.writer(hash).unwrap();
+    writer.write_all(&content[..8]).unwrap();
+    assert_eq!(store.retain(&BTreeSet::from([kept])).unwrap(), 0);
+    writer.write_all(&content[8..]).unwrap();
+    assert_eq!(writer.finish().unwrap().0, hash, "its file is still there");
+    assert!(store.contains(&hash) && store.contains(&kept));
+}
+
+#[test]
+fn a_read_past_the_end_says_so() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = BlobStore::open(temp.path().join("blobs")).unwrap();
+    let hash = store.insert(b"four").unwrap();
+    let error = store.read_chunk(&hash, 5, 10).unwrap_err();
+    assert_eq!(
+        error
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<vessel_fleet::PastEnd>(),
+        Some(&vessel_fleet::PastEnd {
+            offset: 5,
+            total: 4
+        })
+    );
+}

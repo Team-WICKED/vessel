@@ -391,29 +391,44 @@ they started.
     `vessel-testkit`'s misbehaving relay (drop, replay, reorder, corrupt
     both ways end the channel; delay does not).
 - Milestone 4, Track F (in progress, `backend/m4-fleet`):
-  - `vessel-fleet` (F1, 2026-11-06): `bundle` turns the home's sources
-    (an instructions file, a skills directory, `skip` globs, MCP
-    definitions) into a `Manifest` and a content-addressed `BlobStore`
-    (`<root>/<2 hex>/<sha256>`, owner-only, written under temporary names,
-    chunked reads for `fleet.blob`, hash-checked writers for members).
-    Bundle paths are `instructions.md` and `skills/<name>/...`, `<name>`
-    being the `name` in the skill's `SKILL.md` (that one field, read
-    strictly). The generation rises only when files or MCP servers change.
-    Symlinks in the sources are followed only inside the skills directory;
-    dot directories there (Codex's `.system`) are never bundled, and no
-    skill name starts with `.`.
+  - `vessel-fleet` (F1, 2026-11-06; hardened after an independent review
+    the same day): `bundle` turns the home's sources (an instructions
+    file, a skills directory, `skip` globs, MCP definitions) into a
+    `Manifest` and a content-addressed `BlobStore` (`<root>/<2
+    hex>/<sha256>`, owner-only, written under temporary names, chunked
+    reads for `fleet.blob`, hash-checked writers for members; a damaged
+    blob is removed so it is fetched again). Bundle paths are
+    `instructions.md` and `skills/<name>/...`, `<name>` being the `name`
+    in the skill's `SKILL.md` (that one field, read as strictly as YAML
+    would, a checked `SkillName`). The generation rises only when files
+    (hash and executable bit) or MCP servers change. Symlinks in the
+    sources are followed only inside the skills directory; dot entries
+    are never bundled (silently at the top of the skills directory,
+    reported inside a skill); names that are one file on macOS or Windows
+    (case, NFC/NFD) and names ending in `.vessel-incoming` are reported.
     `plan` decides per place in each `Target` (a harness home with its
     instruction file and skills directory names, from
-    `vessel_harness::layout`; Gemini CLI takes no skills): write, adopt identical
+    `vessel_harness::layout`; Gemini CLI takes no skills), by canonical
+    root, skipping a home that does not exist: write, adopt identical
     content, keep a local edit (or a file Vessel never wrote) with the
-    incoming version beside it (`.vessel-incoming`) as a conflict, remove
-    what left the bundle if unchanged, skip places in or linked to the
-    sources and symlinks below the root (never followed). `apply` checks
-    each place again, creates directories without crossing symlinks,
-    writes atomically and records hashes in `Managed` (`managed.json`).
-    `resolve` fills secret references and names every missing secret.
-    Tested over temporary trees, including the operator's linked layout
-    (Unix).
+    incoming version beside it as a conflict, leave a deleted file
+    deleted (a conflict of its own kind, the record kept) until
+    `Managed::restore` (`vessel fleet restore <path>`), remove what left
+    the bundle if unchanged and not adopted and not the same file as a
+    placed one, release (forget) it otherwise, ignore bundle paths it
+    does not know, skip places in or linked to the sources, symlinks below
+    the root, and places it cannot read (per place, so other targets carry
+    on). A missing source is protected through its canonical directory.
+    The `Plan` is opaque and carries what it protects; `apply` reaches
+    every place through directories held open from the root (`openat`
+    with `O_NOFOLLOW` on Unix), decides again right before acting, writes
+    owner-only (0600, 0700 executable and directories) and atomically,
+    and records by canonical root and plain relative path in `Managed`
+    (`managed.json` version 2, checked when loaded). `resolve` fills
+    secret references and names every missing secret. Tested over
+    temporary trees: the operator's linked layout, aliased roots, plans
+    made stale between plan and apply (a link swap, a FIFO), name
+    collisions (`tests/fleet/`).
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

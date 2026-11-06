@@ -19,6 +19,10 @@ use vessel_proto::BlobHash;
 
 use crate::files::{self, Mode};
 
+/// How old a temporary file in the store must be before [`BlobStore::retain`]
+/// takes it for a crash's leftover rather than a blob being written.
+const STALE_TEMPORARY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 /// Content-addressed blobs in a directory.
 #[derive(Debug, Clone)]
 pub struct BlobStore {
@@ -36,6 +40,21 @@ pub struct InvalidBlob {
     /// How much arrived.
     pub size: u64,
 }
+
+/// A read from past a blob's end (`fleet.blob` with too large an offset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("offset {offset} is past the blob's {total} bytes")]
+pub struct PastEnd {
+    /// The offset asked for.
+    pub offset: u64,
+    /// The blob's size.
+    pub total: u64,
+}
+
+/// A writer used after its blob was committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the blob was already committed")]
+struct Committed;
 
 impl BlobStore {
     /// The store in `root`, created (owner-only) if missing.
@@ -118,7 +137,7 @@ impl BlobStore {
     ///
     /// # Errors
     /// The blob is missing (`NotFound`), `offset` is past its end
-    /// (`InvalidInput`), or it cannot be read.
+    /// (`InvalidInput`, carrying [`PastEnd`]), or it cannot be read.
     pub fn read_chunk(
         &self,
         hash: &BlobHash,
@@ -130,7 +149,7 @@ impl BlobStore {
         if offset > total {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("offset {offset} is past the blob's {total} bytes"),
+                PastEnd { offset, total },
             ));
         }
         let _start = file.seek(SeekFrom::Start(offset))?;
@@ -143,6 +162,17 @@ impl BlobStore {
         Ok((data, total))
     }
 
+    /// Remove blob `hash` (found damaged), so it is fetched again.
+    ///
+    /// # Errors
+    /// It cannot be removed; a missing blob is no error.
+    pub fn remove(&self, hash: &BlobHash) -> io::Result<()> {
+        match fs::remove_file(self.path(hash)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            Ok(()) | Err(_) => Ok(()),
+        }
+    }
+
     /// Open blob `hash` for reading.
     ///
     /// # Errors
@@ -151,8 +181,9 @@ impl BlobStore {
         File::open(self.path(hash))
     }
 
-    /// Remove every blob not in `keep` (and stray temporary files); how
-    /// many were removed.
+    /// Remove every blob not in `keep`, and temporary files over an hour
+    /// old (a crash's leftovers; younger ones may belong to a writer still
+    /// filling them); how many blobs were removed.
     ///
     /// # Errors
     /// The store cannot be listed or a blob cannot be removed.
@@ -162,8 +193,17 @@ impl BlobStore {
             let entry = entry?;
             let kind = entry.file_type()?;
             if kind.is_file() {
-                // Only temporary files live directly in the root.
-                fs::remove_file(entry.path())?;
+                // Only temporary files live directly in the root: a writer
+                // still filling one is left alone, one left over from a
+                // crash goes once it is old.
+                let stale = entry
+                    .metadata()?
+                    .modified()?
+                    .elapsed()
+                    .is_ok_and(|age| age > STALE_TEMPORARY);
+                if stale {
+                    fs::remove_file(entry.path())?;
+                }
                 continue;
             }
             if !kind.is_dir() {
@@ -210,7 +250,7 @@ impl io::Write for BlobWriter {
         let file = self
             .file
             .as_mut()
-            .ok_or_else(|| io::Error::other("the blob was already committed"))?;
+            .ok_or_else(|| io::Error::other(Committed))?;
         let written = file.write(data)?;
         let chunk = data.get(..written).unwrap_or_default();
         self.hasher.update(chunk);
@@ -247,7 +287,7 @@ impl BlobWriter {
         let file = self
             .file
             .take()
-            .ok_or_else(|| io::Error::other("the blob was already committed"))?;
+            .ok_or_else(|| io::Error::other(Committed))?;
         file.sync_all()?;
         drop(file);
         let found = BlobHash::from_bytes(std::mem::take(&mut self.hasher).finalize().into());

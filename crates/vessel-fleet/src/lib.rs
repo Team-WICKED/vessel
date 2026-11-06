@@ -37,39 +37,61 @@
 //!   what Vessel wrote is Vessel's to update or remove; any other content
 //!   is someone's edit, kept, with the incoming version written beside it
 //!   (`<name>.vessel-incoming`) and listed as a conflict. Paseo instead
-//!   overwrites edited files on update.
+//!   overwrites edited files on update. A file Vessel wrote that was
+//!   deleted on the node stays deleted, its record kept, and is listed as a
+//!   conflict of its own kind ([`ConflictKind::Deleted`]) until a person
+//!   restores it ([`Managed::restore`], `vessel fleet restore <path>`):
+//!   deleting is an edit too. The other way to settle it, dropping the
+//!   record when the user removes it by hand, was not taken: it asks people
+//!   to edit `managed.json`, which nothing else does.
+//! - Bundle paths other than `instructions.md` and `skills/...` are reserved
+//!   for later versions (PROTOCOL.md, 5): a member ignores them, so a newer
+//!   home does not stop an older member.
 //! - Symlinks below a target's root are never followed: a link into a
 //!   source means the target already has it (skipped), any other link is
 //!   someone's arrangement (skipped, reported).
+//! - Acting where it checked: each target root is made canonical once,
+//!   records are kept by canonical root ([`Managed`]), and every place is
+//!   reached through directories held open from that root without
+//!   following a symlink (`dir`, `openat` on Unix). Each step looks again
+//!   right before it acts; a removal deletes only a regular file that
+//!   still has the recorded content, is not adopted, and is not the same
+//!   file as a placed one. A [`Plan`] is made only by [`plan()`] and
+//!   carries the protected sources, so [`apply()`] cannot be handed steps
+//!   or sources of anyone's choosing. (The independent review of F1 found
+//!   each of these failing; `tests/fleet/safety.rs` keeps them.)
 //! - Alternatives: symlinks to Vessel's copy (cannot tell an edit from an
 //!   update, and an edit through the link changes every profile); `git`
 //!   as the transport (a remote on every machine, and still no answer for
 //!   MCP servers); `globset` and a YAML parser (the skip globs only need
 //!   `*` and `?` within one name, and only one frontmatter field is read).
-//! - Edges: `-> proto` (the manifest and MCP types). The per-harness layout
-//!   (instruction file and skill directory names) comes from
-//!   `vessel-harness` once it describes it; until then callers build a
-//!   [`Target`] themselves.
+//! - Edges: `-> proto` (the manifest and MCP types), `-> harness` (each
+//!   harness's instruction file and skills directory names,
+//!   [`Target::for_harness`]).
 
 mod apply;
 mod blobs;
 mod bundle;
+mod dir;
 mod files;
 mod managed;
+mod place;
 mod plan;
+mod rel;
 mod resolve;
 mod skill;
 mod target;
 
-pub use apply::{Applied, Conflict, apply};
-pub use blobs::{BlobStore, BlobWriter, InvalidBlob};
+pub use apply::{Applied, ApplyError, Conflict, ConflictKind, apply};
+pub use blobs::{BlobStore, BlobWriter, InvalidBlob, PastEnd};
 pub use bundle::{
     BundleError, Bundled, InvalidSkipGlob, MAX_FILE, SkipGlob, SourceProblem, Sources, bundle,
 };
-pub use managed::{Managed, ManagedError};
-pub use plan::{Plan, Skip, SkipReason, Step, plan};
+pub use managed::{Content, Managed, ManagedError, Record};
+pub use place::MissingSource;
+pub use plan::{Place, Plan, PlanError, Skip, SkipReason, Step, plan};
 pub use resolve::resolve;
-pub use skill::{SkillNameError, skill_name};
+pub use skill::{SkillName, SkillNameError, skill_name};
 pub use target::Target;
 
 /// The instructions file's place in a bundle.

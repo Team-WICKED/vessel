@@ -21,6 +21,16 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Names that are one file on macOS and Windows (case, NFC/NFD) are
+# detected as collisions instead of overwriting each other.
+unicode-normalization.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Directory-relative opens (`openat` with `O_NOFOLLOW | O_DIRECTORY`,
+# `mkdirat`, `renameat`, `unlinkat`), so a place is acted on in the very
+# directory that was checked (`dir.rs`); safe wrappers, already in the
+# workspace (vessel-testkit).
+rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 tempfile.workspace = true
