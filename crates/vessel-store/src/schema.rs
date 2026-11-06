@@ -63,9 +63,21 @@ CREATE TABLE devices (
 ) STRICT;
 ";
 
+/// Version 3 (milestone 4, protocol 5): which profile a session runs with
+/// now and who created it (ADRs 0011, 0013).
+///
+/// - `profile` is the current profile's name, `NULL` for the harness's
+///   default; it starts as the spec's and follows `ProfileChanged` records.
+/// - `created_by` is a `Creator` as JSON; `NULL` (every session stored
+///   before this version) reads as the owner, the only creator there was.
+const V3: &str = "
+ALTER TABLE sessions ADD COLUMN profile TEXT;
+ALTER TABLE sessions ADD COLUMN created_by TEXT;
+";
+
 /// Every migration, oldest first. Index `n` takes the schema from version
 /// `n` to `n + 1`.
-const MIGRATIONS: &[&str] = &[V1, V2];
+const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// Bring the database to the newest schema.
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {

@@ -2,9 +2,10 @@
 
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, EventPage, EventSeq, GetNode, GetSession,
-    Harness, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions,
-    NodeInfo, ProtocolVersion, ReadEvents, RevokeDevice, SendInput, SessionId, SessionInfo,
-    SessionInput, SessionSpec, StopNode, StopWhen, Subscribe,
+    Harness, HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
+    ListProfiles, ListSessions, NodeInfo, ProfileInfo, ProtocolVersion, ReadEvents, ReloadProfiles,
+    RevokeDevice, SendInput, SessionId, SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen,
+    Subscribe,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 
@@ -240,6 +241,30 @@ impl NodeClient {
             .call(RevokeDevice { device })
             .await
             .map(drop)
+    }
+
+    /// `profile.list`: the node's harness profiles (ADR 0011), `harness`'s
+    /// only if given. Names, labels and variable names; never a value.
+    ///
+    /// # Errors
+    /// `Unsupported` on a node before protocol 5; otherwise see
+    /// [`CallError`].
+    pub async fn profiles(
+        &self,
+        harness: Option<HarnessKind>,
+    ) -> Result<Vec<ProfileInfo>, CallError> {
+        self.connection.call(ListProfiles { harness }).await
+    }
+
+    /// `profile.reload`: the node reads `profiles.toml` again and answers
+    /// with the profiles now in effect (needs the `admin` scope).
+    ///
+    /// # Errors
+    /// `Conflict` when the file does not parse (the node keeps the profiles
+    /// it had; the message says where); `Unsupported` on a node before
+    /// protocol 5; otherwise see [`CallError`].
+    pub async fn reload_profiles(&self) -> Result<Vec<ProfileInfo>, CallError> {
+        self.connection.call(ReloadProfiles).await
     }
 
     /// Every record of a session from `from` on, gap-free, ending when the

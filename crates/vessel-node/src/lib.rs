@@ -64,6 +64,7 @@ mod lifecycle;
 mod node;
 mod persist;
 mod principal;
+mod profiles;
 mod secure;
 mod server;
 mod service;
@@ -79,6 +80,7 @@ pub use config::Config;
 pub const VERSION_LINE: &str = concat!(env!("CARGO_PKG_VERSION"), " ", env!("VESSEL_TARGET"));
 pub use error::NodeError;
 pub use node::Node;
+pub use profiles::ProfilesFileError;
 pub use shutdown::signal;
 // The store types named by `Config`'s public fields, so callers can build
 // a `Config` without depending on `vessel-store` themselves.

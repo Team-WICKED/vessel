@@ -19,6 +19,8 @@ use crate::devices::Devices;
 use crate::error::ServiceError;
 use crate::lifecycle::Lifecycle;
 use crate::principal::Principal;
+use crate::profiles::NodeProfiles;
+use crate::profiles::launch::Launcher;
 use crate::sessions::Sessions;
 use crate::subscribe;
 
@@ -32,22 +34,42 @@ pub(crate) struct NodeService {
     /// Subscription forwarders, so shutdown can let them queue their last
     /// frames.
     forwarders: TaskTracker,
+    /// `profiles.toml` (ADR 0011).
+    profiles: Arc<NodeProfiles>,
+    /// What `session.create` adds to the spec.
+    launcher: Launcher,
+}
+
+/// The parts a [`NodeService`] serves.
+pub(crate) struct Parts {
+    pub(crate) lifecycle: Lifecycle,
+    pub(crate) lookup: Lookup,
+    pub(crate) sessions: Arc<Sessions>,
+    pub(crate) devices: Arc<Devices>,
+    pub(crate) forwarders: TaskTracker,
+    pub(crate) profiles: Arc<NodeProfiles>,
+    pub(crate) launcher: Launcher,
 }
 
 impl NodeService {
-    pub(crate) const fn new(
-        lifecycle: Lifecycle,
-        lookup: Lookup,
-        sessions: Arc<Sessions>,
-        devices: Arc<Devices>,
-        forwarders: TaskTracker,
-    ) -> Self {
+    pub(crate) fn new(parts: Parts) -> Self {
+        let Parts {
+            lifecycle,
+            lookup,
+            sessions,
+            devices,
+            forwarders,
+            profiles,
+            launcher,
+        } = parts;
         Self {
             lifecycle,
             lookup,
             sessions,
             devices,
             forwarders,
+            profiles,
+            launcher,
         }
     }
 }
@@ -132,16 +154,22 @@ impl NodeService {
             .map_err(|error| wire(&error))
     }
 
+    /// `session.create`: the spec's profile resolved, the caller recorded
+    /// as its creator (ADRs 0011, 0013).
     pub(crate) async fn create_session(
         &self,
-        _: &Connection,
+        connection: &Connection,
         request: CreateSession,
     ) -> Result<SessionInfo, WireError> {
         if self.lifecycle.is_draining() {
             return Err(wire(&ServiceError::Draining));
         }
+        let options = self
+            .launcher
+            .options(&self.profiles, &request.spec, &connection.principal)
+            .map_err(|error| wire(&error))?;
         self.sessions
-            .create(request.spec)
+            .create(request.spec, options)
             .await
             .map_err(|error| wire(&error))
     }
@@ -262,32 +290,47 @@ impl NodeService {
     }
 }
 
-/// Protocol 5 methods whose implementations come with milestone 4's tracks
-/// (profiles and moves: Track H; the fleet: Track F;
-/// docs/plans/backend-m4.md). Until then each answers `Unsupported` naming
-/// the method, so a protocol 5 client gets a clear refusal rather than a
-/// guess. The scope check in `guard` already applies to them.
-#[expect(
-    clippy::unused_async,
-    reason = "every call has the same async shape, so the guard's rows are uniform"
-)]
+/// Profiles (ADR 0011, Track H).
 impl NodeService {
+    /// `profile.list`: names, labels, harnesses and variable names; never a
+    /// value.
+    #[expect(
+        clippy::unused_async,
+        reason = "every call has the same async shape, so the guard's rows are uniform"
+    )]
     pub(crate) async fn list_profiles(
         &self,
         _: &Connection,
-        _: ListProfiles,
+        request: ListProfiles,
     ) -> Result<Vec<ProfileInfo>, WireError> {
-        Err(not_yet::<ListProfiles>())
+        Ok(self.profiles.list(request.harness))
     }
 
+    /// `profile.reload`: read `profiles.toml` again; a file that cannot be
+    /// used leaves the profiles in effect and says where it is wrong.
     pub(crate) async fn reload_profiles(
         &self,
         _: &Connection,
         _: ReloadProfiles,
     ) -> Result<Vec<ProfileInfo>, WireError> {
-        Err(not_yet::<ReloadProfiles>())
+        let profiles = Arc::clone(&self.profiles);
+        tokio::task::spawn_blocking(move || profiles.reload())
+            .await
+            .map_err(|error| wire(&ServiceError::Task(error)))?
+            .map_err(|error| wire(&ServiceError::Profiles(error)))
     }
+}
 
+/// Protocol 5 methods whose implementations come with milestone 4's tracks
+/// (moves: Track H2; the fleet: Track F; docs/plans/backend-m4.md). Until
+/// then each answers `Unsupported` naming the method, so a protocol 5
+/// client gets a clear refusal rather than a guess. The scope check in
+/// `guard` already applies to them.
+#[expect(
+    clippy::unused_async,
+    reason = "every call has the same async shape, so the guard's rows are uniform"
+)]
+impl NodeService {
     pub(crate) async fn move_profile(
         &self,
         _: &Connection,
