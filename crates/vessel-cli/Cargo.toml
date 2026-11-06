@@ -13,6 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 vessel-client.workspace = true
+# `vessel init`: harness discovery, install and login commands, other
+# accounts' homes (plan F5).
+vessel-harness.workspace = true
 vessel-mcp.workspace = true
 vessel-node.workspace = true
 vessel-proto.workspace = true

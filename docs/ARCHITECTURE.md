@@ -31,7 +31,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-proto` | Wire contract: ids, sessions, events, agent timeline, errors, typed RPC table; keys, devices, pairing links, relay control (milestone 3); validated names, profiles, creators, agent credentials, fleet manifests and MCP server definitions (milestone 4). No I/O. | - |
 | `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. From protocol 5 it holds both sides to the negotiated version: a call newer than the connection (`Call::since`) is refused by the client before sending and by the server before dispatch, and outgoing frames are adapted to an older client where they are encoded (`ServerFrame::for_protocol`). | proto |
 | `vessel-proc` | Command specs, spawning in a process group, killing the group. | - |
-| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, and MCP servers for terminal sessions. | proto, proc |
+| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, MCP servers for terminal sessions, and what `vessel init` offers (install and login commands, other accounts' homes). | proto, proc |
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize. | proc |
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
@@ -43,7 +43,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
 | `vessel-fleet` | Fleet bundles (milestone 4, ADR 0012): the home's sources into a manifest and a content-addressed blob store; plan and apply into harness homes with recorded hashes (`managed.json`), local edits kept with the incoming version beside them, symlinks never followed, targets linked to the sources left alone; skills named by `SKILL.md`; MCP secret references resolved at launch. | proto, harness |
 | `vessel-mcp` | `vessel mcp` (milestone 4, ADR 0013): the MCP server (stdio, on `rmcp`) a node attaches to every session as `vessel`; each tool is one call through the session's agent principal. | proto, client |
-| `vessel-cli` | `vessel` binary: commands, interactive attach, `vessel mcp`. | proto, client, node, remote, mcp |
+| `vessel-cli` | `vessel` binary: commands, interactive attach, `vessel mcp`, `vessel init` (first-run setup, milestone 4). | proto, client, node, remote, mcp, harness |
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. The fakes report the environment, arguments, MCP servers and loaded session id they got (milestone 4). | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
@@ -498,6 +498,12 @@ they started.
     `session.create`'s.
   - `vessel-client`: `move_profile`; `vessel-cli`: `vessel session
     move-profile <session> <profile> [--force]`.
+  - F5, `vessel init`: `vessel-cli`'s `init` runs idempotent steps (node
+    identity, harnesses, install offers, profiles for other accounts'
+    homes, login checks, `--service`), each reporting done, already done or
+    skipped; `--join` waits for fleet sync. `vessel-harness`'s `setup`
+    holds the harness knowledge it needs; `vessel-store`'s
+    `DataDir::write_profiles` writes the file owner-only and atomically.
   - H4, agent principals: `vessel-node`'s `agents` registry (credential
     hashes in memory, scopes, depth, the agent's connections; limits of 8
     live sessions an agent created and depth 3, checked under one lock),

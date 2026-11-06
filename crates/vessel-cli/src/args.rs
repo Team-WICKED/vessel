@@ -104,6 +104,12 @@ pub(crate) enum Command {
         /// Session id, or a unique prefix of one.
         session: SessionSelector,
     },
+    /// Set this machine up, or check it again: the node's identity, the
+    /// harnesses (offering to install what is missing), profiles for the
+    /// other accounts found, their logins, and with `--service` the node
+    /// as a per-user service. Safe to run again: it fills gaps and changes
+    /// nothing else.
+    Init(InitArgs),
     /// Serve the Vessel tools over MCP on stdio, as a session's agent. A
     /// node starts this for every session (the session's `vessel` MCP
     /// server), with its endpoint and the session's credential in the
@@ -114,6 +120,32 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+}
+
+/// `vessel init`'s options.
+#[derive(Debug, Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is one command-line flag; `init::Options` folds them into a consent"
+)]
+pub(crate) struct InitArgs {
+    /// Also install the node as a per-user service (systemd user unit on
+    /// Linux, launchd agent on macOS) and start it.
+    #[arg(long)]
+    pub(crate) service: bool,
+    /// Join a fleet with a pairing link read from standard input (never
+    /// the command line). Needs fleet sync, which is not built yet.
+    #[arg(long)]
+    pub(crate) join: bool,
+    /// Answer yes to every question, except installs.
+    #[arg(long, short = 'y')]
+    pub(crate) yes: bool,
+    /// With --yes, run the install commands for missing harnesses too.
+    #[arg(long, requires = "yes")]
+    pub(crate) install: bool,
+    /// The home directory to look in for other accounts (tests).
+    #[arg(long, env = "VESSEL_HOME", hide = true)]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]

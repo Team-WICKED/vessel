@@ -61,7 +61,10 @@ Built so far on one node: harness profiles (`profiles.toml`, `vessel run
 --profile`, `vessel profiles`), moving a structured session to another
 profile (`vessel session move-profile`), and agent tools: every session's
 agent gets the `vessel` MCP server (`vessel mcp`) with a credential of its
-own, to start and drive sessions of its own.
+own, to start and drive sessions of its own. `vessel init` sets a machine
+up and can be run again: the node, its harnesses (offering their install
+commands), profiles for the other accounts it finds, their logins, and
+with `--service` the node as a per-user service.
 
 Not yet: fleet sync across machines, model routing, the LSP bridge. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -70,7 +73,9 @@ Not yet: fleet sync across machines, model routing, the LSP bridge. See
 
 ```bash
 cargo build --release
-./target/release/vessel node start          # or ./target/release/vesseld
+./target/release/vessel init                # node, harnesses, profiles, logins; asks before changing anything
+./target/release/vessel init --service      # and run the node as a per-user service (Linux, macOS)
+./target/release/vessel node start          # or run it in the foreground (or ./target/release/vesseld)
 # in another terminal, on the same machine (the token is read from ~/.vessel):
 ./target/release/vessel status
 ./target/release/vessel run claude          # Claude Code's own TUI; Ctrl-] detaches

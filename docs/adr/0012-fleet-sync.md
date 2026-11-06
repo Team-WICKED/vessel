@@ -327,3 +327,21 @@ It is idempotent: running it again fills gaps and changes nothing else.
 - **`OpenCode`** also reads `~/.claude/CLAUDE.md` and `~/.claude/skills`,
   so on a node whose default Claude Code home is a target it would see the
   fleet's files twice; the node leaves `OpenCode` out there.
+
+## As built (`vessel init`, F5, 2026-11-06)
+
+- Steps 1 to 3 and 5 are built; step 4 (`--join`) refuses, changing
+  nothing, until fleet sync (F2).
+- Consent: installs run only after a yes to each (or `--install --yes`;
+  `--yes` alone never installs); profiles are written after a yes (or
+  `--yes`); `--service` is itself the request. Logins are only checked
+  (`login_check`), and the command to log in printed for the person; of a
+  profile's values only its home is ever shown.
+- Other accounts' homes are found by name beside the default ones
+  (`.claude-<name>`, `.codex-<name>`), real directories holding the
+  harness's login file; contents are never read.
+- `--service` writes a systemd user unit or a launchd agent that runs the
+  same `vessel` with `node start`, this data directory and the `PATH` init
+  ran with (a service manager's own `PATH` misses the person's harness
+  installs). An existing file with other content is left alone. Windows
+  says it is not available yet.
