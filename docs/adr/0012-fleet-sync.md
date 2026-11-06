@@ -324,6 +324,23 @@ It is idempotent: running it again fills gaps and changes nothing else.
   bundle places; places are reached through open directories without
   following a symlink, and every step looks again right before acting;
   a harness home that does not exist is skipped, not created.
+- **Home and members on the node (F2).** `fleet.toml` takes MCP servers
+  in the manifest's own shape (`[mcp.servers.<name>]` with `type =
+  "stdio"` or `"http"`), so the file and the protocol cannot drift; paths
+  are absolute or start with `~/`. The home notices edits by polling a
+  metadata stamp of its sources every few seconds and bundles only when
+  it changed (and every 10 minutes), instead of the subscription this ADR
+  first named: `fleet.watch` is a long poll (protocol 5), and a file
+  watcher was not taken (a new dependency; unreliable through symlinked
+  layouts). The home also applies the bundle to its own profiles, its
+  sources and the homes linked to them left alone. Membership is a
+  pairing with a `sync` link; the credential and the home's routes are
+  files in the member's data directory, written by `vessel fleet join`
+  and noticed by a running node within seconds. `vessel fleet restore`
+  forgets the records and leaves `fleet/apply`, which the node acts on.
+- **Not built in F2:** the mutual grant (a member issuing the home a
+  credential on itself) and `fleet.push` need calls protocol 5 does not
+  have; they come with cross-node calls (Track X) and protocol 6.
 - **`OpenCode`** also reads `~/.claude/CLAUDE.md` and `~/.claude/skills`,
   so on a node whose default Claude Code home is a target it would see the
   fleet's files twice; the node leaves `OpenCode` out there.

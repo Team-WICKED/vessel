@@ -30,14 +30,14 @@ use crate::support::{Fixture, client, keys, output_of, seqs, terminal_spec, with
 const TOKEN: &str = "e2e-relay-token";
 
 /// A relay on a loopback port until stopped.
-struct Relay {
-    url: RouteUrl,
+pub(crate) struct Relay {
+    pub(crate) url: RouteUrl,
     shutdown: CancellationToken,
     task: JoinHandle<()>,
 }
 
 impl Relay {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap())
             .parse()
@@ -59,7 +59,7 @@ impl Relay {
         }
     }
 
-    async fn stop(self) {
+    pub(crate) async fn stop(self) {
         self.shutdown.cancel();
         self.task.await.unwrap();
     }
@@ -67,12 +67,22 @@ impl Relay {
 
 /// The node of `fixture`, linked to `relays`, once registered with all.
 async fn relayed(fixture: &Fixture, relays: &[&RouteUrl]) -> Node {
+    relayed_with(fixture, relays, |_config| {}).await
+}
+
+/// [`relayed`], with more of the config changed by `adjust`.
+pub(crate) async fn relayed_with(
+    fixture: &Fixture,
+    relays: &[&RouteUrl],
+    adjust: impl FnOnce(&mut vessel_node::Config),
+) -> Node {
     let token_file = fixture.cwd().join("relay-token");
     std::fs::write(&token_file, format!("{TOKEN}\n")).unwrap();
     let node = fixture
         .start_with(|config| {
             config.relays = relays.iter().map(|&relay| relay.clone()).collect();
             config.relay_token_file = Some(token_file);
+            adjust(config);
         })
         .await;
     for (_relay, mut state) in node.relay_links() {
