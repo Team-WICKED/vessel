@@ -50,9 +50,9 @@ file references.
     ended while another carries on; replayed, corrupted and reordered
     records ending the connection with no frame applied twice or at all;
     `nodes add --pair` from a piped link, then `run` through the relay.
-  - Track R's review of Track P (items 1 to 10) is addressed, except the
-    64 KiB first-frame limit, which waits for
-    `SecureChannel::set_max_frame`.
+  - Track R's review of Track P (items 1 to 10) is addressed, including
+    the 64 KiB frame limit until the preamble is answered
+    (`SecureChannel::set_max_frame`, 00caafa).
 - **Decided, waiting for `vessel-relay`:** direct `/secure` connections
   should be kept alive like relayed ones: the node pings every 10 s and
   drops a connection silent for 30 s, and the client's direct carrier
