@@ -557,6 +557,12 @@ reproduced problems, fixed in this order:
   (`fleet home <id>`, reserved: a device paired by hand under such a label
   is revoked too) that is not the one on record (`e2e/grants.rs`: one
   paired by hand, and one left by a grant the home refused after pairing).
+- **5 (low): `vessel mcp` took the first node of a name.** Names are each
+  node's own; a duplicate picked the first match, and a member named like
+  the agent's own node ran the call locally. A name more than one node has
+  (this one and another included) is now an error giving their ids
+  (`vessel-mcp` unit test), and the home refuses a grant from a node named
+  like itself or another member (item 1).
 - **6 (low): a grant made the home dial any routes.** A link names at most
   8 routes, and a failure to pair answers in general terms; the details go
   to the home's log (`e2e/grants.rs`).

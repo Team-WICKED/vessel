@@ -7,7 +7,11 @@
 //!   `node`, a node's id or its name in `list_nodes` (`fleet.nodes`); a
 //!   call for another node goes in `fleet.forward` (`NodeClient::call_on`),
 //!   and that node applies its own grant, ownership and limits to the
-//!   agent. Left out or naming this node, it is a call here.
+//!   agent. Left out or naming this node, it is a call here. Names are
+//!   chosen by each node, so a name more than one node has (this one and
+//!   another included) is refused with the ids to choose from, never
+//!   guessed (the review of Track X, item 5; the home also refuses a
+//!   member named like another).
 //! - Waiting is a long poll, here and elsewhere alike: `wait_turn` (and a
 //!   new session's wait to be ready) is a loop of `session.read` with
 //!   `wait`, so one code path serves every node and nothing needs a
@@ -34,10 +38,10 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 use vessel_client::{CallError, NodeClient, Unary};
 use vessel_proto::{
-    AgentEvent, ContentBlock, CreateSession, EventPage, EventSeq, GetSession, HarnessKind,
-    KillSession, ListNodes, ListSessions, ModelId, NodeId, PermissionOutcome, ReadEvents,
-    SendInput, SessionEvent, SessionId, SessionInput, SessionMode, SessionSpec, SessionStatus,
-    TerminalBytes, TerminalInput, TerminalSize,
+    AgentEvent, ContentBlock, CreateSession, EventPage, EventSeq, FleetNode, GetSession,
+    HarnessKind, KillSession, ListNodes, ListSessions, ModelId, NodeId, PermissionOutcome,
+    ReadEvents, SendInput, SessionEvent, SessionId, SessionInput, SessionMode, SessionSpec,
+    SessionStatus, TerminalBytes, TerminalInput, TerminalSize,
 };
 
 /// How long `wait_turn` waits when not told.
@@ -101,26 +105,15 @@ impl VesselTools {
     /// The node a `node` argument names: this one when it is left out or
     /// names this node; another by its id, or by its name in the fleet.
     async fn target(&self, args: &JsonObject) -> Result<Target, ToolError> {
-        let Some(node) = text(args, "node")? else {
+        let Some(given) = text(args, "node")? else {
             return Ok(None);
         };
         let this = self.client.node();
-        if node == this.id.to_string() || node == this.name {
-            return Ok(None);
-        }
-        if let Ok(id) = node.parse::<NodeId>() {
+        if let Ok(id) = given.parse::<NodeId>() {
             return Ok((id != this.id).then_some(id));
         }
         let nodes = self.client.call(ListNodes).await?;
-        nodes
-            .iter()
-            .find(|known| known.name == node)
-            .map(|known| (known.node != this.id).then_some(known.node))
-            .ok_or_else(|| {
-                ToolError::Arguments(format!(
-                    "no node `{node}` in this fleet (`list_nodes` shows the ones there are)"
-                ))
-            })
+        resolve(given, this.id, &this.name, &nodes)
     }
 
     /// `request` on `node`: here, or forwarded there.
@@ -361,6 +354,38 @@ async fn pause_if_early(page: &EventPage, asked: Instant, deadline: Instant) {
             .unwrap_or(deadline)
             .min(deadline);
         tokio::time::sleep_until(until).await;
+    }
+}
+
+/// The node named `given` (not an id): this one (`this`, named
+/// `this_name`) or another of `nodes` (`fleet.nodes`). A name more than
+/// one node has is refused with their ids, never guessed.
+fn resolve(
+    given: &str,
+    this: NodeId,
+    this_name: &str,
+    nodes: &[FleetNode],
+) -> Result<Target, ToolError> {
+    let mut named: Vec<NodeId> = nodes
+        .iter()
+        .filter(|node| node.name == given)
+        .map(|node| node.node)
+        .collect();
+    if this_name == given && !named.contains(&this) {
+        named.push(this);
+    }
+    match named.as_slice() {
+        [] => Err(ToolError::Arguments(format!(
+            "no node `{given}` in this fleet (`list_nodes` shows the ones there are)"
+        ))),
+        [only] => Ok((*only != this).then_some(*only)),
+        [_, _, ..] => {
+            let ids: Vec<String> = named.iter().map(ToString::to_string).collect();
+            Err(ToolError::Arguments(format!(
+                "more than one node is named `{given}` ({}); give the id instead",
+                ids.join(", ")
+            )))
+        }
     }
 }
 
@@ -624,4 +649,65 @@ fn tool(
         let _none = schema.insert("required".to_owned(), json!(required));
     }
     Tool::new(name, description, schema)
+}
+
+#[cfg(test)]
+mod tests {
+    use vessel_proto::PROTOCOL_VERSION;
+
+    use super::*;
+
+    fn node(id: NodeId, name: &str) -> FleetNode {
+        FleetNode {
+            node: id,
+            name: name.to_owned(),
+            protocol: PROTOCOL_VERSION,
+            reachable: true,
+        }
+    }
+
+    /// Names are each node's own choice: one that more than one node has is
+    /// refused, whichever they are (the review of Track X, item 5).
+    #[test]
+    fn a_name_names_one_node_or_none() {
+        let (here, desktop, laptop) = (NodeId::random(), NodeId::random(), NodeId::random());
+        let fleet = [
+            node(here, "home"),
+            node(desktop, "desktop"),
+            node(laptop, "laptop"),
+        ];
+        assert_eq!(resolve("home", here, "home", &fleet).unwrap(), None);
+        assert_eq!(
+            resolve("desktop", here, "home", &fleet).unwrap(),
+            Some(desktop)
+        );
+        assert!(matches!(
+            resolve("tablet", here, "home", &fleet),
+            Err(ToolError::Arguments(_))
+        ));
+        // Outside a fleet `fleet.nodes` lists this node alone.
+        assert_eq!(
+            resolve("home", here, "home", &[node(here, "home")]).unwrap(),
+            None
+        );
+
+        // Two members of one name, and another node named like this one.
+        let twins = [
+            node(here, "home"),
+            node(desktop, "desktop"),
+            node(laptop, "desktop"),
+        ];
+        let Err(ToolError::Arguments(message)) = resolve("desktop", here, "home", &twins) else {
+            panic!("two nodes named alike were not refused");
+        };
+        assert!(
+            message.contains(&desktop.to_string()) && message.contains(&laptop.to_string()),
+            "{message}"
+        );
+        let mimic = [node(here, "home"), node(desktop, "home")];
+        assert!(matches!(
+            resolve("home", here, "home", &mimic),
+            Err(ToolError::Arguments(_))
+        ));
+    }
 }
