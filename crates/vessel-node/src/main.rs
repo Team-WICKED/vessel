@@ -183,6 +183,13 @@ struct RelayArgs {
     #[arg(long, env = "VESSEL_RELAY_MAX_CLIENTS_PER_ADDRESS", value_parser = at_least_one,
         default_value_t = vessel_relay::Limits::default().max_clients_per_address)]
     max_clients_per_address: usize,
+    /// Relayed client connections to one node at once from one address
+    /// while the node admits them (their first seconds); a /48 four times
+    /// this, which must be less than half of the relayed channels a node
+    /// admits at once (`vessel_relay::RELAYED_UNADMITTED`).
+    #[arg(long, env = "VESSEL_RELAY_MAX_NODE_CLIENTS_PER_ADDRESS", value_parser = at_least_one,
+        default_value_t = vessel_relay::Limits::default().max_node_clients_per_address)]
+    max_node_clients_per_address: usize,
 }
 
 /// A count of at least one: a relay with no room for anything would only
@@ -300,6 +307,7 @@ async fn relay(args: Box<RelayArgs>) -> ExitCode {
     limits.max_registering_per_address = args.max_registering_per_address;
     limits.reserved_registering = args.reserved_registering;
     limits.max_clients_per_address = args.max_clients_per_address;
+    limits.max_node_clients_per_address = args.max_node_clients_per_address;
     if let Err(unbalanced) = limits.check() {
         // One /48 could hold half of a pool: the relay could be denied by
         // a single host's network.
@@ -318,6 +326,7 @@ async fn relay(args: Box<RelayArgs>) -> ExitCode {
         max_registering_per_address = limits.max_registering_per_address,
         reserved_registering = limits.reserved_registering,
         max_clients_per_address = limits.max_clients_per_address,
+        max_node_clients_per_address = limits.max_node_clients_per_address,
         %trusted_proxies,
         "relay limits"
     );

@@ -4,6 +4,7 @@
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use tempfile::TempDir;
@@ -24,7 +25,7 @@ use vessel_secure::{MemoryCarrier, NodeKeypair, SecureChannel, SecureError, memo
 use vessel_store::{CredentialHash, DataDir};
 
 use super::*;
-use crate::secure::{MAX_UNADMITTED, NotServed};
+use crate::secure::{MAX_UNADMITTED, NotServed, Route};
 use crate::{Config, Node};
 
 async fn node() -> (TempDir, Node) {
@@ -59,6 +60,16 @@ fn channel(node: &Node) -> MemoryTransport {
     let (client_end, node_end) = memory::pair(NonZeroUsize::new(16).unwrap());
     let gateway = node.secure.clone();
     drop(tokio::spawn(async move { gateway.serve(node_end).await }));
+    client_end
+}
+
+/// [`channel`], as a relay's spliced client.
+fn relayed(node: &Node) -> MemoryTransport {
+    let (client_end, node_end) = memory::pair(NonZeroUsize::new(16).unwrap());
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(async move {
+        gateway.serve_relayed(node_end).await;
+    }));
     client_end
 }
 
@@ -242,7 +253,9 @@ fn carrier(node: &Node) -> (MemoryCarrier, Arc<Mutex<Option<NodeClose>>>) {
         closed: Arc::clone(&closed),
     };
     let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    drop(tokio::spawn(async move {
+        gateway.accept(node_end, Route::Direct).await
+    }));
     (client_end, closed)
 }
 
@@ -263,7 +276,7 @@ async fn secure(
         closed: Arc::clone(&closed),
     };
     let gateway = node.secure.clone();
-    let accepted = tokio::spawn(async move { gateway.accept(node_end).await });
+    let accepted = tokio::spawn(async move { gateway.accept(node_end, Route::Direct).await });
     (
         vessel_secure::initiate(client_end, key).await,
         accepted,
@@ -652,6 +665,60 @@ async fn channels_waiting_for_their_preamble_are_capped() {
     let (_device, _secret, connection) = pair(&node, invite(&node, None)).await;
     assert_eq!(connection.call(ListDevices).await.unwrap().len(), 1);
     drop(waiting);
+    node.stop().await.unwrap();
+}
+
+/// The security review's round 9: relayed channels waiting for their
+/// preamble have a budget of their own (`RELAYED_UNADMITTED`), so a crowd
+/// through a relay leaves the direct route all of its room.
+#[tokio::test]
+async fn relayed_channels_wait_in_a_budget_of_their_own() {
+    let (_temp, node) = node().await;
+    let direct = || node.secure.unadmitted.available_permits();
+    let relayed_left = || node.secure.unadmitted_relayed.available_permits();
+    let mut waiting: Vec<MemoryTransport> = (0..vessel_relay::RELAYED_UNADMITTED)
+        .map(|_| relayed(&node))
+        .collect();
+    let filled = tokio::time::timeout(Duration::from_secs(1), async {
+        while relayed_left() > 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(filled.is_ok(), "the relayed budget is not used");
+    assert_eq!(
+        direct(),
+        MAX_UNADMITTED,
+        "relayed channels took direct room"
+    );
+    let mut extra = relayed(&node);
+    let dropped = tokio::time::timeout(Duration::from_secs(1), extra.next()).await;
+    assert!(
+        matches!(dropped, Ok(None)),
+        "not dropped at once: {dropped:?}"
+    );
+    // The direct route is served all the while.
+    let (_device, _secret, connection) = pair(&node, invite(&node, None)).await;
+    assert_eq!(connection.call(ListDevices).await.unwrap().len(), 1);
+    waiting.clear();
+    node.stop().await.unwrap();
+}
+
+/// A relayed channel has `RELAYED_ADMISSION` to be admitted, handshake
+/// and preamble together, not the direct route's ten seconds: what a relay
+/// counts on to tell an admitted client from one held open.
+#[tokio::test]
+async fn a_relayed_channel_has_seconds_to_be_admitted() {
+    let (_temp, node) = node().await;
+    let mut silent = relayed(&node);
+    let started = std::time::Instant::now();
+    let ended = tokio::time::timeout(
+        vessel_relay::RELAYED_ADMISSION + Duration::from_secs(2),
+        silent.next(),
+    )
+    .await;
+    assert!(matches!(ended, Ok(None)), "still open: {ended:?}");
+    assert!(started.elapsed() < preamble::PREAMBLE_TIMEOUT);
     node.stop().await.unwrap();
 }
 
