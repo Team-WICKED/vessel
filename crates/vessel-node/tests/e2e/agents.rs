@@ -16,7 +16,7 @@ use vessel_proto::{
 use vessel_rpc::{CallError, ConnectError};
 
 use crate::support::{
-    Fixture, ask, client, keys, read_until, status_of, structured_spec, terminal_spec, within,
+    Fixture, ask, client, keys, read_until, status_of, step, structured_spec, terminal_spec, within,
 };
 
 /// What `vessel mcp` would be run as; never run here.
@@ -296,25 +296,47 @@ async fn an_ended_sessions_agent_starts_nothing() {
             .unwrap()
             .id;
 
-        owner.kill(session.id).await.unwrap();
-        read_until(&mut session.stream, &mut session.seen, |record| {
-            status_of(record).is_some_and(|status| !status.is_live())
-        })
+        // Each wait is a labelled step: Windows CI once hung here past the
+        // safety net with no clue which wait it was.
+        step(
+            "the owner kills the agent's session",
+            owner.kill(session.id),
+        )
+        .await
+        .unwrap();
+        step(
+            "the owner sees the agent's session end",
+            read_until(&mut session.stream, &mut session.seen, |record| {
+                status_of(record).is_some_and(|status| !status.is_live())
+            }),
+        )
         .await;
 
-        assert!(
-            agent
-                .create_session(terminal_spec(&fixture, HarnessKind::ClaudeCode))
-                .await
-                .is_err()
-        );
-        assert!(agent.send(child, keys("late\r")).await.is_err());
-        assert!(agent.kill(child).await.is_err());
-        owner.kill(child).await.unwrap();
+        let created = step(
+            "the ended agent tries to start a session",
+            agent.create_session(terminal_spec(&fixture, HarnessKind::ClaudeCode)),
+        )
+        .await;
+        assert!(created.is_err(), "{created:?}");
+        let sent = step(
+            "the ended agent tries to send to its child",
+            agent.send(child, keys("late\r")),
+        )
+        .await;
+        assert!(sent.is_err(), "{sent:?}");
+        let killed = step("the ended agent tries to kill its child", agent.kill(child)).await;
+        assert!(killed.is_err(), "{killed:?}");
+        step("the owner kills the child", owner.kill(child))
+            .await
+            .unwrap();
         assert!(refused(
-            NodeClient::connect_local(&socket, &LocalCredential::Agent(auth), client()).await
+            step(
+                "the ended agent's credential connects again",
+                NodeClient::connect_local(&socket, &LocalCredential::Agent(auth), client()),
+            )
+            .await
         ));
-        node.stop().await.unwrap();
+        step("the node stops", node.stop()).await.unwrap();
     })
     .await;
 }
