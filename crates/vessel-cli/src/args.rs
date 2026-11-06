@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use vessel_client::book::NodeName;
 use vessel_client::{BearerToken, RemotePath};
+use vessel_node::fleet::SkipGlob;
 use vessel_proto::{EventSeq, HarnessKind, ProfileName};
 
 use crate::selector::SessionSelector;
@@ -71,6 +72,12 @@ pub(crate) enum Command {
         /// `admin` scope). A file that does not parse changes nothing.
         #[arg(long)]
         reload: bool,
+    },
+    /// Fleet sync: one node, the home, shares its instructions and skills;
+    /// member nodes follow it into every profile (ADR 0012).
+    Fleet {
+        #[command(subcommand)]
+        command: FleetCommand,
     },
     /// List sessions, newest first.
     Sessions,
@@ -167,6 +174,58 @@ pub(crate) enum NodeCommand {
     Devices {
         #[command(subcommand)]
         command: Option<DevicesCommand>,
+    },
+}
+
+/// `vessel fleet ...`. `init`, `join`, `leave`, `status` and `restore` act
+/// on the node of this machine's data directory (`--data-dir`), running or
+/// not; `invite` and `members` talk to a node (`--node`, the home).
+#[derive(Debug, Subcommand)]
+pub(crate) enum FleetCommand {
+    /// Make this node the fleet's home: write `fleet.toml`, naming the
+    /// instructions file and skills directory every member gets.
+    Init {
+        /// The instructions file (`~/.codex/AGENTS.md`, say).
+        #[arg(long)]
+        instructions: Option<PathBuf>,
+        /// The skills directory (`~/.codex/skills`, say).
+        #[arg(long)]
+        skills: Option<PathBuf>,
+        /// Names to leave out (`*` and `?` within one name), such as
+        /// skills another tool manages; repeatable.
+        #[arg(long = "skip", value_name = "GLOB")]
+        skip: Vec<SkipGlob>,
+    },
+    /// Make a single-use link for a node to join this home (needs the
+    /// `admin` scope on the home). Prints the link, and a QR code on a
+    /// terminal.
+    Invite {
+        /// Name for the member on the home (else it names itself).
+        #[arg(long)]
+        label: Option<String>,
+        /// How long the link works: `90s`, `10m`, `2h` (at most `24h`).
+        #[arg(long, default_value = "10m", value_parser = ttl_secs)]
+        ttl: u32,
+    },
+    /// Join the fleet whose home made the link: paste it at the prompt, or
+    /// pipe it in with `--yes` (never on the command line).
+    Join {
+        /// Join without asking, after checking the key's fingerprint.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Stop following the home. The files it wrote stay as they are.
+    Leave,
+    /// This node's place in the fleet: its role, what it last applied, and
+    /// the files it left alone and why.
+    Status,
+    /// The home's members and what each last applied (needs `admin`).
+    Members,
+    /// Bring back fleet files deleted here: one file, or every one below a
+    /// directory. The node writes them again within a few seconds.
+    Restore {
+        /// The deleted file, or a directory.
+        path: PathBuf,
     },
 }
 

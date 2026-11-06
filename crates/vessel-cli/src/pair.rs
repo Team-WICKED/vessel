@@ -46,38 +46,7 @@ pub(crate) async fn add(
     let book = nodes::book_path(target)?;
     let credentials = config_dir(target)?;
     ensure_free(&book, &name).await?;
-
-    let at_terminal = std::io::stdin().is_terminal();
-    if !at_terminal && !yes {
-        return Err(CliError::Usage(
-            "with the link piped in there is no terminal to confirm the node; check its key \
-             fingerprint and pass --yes",
-        ));
-    }
-    let mut lines = io::input_lines()?;
-    if at_terminal {
-        io::note("paste the pairing link from `vessel node pair`: ").await?;
-    }
-    let link = loop {
-        match lines.recv().await {
-            Some(line) if line.trim().is_empty() => {}
-            Some(line) => break line,
-            None => return Err(CliError::NoPairingLink),
-        }
-    };
-    let offer = link
-        .trim()
-        .parse::<PairingLink>()
-        .and_then(|link| link.decode())
-        .map_err(CliError::PairingLink)?;
-    io::note(&describe(&offer)).await?;
-    if !yes {
-        io::note("pair with this node? [y/N] ").await?;
-        let answer = lines.recv().await.unwrap_or_default();
-        if !matches!(answer.trim(), "y" | "Y" | "yes") {
-            return Err(CliError::NotPaired);
-        }
-    }
+    let offer = offer_from_stdin(yes, "vessel node pair", "pair with this node?").await?;
 
     let dialer =
         WsDialer::for_routes(offer.direct.iter().chain(&offer.relays)).map_err(CliError::Tls)?;
@@ -126,6 +95,49 @@ pub(crate) async fn add(
     ))
     .await?;
     Ok(())
+}
+
+/// A pairing link read from standard input (pasted at a prompt, or
+/// piped), shown, and confirmed unless `yes`: shared by `vessel nodes add
+/// --pair` and `vessel fleet join`. `from` names the command that made the
+/// link, `question` what is asked.
+pub(crate) async fn offer_from_stdin(
+    yes: bool,
+    from: &str,
+    question: &str,
+) -> Result<PairingOffer, CliError> {
+    let at_terminal = std::io::stdin().is_terminal();
+    if !at_terminal && !yes {
+        return Err(CliError::Usage(
+            "with the link piped in there is no terminal to confirm the node; check its key \
+             fingerprint and pass --yes",
+        ));
+    }
+    let mut lines = io::input_lines()?;
+    if at_terminal {
+        io::note(&format!("paste the pairing link from `{from}`: ")).await?;
+    }
+    let link = loop {
+        match lines.recv().await {
+            Some(line) if line.trim().is_empty() => {}
+            Some(line) => break line,
+            None => return Err(CliError::NoPairingLink),
+        }
+    };
+    let offer = link
+        .trim()
+        .parse::<PairingLink>()
+        .and_then(|link| link.decode())
+        .map_err(CliError::PairingLink)?;
+    io::note(&describe(&offer)).await?;
+    if !yes {
+        io::note(&format!("{question} [y/N] ")).await?;
+        let answer = lines.recv().await.unwrap_or_default();
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            return Err(CliError::NotPaired);
+        }
+    }
+    Ok(offer)
 }
 
 /// Where credentials go: `<config_dir>/vessel/credentials/`.

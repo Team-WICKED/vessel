@@ -11,6 +11,8 @@
 #[cfg(test)]
 mod devices;
 #[cfg(test)]
+mod fleet;
+#[cfg(test)]
 mod mcp;
 mod nodes;
 #[cfg(test)]

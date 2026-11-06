@@ -17,7 +17,7 @@ use std::io::IsTerminal as _;
 
 use qrcode::QrCode;
 use qrcode::render::unicode::Dense1x2;
-use vessel_proto::DeviceInfo;
+use vessel_proto::{DeviceInfo, Invitation};
 
 use crate::args::{DevicesCommand, Target};
 use crate::connect::connect;
@@ -28,6 +28,16 @@ use crate::io;
 pub(crate) async fn pair(target: &Target, label: Option<String>, ttl: u32) -> Result<(), CliError> {
     let client = connect(target).await?.client;
     let invitation = client.invite_device(label, ttl).await?;
+    show_invitation(
+        &invitation,
+        "on the new device run\n  vessel nodes add NAME --pair",
+    )
+    .await
+}
+
+/// Print `invitation`'s link (and its QR code on a terminal), then what
+/// to do with it (`next`) on stderr.
+pub(crate) async fn show_invitation(invitation: &Invitation, next: &str) -> Result<(), CliError> {
     let link = invitation.link.expose();
     let mut text = format!("{link}\n");
     if std::io::stdout().is_terminal() {
@@ -38,7 +48,7 @@ pub(crate) async fn pair(target: &Target, label: Option<String>, ttl: u32) -> Re
     }
     io::out(text.as_bytes()).await?;
     io::note(&format!(
-        "valid once, until {}; on the new device run\n  vessel nodes add NAME --pair\n\
+        "valid once, until {}; {next}\n\
          and paste the link at its prompt (never put it on a command line)\n",
         invitation.expires.format("%Y-%m-%d %H:%M:%S UTC")
     ))

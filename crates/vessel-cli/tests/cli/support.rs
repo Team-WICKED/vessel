@@ -351,6 +351,21 @@ fn book_command(data: &Path, dir: &Path, args: &[&str]) -> Command {
     command
 }
 
+/// Run `vessel --data-dir <data> <args>` without `--node`, in `data`,
+/// with `stdin` as its input: the commands that act on that data
+/// directory's node, whether or not it runs.
+pub(super) async fn vessel_in(data: &Path, args: &[&str], stdin: &[u8]) -> Ran {
+    let mut child = book_command(data, data, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = child.stdin.take().unwrap();
+    feed(input, stdin).await;
+    child.wait_with_output().await.unwrap().into()
+}
+
 /// Give a child everything it should read on standard input, then close
 /// it. A child that exits before reading it all (it failed first, or under
 /// load got there before the write) closes the pipe: that is not this
