@@ -37,7 +37,14 @@ built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
   on the member, so the home holds a credential there (a member's node
   sends it when it connects, with the scopes chosen at join, `read` and
   `operate` by default; the device the home's redemption creates is the
-  only one the member takes `fleet.deliver` from, and leaving revokes it); `fleet.peers`
+  only one the member takes `fleet.deliver` from, and leaving revokes it).
+  The home binds a member device to the node id and key of its first
+  grant and answers `conflict` to a grant that would rebind it, that
+  names an id or key another member device's grant holds, the home's own
+  id, or a name the home or another member uses (the same id and key
+  through another device is the node joined again, and replaces the older
+  grant); `invalid_request` to a link with no route or more than 8; and
+  `unavailable`, without details, when it cannot pair; `fleet.peers`
   (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
   `protocol`, `reachable`), the home included.
 - Transfers (F4): `session.export { session, force? }` (operate,
