@@ -30,7 +30,7 @@ use crate::profiles::{NodeProfiles, moving};
 use crate::sessions::Sessions;
 use crate::subscribe;
 use crate::transfers::export::Exporter;
-use crate::transfers::import::{Importer, Local};
+use crate::transfers::import::{Importer, Local, Pull, Remote};
 use crate::transfers::{Holder, Transfers};
 
 /// The node's protocol implementation.
@@ -591,8 +591,8 @@ fn secrets_wire(error: &crate::fleet::SecretsError) -> WireError {
 }
 
 /// Transfers (protocol 6, F4): `transfers` exports and serves them, and
-/// pulls imports from a source, which is this node until the remote
-/// source on the envelope (`pass_on`) is built.
+/// pulls imports from a source: this node, or another fleet node through
+/// the envelope (`pass_on`).
 impl NodeService {
     fn exporter(&self) -> Exporter<'_> {
         Exporter {
@@ -612,26 +612,28 @@ impl NodeService {
 
     /// Where an import from `node` pulls, for `connection`'s caller: this
     /// node (an agent only copies a session it started, as for
-    /// `session.export`), or another, which needs a source on the envelope
-    /// (`pass_on`; not built yet).
-    async fn source(
-        &self,
-        connection: &Connection,
+    /// `session.export`), or another fleet node through the envelope, where
+    /// the source applies its own ownership rules to the caller's origin.
+    async fn source<'a>(
+        &'a self,
+        connection: &'a Connection,
         node: vessel_proto::NodeId,
         session: Option<SessionId>,
-    ) -> Result<Local<'_>, WireError> {
+    ) -> Result<Pull<'a>, WireError> {
         if node != self.lifecycle.info().id {
-            return Err(crate::transfers::wire(
-                &crate::transfers::TransferError::Remote,
-            ));
+            return Ok(Pull::Remote(Remote {
+                service: self,
+                principal: connection.principal(),
+                node,
+            }));
         }
         if let Some(session) = session {
             self.check_owner(connection.principal(), session).await?;
         }
-        Ok(Local {
+        Ok(Pull::Local(Local {
             exporter: self.exporter(),
             holder: Holder::of(connection.principal()),
-        })
+        }))
     }
 
     /// `session.export` (ownership checked by the guard).

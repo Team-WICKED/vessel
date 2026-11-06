@@ -7,7 +7,7 @@
 //! ```text
 //!  session.export / memory.export ──▶ export ──snapshot──▶ <data_dir>/transfers/<id>/  ◀── transfer.read / close
 //!  session.import / memory.import ──▶ import ── Source ──▶ pull into transfers/incoming-<id>/ ──place──▶ the profile's home
-//!                                                  │ (this node now; Track X's envelope for another)
+//!                                                  │ (this node, or another through the envelope)
 //!                                                  └── start: session.create resuming it, origin imported
 //! ```
 //!
@@ -33,9 +33,9 @@
 //!   each; the next one is refused with `unavailable` until one closes or
 //!   expires.
 //! - The import's source is a small trait ([`import::Source`]): this node
-//!   (a session or memory of another profile here) now; another node
-//!   through the envelope (`NodeService::pass_on`, built in Track X) is
-//!   one more implementation, not a change to the import.
+//!   (a session or memory of another profile here, `Local`), or another
+//!   fleet node through the envelope (`Remote`, on `NodeService::pass_on`,
+//!   the route `fleet.forward` takes), as the caller of the import.
 //! - Alternatives: hard links for a same-node copy (`link_session` does
 //!   that for a move between profiles; a copy that later diverges must not
 //!   share the file); holding the snapshot in memory (up to 2 GiB).
@@ -189,13 +189,22 @@ pub(crate) enum TransferError {
     /// The import would put a session where it already is.
     #[error("that conversation is already in this profile and directory")]
     AlreadyThere,
+    /// The target profile's harness home does not exist: the harness has
+    /// never run there, and an import does not make one.
+    #[error(
+        "profile `{profile}` has no harness home on this node yet ({}); run or log in to the \
+         harness under it once first",
+        home.display()
+    )]
+    NoHome {
+        /// The profile.
+        profile: vessel_proto::ProfileName,
+        /// Where its home would be.
+        home: PathBuf,
+    },
     /// The source answered with another kind of transfer.
     #[error("the source answered with a {0} transfer")]
     WrongKind(&'static str),
-    /// Another node: the envelope is built (`NodeService::pass_on`), the
-    /// import's remote source on it is not yet (F4).
-    #[error("importing from another node is not built on this node yet")]
-    Remote,
     /// The staging directory could not be used.
     #[error("the transfer's staging directory: {0}")]
     Staging(#[source] io::Error),
@@ -213,12 +222,12 @@ impl TransferError {
         use vessel_fleet::{PlaceError, SnapshotError};
         match self {
             Self::Terminal
-            | Self::Remote
             | Self::Files(SessionFilesError::Unsupported { .. })
             | Self::Memory(MemoryFilesError::Unsupported { .. }) => ErrorCode::Unsupported,
             Self::NotReady
             | Self::TurnInProgress
             | Self::AlreadyThere
+            | Self::NoHome { .. }
             | Self::Files(
                 SessionFilesError::NotFound { .. } | SessionFilesError::Ambiguous { .. },
             )
