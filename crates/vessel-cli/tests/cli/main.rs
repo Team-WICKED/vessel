@@ -9,6 +9,8 @@
 //! `reconnect` (an attach that survives a lost connection).
 
 #[cfg(test)]
+mod canary;
+#[cfg(test)]
 mod devices;
 #[cfg(test)]
 mod fleet;
