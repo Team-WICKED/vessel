@@ -90,7 +90,11 @@ impl SessionError {
                 InputError::Closed | InputError::TurnInProgress | InputError::PermissionSettled(_),
             ) => ErrorCode::Conflict,
             Self::ShuttingDown => ErrorCode::Unavailable,
-            Self::Internal(_) | Self::Launch(HarnessError::McpFile { .. }) => ErrorCode::Internal,
+            // The node resolves `spec.profile`; another profile is its bug.
+            Self::Internal(_)
+            | Self::Launch(
+                HarnessError::McpFile { .. } | HarnessError::ProfileNotRequested { .. },
+            ) => ErrorCode::Internal,
         }
     }
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::EventRecord;
 use crate::id::{EventSeq, SessionId, SubscriptionId};
+use crate::node::ProtocolVersion;
 use crate::session::{SessionInfo, SessionInput, SessionSpec};
 
 /// `node.info`: describe the node.
@@ -71,6 +72,31 @@ pub struct EventPage {
     pub next: EventSeq,
     /// Whether `next` is the end of the log right now.
     pub at_end: bool,
+}
+
+impl EventPage {
+    /// This page as a client speaking `protocol` reads it, or `None` when no
+    /// record needs a stand-in (see `SessionEvent::for_protocol`).
+    #[must_use]
+    pub fn for_protocol(&self, protocol: ProtocolVersion) -> Option<Self> {
+        let changed = self
+            .records
+            .iter()
+            .any(|record| record.event.since() > protocol);
+        changed.then(|| Self {
+            records: self
+                .records
+                .iter()
+                .map(|record| {
+                    record
+                        .for_protocol(protocol)
+                        .unwrap_or_else(|| record.clone())
+                })
+                .collect(),
+            next: self.next,
+            at_end: self.at_end,
+        })
+    }
 }
 
 /// `session.subscribe`: stream a session's events from `from` onwards.

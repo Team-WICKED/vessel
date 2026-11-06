@@ -29,7 +29,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | Crate | Job | Depends on |
 | --- | --- | --- |
 | `vessel-proto` | Wire contract: ids, sessions, events, agent timeline, errors, typed RPC table; keys, devices, pairing links, relay control (milestone 3); validated names, profiles, creators, agent credentials, fleet manifests and MCP server definitions (milestone 4). No I/O. | - |
-| `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. | proto |
+| `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. From protocol 5 it holds both sides to the negotiated version: a call newer than the connection (`Call::since`) is refused by the client before sending and by the server before dispatch, and outgoing frames are adapted to an older client where they are encoded (`ServerFrame::for_protocol`). | proto |
 | `vessel-proc` | Command specs, spawning in a process group, killing the group. | - |
 | `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, and MCP servers for terminal sessions. | proto, proc |
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize. | proc |
@@ -272,7 +272,8 @@ they started.
     their handshake or preamble at once, and their frames are limited to
     64 KiB until the preamble is answered. `NodeInfo.public_key` carries the
     public key. Carriers arrive from `/secure` on the node's listener (an
-    `AxumCarrier`, messages capped at one record) and from one `NodeLink`
+    `AxumCarrier`, messages capped at one record, pinged every 10 s and
+    dropped after 30 s of silence, `Config::keepalive`) and from one `NodeLink`
     per `--relay` (registering with `--relay-token-file`'s token, TLS for
     `wss://` from the system roots; `Node::relay_links` reports their
     state). `--public` adds direct routes to pairing links. Device labels
@@ -358,7 +359,12 @@ they started.
     address may come from a proxy header). `NodeLink` keeps a node
     registered (0.5-30 s jittered backoff, `LinkState` on a watch) and hands
     each client's data connection to the node as a `WsCarrier`; `dial` and
-    `connect` are the client's. `respond` runs the node's handshake on a
+    `connect` are the client's. One `Keepalive` (a ping every 10 s, a drop
+    after 30 s of silence) covers the relay's connections and direct ones:
+    a node's `AxumCarrier` on `/secure` pings its client from inside the
+    carrier (from the reading side when nothing is being written, never
+    taking the writing task's waker), and every client carrier, relayed or
+    direct, fails after the same silence. `respond` runs the node's handshake on a
     websocket and closes with `4401` when it fails; `relay_close` and
     `node_close` read the codes back. `vesseld relay --bind --token-file
     [--client-address-header]` runs it (README, "Running a relay"). Tested

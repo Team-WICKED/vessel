@@ -1,11 +1,6 @@
 //! Terminal-mode payloads: raw PTY bytes and window size.
 
-use std::fmt;
-
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
-use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Terminal window size in character cells.
@@ -67,30 +62,13 @@ impl From<Bytes> for TerminalBytes {
 
 impl Serialize for TerminalBytes {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&STANDARD.encode(&self.0))
+        crate::base64_bytes::serialize(&self.0, serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for TerminalBytes {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_str(Base64Visitor)
-    }
-}
-
-struct Base64Visitor;
-
-impl Visitor<'_> for Base64Visitor {
-    type Value = TerminalBytes;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("base64-encoded bytes")
-    }
-
-    fn visit_str<E: de::Error>(self, text: &str) -> Result<Self::Value, E> {
-        STANDARD
-            .decode(text)
-            .map(|bytes| TerminalBytes(Bytes::from(bytes)))
-            .map_err(E::custom)
+        crate::base64_bytes::deserialize(deserializer).map(Self)
     }
 }
 

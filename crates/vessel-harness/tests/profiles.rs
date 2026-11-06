@@ -5,13 +5,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use vessel_harness::fakes::{Role, install};
-use vessel_harness::{HarnessError, Launch, Lookup, McpError, Profile, launch, login_check};
+use vessel_harness::{HarnessError, Launch, Lookup, McpError, Profile, login_check};
 use vessel_proc::EnvValue;
-use vessel_proto::{HarnessKind, McpTransport, ResolvedMcpServers, ResolvedValue};
+use vessel_proto::{HarnessKind, McpTransport, ResolvedMcpServers, ResolvedValue, SessionSpec};
 
 use support::{
-    HTTP_SECRET, STDIO_SECRET, TempDir, assert_no_secret_in_debug, assert_no_secret_on_argv, fake,
-    profile, servers, set, structured, terminal,
+    HTTP_SECRET, STDIO_SECRET, TempDir, asking, assert_no_secret_in_debug,
+    assert_no_secret_on_argv, fake, profile, servers, set, structured, terminal,
 };
 
 #[cfg(test)]
@@ -113,25 +113,30 @@ mod support {
     }
 
     pub(super) fn terminal(harness: HarnessKind, args: &[&str], cwd: &Path) -> SessionSpec {
-        SessionSpec {
+        SessionSpec::new(
             harness,
-            cwd: Some(cwd.to_owned()),
-            mode: SessionMode::Terminal {
+            SessionMode::Terminal {
                 args: args.iter().map(|arg| (*arg).to_owned()).collect(),
                 size: TerminalSize::default(),
             },
-        }
+        )
+        .with_cwd(cwd)
     }
 
     pub(super) fn structured(harness: HarnessKind, cwd: &Path) -> SessionSpec {
-        SessionSpec {
+        SessionSpec::new(
             harness,
-            cwd: Some(cwd.to_owned()),
-            mode: SessionMode::Structured {
+            SessionMode::Structured {
                 model: None,
                 resume: None,
             },
-        }
+        )
+        .with_cwd(cwd)
+    }
+
+    /// `spec` asking for `profile` by name, as the node passes it.
+    pub(super) fn asking(spec: SessionSpec, profile: &Profile) -> SessionSpec {
+        spec.with_profile(profile.name().clone())
     }
 
     pub(super) const PROFILES: &str = r#"
@@ -167,6 +172,16 @@ mod support {
             Some(EnvValue::Remove) | None => None,
         }
     }
+}
+
+/// Launch `spec` asking for `profile` by name, as the node does.
+fn launch(
+    lookup: &Lookup,
+    spec: &SessionSpec,
+    profile: &Profile,
+    mcp: &ResolvedMcpServers,
+) -> Result<Launch, HarnessError> {
+    vessel_harness::launch(lookup, &asking(spec.clone(), profile), profile, mcp)
 }
 
 #[test]
@@ -476,4 +491,39 @@ fn login_checks_run_with_the_profile() {
         .unwrap();
     assert_eq!(check.args, ["login", "status"]);
     assert_eq!(login_check(&lookup, &profile("gemini-plain")), Ok(None));
+}
+
+#[test]
+fn the_profile_must_be_the_one_the_spec_asks_for() {
+    let bin = TempDir::new();
+    let tui = fake(vessel_testkit::Fake::Tui);
+    let _claude = install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap();
+    let lookup = Lookup::new([bin.path().to_owned()]);
+    let none = ResolvedMcpServers::new();
+    let spec = terminal(HarnessKind::ClaudeCode, &[], bin.path());
+    let alt = profile("claude-alt");
+    let default = Profile::default_for(HarnessKind::ClaudeCode);
+
+    // No profile named: only the default will do.
+    assert_eq!(
+        vessel_harness::launch(&lookup, &spec, &alt, &none).unwrap_err(),
+        HarnessError::ProfileNotRequested {
+            requested: None,
+            given: alt.name().clone(),
+        }
+    );
+    assert!(vessel_harness::launch(&lookup, &spec, &default, &none).is_ok());
+    // The default named explicitly is the default.
+    let named_default = asking(spec.clone(), &default);
+    assert!(vessel_harness::launch(&lookup, &named_default, &default, &none).is_ok());
+    // A named profile: that one, not the default.
+    let wants_alt = asking(spec, &alt);
+    assert!(vessel_harness::launch(&lookup, &wants_alt, &alt, &none).is_ok());
+    assert_eq!(
+        vessel_harness::launch(&lookup, &wants_alt, &default, &none).unwrap_err(),
+        HarnessError::ProfileNotRequested {
+            requested: Some(alt.name().clone()),
+            given: default.name().clone(),
+        }
+    );
 }

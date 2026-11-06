@@ -1,10 +1,10 @@
 //! [`NodeClient`]: one typed method per protocol call.
 
 use vessel_proto::{
-    ClientInfo, CreateSession, DeviceId, DeviceInfo, ErrorCode, EventPage, EventSeq, GetNode,
-    GetSession, Harness, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
-    ListSessions, NodeInfo, ProtocolVersion, ReadEvents, RevokeDevice, SendInput, SessionId,
-    SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen, Subscribe, WireError,
+    ClientInfo, CreateSession, DeviceId, DeviceInfo, EventPage, EventSeq, GetNode, GetSession,
+    Harness, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListSessions,
+    NodeInfo, ProtocolVersion, ReadEvents, RevokeDevice, SendInput, SessionId, SessionInfo,
+    SessionInput, SessionSpec, StopNode, StopWhen, Subscribe,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 
@@ -13,11 +13,6 @@ use crate::stream::SessionStream;
 use crate::token::BearerToken;
 use crate::url::NodeUrl;
 use crate::ws;
-
-/// The first protocol with `node.stop`.
-const STOP_NODE_SINCE: ProtocolVersion = ProtocolVersion::new(3);
-/// The first protocol with `device.*` (pairing, ADR 0010).
-const DEVICES_SINCE: ProtocolVersion = ProtocolVersion::new(4);
 
 /// A connection to one node. Cheap to clone; clones share the connection,
 /// which closes when the last clone (and every stream) is dropped.
@@ -200,12 +195,9 @@ impl NodeClient {
     /// asking: such a node does not know the method, and protocol 2 clients
     /// never send it. Otherwise see [`CallError`].
     pub async fn stop_node(&self, when: StopWhen) -> Result<(), CallError> {
-        if self.protocol() < STOP_NODE_SINCE {
-            return Err(CallError::Remote(WireError::new(
-                ErrorCode::Unsupported,
-                "the node speaks protocol 2; stopping it needs protocol 3",
-            )));
-        }
+        // A protocol 2 connection is refused by `vessel-rpc` before anything
+        // is sent (`CallError::NotInProtocol`, code `Unsupported`), as every
+        // method newer than the connection is (`Method::since`).
         self.connection.call(StopNode { when }).await.map(drop)
     }
 
@@ -220,8 +212,13 @@ impl NodeClient {
         label: Option<String>,
         ttl_secs: u32,
     ) -> Result<Invitation, CallError> {
-        self.require(DEVICES_SINCE, "pairing")?;
-        self.connection.call(InviteDevice { label, ttl_secs }).await
+        self.connection
+            .call(InviteDevice {
+                label,
+                ttl_secs,
+                scopes: None,
+            })
+            .await
     }
 
     /// `device.list`: every paired device, revoked ones included.
@@ -230,7 +227,6 @@ impl NodeClient {
     /// `Unsupported` on a node before protocol 4; otherwise see
     /// [`CallError`].
     pub async fn devices(&self) -> Result<Vec<DeviceInfo>, CallError> {
-        self.require(DEVICES_SINCE, "devices")?;
         self.connection.call(ListDevices).await
     }
 
@@ -240,26 +236,10 @@ impl NodeClient {
     /// `NotFound` for an unknown device; `Unsupported` on a node before
     /// protocol 4; otherwise see [`CallError`].
     pub async fn revoke_device(&self, device: DeviceId) -> Result<(), CallError> {
-        self.require(DEVICES_SINCE, "devices")?;
         self.connection
             .call(RevokeDevice { device })
             .await
             .map(drop)
-    }
-
-    /// `Unsupported`, without asking, when the connection negotiated a
-    /// protocol older than `since`: such a node does not know the method.
-    fn require(&self, since: ProtocolVersion, what: &str) -> Result<(), CallError> {
-        if self.protocol() < since {
-            return Err(CallError::Remote(WireError::new(
-                ErrorCode::Unsupported,
-                format!(
-                    "the node speaks protocol {}; {what} needs protocol {since}",
-                    self.protocol()
-                ),
-            )));
-        }
-        Ok(())
     }
 
     /// Every record of a session from `from` on, gap-free, ending when the

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sha2::{Digest as _, Sha256};
-use vessel_proto::InvitationSecret;
+use vessel_proto::{InvitationSecret, Scope};
 
 /// Invitations that may wait at once.
 pub(crate) const MAX_PENDING: usize = 64;
@@ -30,16 +30,17 @@ pub(crate) struct Invitations {
 
 #[derive(Debug)]
 struct Pending {
-    /// The label chosen when inviting, if any.
-    label: Option<String>,
+    grant: Grant,
     expires: DateTime<Utc>,
 }
 
-/// A redeemed invitation.
+/// What an invitation gives the device that redeems it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Redeemed {
+pub(crate) struct Grant {
     /// The label chosen when inviting, if any.
     pub(crate) label: Option<String>,
+    /// The scopes chosen when inviting (protocol 5), never empty.
+    pub(crate) scopes: Vec<Scope>,
 }
 
 /// [`MAX_PENDING`] invitations are already waiting.
@@ -51,7 +52,7 @@ impl Invitations {
     pub(crate) fn add(
         &mut self,
         secret: &InvitationSecret,
-        label: Option<String>,
+        grant: Grant,
         expires: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<(), Full> {
@@ -59,7 +60,7 @@ impl Invitations {
         if self.pending.len() >= MAX_PENDING {
             return Err(Full);
         }
-        let _replaced = self.pending.insert(key(secret), Pending { label, expires });
+        let _replaced = self.pending.insert(key(secret), Pending { grant, expires });
         Ok(())
     }
 
@@ -69,14 +70,12 @@ impl Invitations {
         &mut self,
         secret: &InvitationSecret,
         now: DateTime<Utc>,
-    ) -> Option<Redeemed> {
+    ) -> Option<Grant> {
         self.purge(now);
         self.pending
             .remove(&key(secret))
             .filter(|pending| pending.expires > now)
-            .map(|pending| Redeemed {
-                label: pending.label,
-            })
+            .map(|pending| pending.grant)
     }
 
     fn purge(&mut self, now: DateTime<Utc>) {
@@ -94,6 +93,13 @@ mod tests {
 
     use super::*;
 
+    fn grant(label: Option<&str>) -> Grant {
+        Grant {
+            label: label.map(ToOwned::to_owned),
+            scopes: Scope::DEVICE_DEFAULT.to_vec(),
+        }
+    }
+
     fn at(second: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_000_000_i64.saturating_add(second), 0).unwrap()
     }
@@ -104,15 +110,15 @@ mod tests {
         let first = InvitationSecret::from_bytes([1; 16]);
         let second = InvitationSecret::from_bytes([2; 16]);
         invitations
-            .add(&first, Some("laptop".to_owned()), at(600), at(0))
+            .add(&first, grant(Some("laptop")), at(600), at(0))
             .unwrap();
-        invitations.add(&second, None, at(600), at(0)).unwrap();
+        invitations
+            .add(&second, grant(None), at(600), at(0))
+            .unwrap();
 
         assert_eq!(
             invitations.redeem(&first, at(10)),
-            Some(Redeemed {
-                label: Some("laptop".to_owned())
-            })
+            Some(grant(Some("laptop")))
         );
         assert_eq!(invitations.redeem(&first, at(11)), None, "single use");
         assert_eq!(invitations.redeem(&second, at(600)), None, "expired");
@@ -127,11 +133,16 @@ mod tests {
         let mut invitations = Invitations::default();
         for n in 0..MAX_PENDING {
             let secret = InvitationSecret::from_bytes([u8::try_from(n).unwrap(); 16]);
-            invitations.add(&secret, None, at(60), at(0)).unwrap();
+            invitations
+                .add(&secret, grant(None), at(60), at(0))
+                .unwrap();
         }
         let extra = InvitationSecret::from_bytes([200; 16]);
-        assert_eq!(invitations.add(&extra, None, at(60), at(1)), Err(Full));
+        assert_eq!(
+            invitations.add(&extra, grant(None), at(60), at(1)),
+            Err(Full)
+        );
         let later = at(0) + TimeDelta::seconds(61);
-        assert_eq!(invitations.add(&extra, None, at(120), later), Ok(()));
+        assert_eq!(invitations.add(&extra, grant(None), at(120), later), Ok(()));
     }
 }

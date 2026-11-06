@@ -203,6 +203,7 @@ where
             Arc::clone(&self.handler),
             Arc::new(context(peer)),
             self.config.max_in_flight,
+            protocol,
         );
         let settled = CancellationToken::new();
         let reader = calls::read(
@@ -213,7 +214,14 @@ where
             settled.clone(),
             self.config.close_timeout,
         );
-        let writer = writer::write(sink, queue_rx, closing, settled, self.config.close_timeout);
+        let writer = writer::write(
+            sink,
+            protocol,
+            queue_rx,
+            closing,
+            settled,
+            self.config.close_timeout,
+        );
         let (read, write) = tokio::join!(reader, writer);
         tracing::debug!("client disconnected");
         read.and(write)

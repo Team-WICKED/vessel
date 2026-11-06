@@ -37,22 +37,18 @@ mod fixtures {
     }
 
     pub(crate) fn new_session(created: i64) -> SessionInfo {
-        SessionInfo {
-            id: SessionId::random(),
-            spec: SessionSpec {
-                harness: HarnessKind::Codex,
-                cwd: Some(PathBuf::from("/work")),
-                mode: SessionMode::Terminal {
+        SessionInfo::new(
+            SessionId::random(),
+            SessionSpec::new(
+                HarnessKind::Codex,
+                SessionMode::Terminal {
                     args: Vec::new(),
                     size: TerminalSize::default(),
                 },
-            },
-            status: SessionStatus::Starting,
-            created_at: at(created),
-            ended_at: None,
-            next_seq: EventSeq::ZERO,
-            harness_session: None,
-        }
+            )
+            .with_cwd(PathBuf::from("/work")),
+            at(created),
+        )
     }
 
     pub(crate) fn record(seq: u64, event: SessionEvent) -> Arc<EventRecord> {

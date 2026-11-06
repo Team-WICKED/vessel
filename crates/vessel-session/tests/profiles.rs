@@ -33,8 +33,8 @@ mod support {
         SessionSpec, SessionStatus, TerminalBytes, TerminalInput, TerminalSize,
     };
     use vessel_session::{
-        DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY, Follow,
-        RuntimeConfig, SessionHandle, SessionRuntime,
+        Created, DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY,
+        Follow, LaunchOptions, RuntimeConfig, SessionError, SessionHandle, SessionRuntime,
     };
     use vessel_testkit::Fake;
 
@@ -86,6 +86,20 @@ mod support {
                 CancellationToken::new(),
             );
             Self { runtime, dir }
+        }
+
+        /// Create a session as the node does: the spec names the profile
+        /// the options carry.
+        pub(super) async fn create(
+            &self,
+            spec: SessionSpec,
+            options: LaunchOptions,
+        ) -> Result<Created, SessionError> {
+            let spec = match &options.profile {
+                Some(profile) => spec.with_profile(profile.name().clone()),
+                None => spec,
+            };
+            self.runtime.create_with(spec, options).await
         }
 
         /// Where profiles point their homes.
@@ -162,28 +176,28 @@ mod support {
 
     /// Wide, so a long path never wraps in the terminal.
     pub(super) fn terminal(harness: HarnessKind) -> SessionSpec {
-        SessionSpec {
+        SessionSpec::new(
             harness,
-            cwd: Some(std::env::temp_dir()),
-            mode: SessionMode::Terminal {
+            SessionMode::Terminal {
                 args: Vec::new(),
                 size: TerminalSize {
                     cols: 1000,
                     rows: 24,
                 },
             },
-        }
+        )
+        .with_cwd(std::env::temp_dir())
     }
 
     pub(super) fn structured(resume: Option<&str>) -> SessionSpec {
-        SessionSpec {
-            harness: HarnessKind::ClaudeCode,
-            cwd: Some(std::env::temp_dir()),
-            mode: SessionMode::Structured {
+        SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Structured {
                 model: None,
                 resume: resume.map(HarnessSessionId::new),
             },
-        }
+        )
+        .with_cwd(std::env::temp_dir())
     }
 
     /// The first line of `text` holding `prefix`, from `prefix` to the end
@@ -244,7 +258,9 @@ mod support {
                 SessionEvent::Agent {
                     event: AgentEvent::TurnEnded { .. },
                 } => self.turns = self.turns.saturating_add(1),
-                SessionEvent::Agent { .. } | SessionEvent::Status { .. } => {}
+                SessionEvent::Agent { .. }
+                | SessionEvent::Status { .. }
+                | SessionEvent::ProfileChanged { .. } => {}
             }
             Some(record)
         }
@@ -333,8 +349,7 @@ async fn two_profiles_run_in_two_homes_and_unset_removes() {
         for name in ["claude-alt", "claude-work", "claude"] {
             let profile = named(&profiles, name);
             let created = fixture
-                .runtime
-                .create_with(
+                .create(
                     terminal(HarnessKind::ClaudeCode),
                     LaunchOptions {
                         profile: Some(profile.clone()),
@@ -383,8 +398,7 @@ async fn another_harness_profile_is_refused() {
         let fixture = Fixture::new();
         let profiles = profiles(fixture.homes());
         let error = fixture
-            .runtime
-            .create_with(
+            .create(
                 terminal(HarnessKind::ClaudeCode),
                 LaunchOptions {
                     profile: Some(named(&profiles, "codex-work")),
@@ -403,8 +417,7 @@ async fn another_harness_profile_is_refused() {
         assert_eq!(error.code(), ErrorCode::InvalidRequest);
         // The default of another harness, too.
         let error = fixture
-            .runtime
-            .create_with(
+            .create(
                 structured(None),
                 LaunchOptions {
                     profile: Some(Profile::default_for(HarnessKind::Codex)),
@@ -414,6 +427,24 @@ async fn another_harness_profile_is_refused() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        // A spec naming a profile the node did not resolve is the node's
+        // bug, not the client's.
+        let error = fixture
+            .runtime
+            .create_with(
+                terminal(HarnessKind::ClaudeCode).with_profile("claude-alt".parse().unwrap()),
+                LaunchOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                SessionError::Launch(HarnessError::ProfileNotRequested { .. })
+            ),
+            "{error:?}"
+        );
+        assert_eq!(error.code(), ErrorCode::Internal);
     })
     .await;
 }
@@ -423,8 +454,7 @@ async fn a_terminal_session_reads_its_servers_from_a_file_removed_with_it() {
     within(async {
         let fixture = Fixture::new();
         let created = fixture
-            .runtime
-            .create_with(
+            .create(
                 terminal(HarnessKind::ClaudeCode),
                 LaunchOptions {
                     profile: Some(named(&profiles(fixture.homes()), "claude-alt")),
@@ -474,8 +504,7 @@ async fn codex_terminals_get_values_in_the_environment_only() {
     within(async {
         let fixture = Fixture::new();
         let created = fixture
-            .runtime
-            .create_with(
+            .create(
                 terminal(HarnessKind::Codex),
                 LaunchOptions {
                     mcp_servers: servers(),
@@ -517,8 +546,7 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
             mcp_dir: None,
         };
         let created = fixture
-            .runtime
-            .create_with(structured(None), options.clone())
+            .create(structured(None), options.clone())
             .await
             .unwrap();
         drop(created.durable);
@@ -550,8 +578,7 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
 
         // Resumed: the same servers again, and the id that was loaded.
         let created = fixture
-            .runtime
-            .create_with(structured(Some("fake-session-3")), options)
+            .create(structured(Some("fake-session-3")), options)
             .await
             .unwrap();
         drop(created.durable);

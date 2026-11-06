@@ -41,18 +41,10 @@ impl Principal {
                 format!(
                     "this device may not call `{}` (it needs the `{}` scope)",
                     method.as_str(),
-                    scope_name(needed)
+                    needed.as_str()
                 ),
             )),
         }
-    }
-}
-
-const fn scope_name(scope: Scope) -> &'static str {
-    match scope {
-        Scope::Read => "read",
-        Scope::Operate => "operate",
-        Scope::Admin => "admin",
     }
 }
 

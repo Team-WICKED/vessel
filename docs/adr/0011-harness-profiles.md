@@ -13,7 +13,7 @@ therefore chose the account for every session it will ever run.
 The operator's real setup (read 2026-11-06, read-only) runs four Claude Code
 logins side by side on one machine and moves work between them:
 
-- `~/.claude`, `~/.claude-alt`, `~/.claude-alalt`, `~/.claude-alalalt`, one
+- `~/.claude` and three more configuration directories beside it, one
   per login, selected with `CLAUDE_CONFIG_DIR`.
 - In Paseo each is a provider that extends the built-in one:
   `{ "extends": "claude", "label": ..., "env": { "CLAUDE_CONFIG_DIR": ... } }`
@@ -224,6 +224,11 @@ stands.
   skipped and reported; a different file already in the target is a
   conflict. On Windows an existing target file is always a conflict, since
   `std` exposes no file id there to tell it is the same file.
+- **Launch checks the profile.** The node resolves `spec.profile` (protocol
+  5); `launch` refuses a profile of another harness (`ProfileMismatch`, the
+  client's error) and a profile other than the one the spec names, or than
+  the harness's default when it names none (`ProfileNotRequested`, the
+  node's bug), so a session never runs as another account than recorded.
 - **Launch result.** `launch` returns `Launch { command, mcp_file,
   unattached }` rather than a bare command: the caller has to write the MCP
   file and keep it for the session's life, and to know which servers a

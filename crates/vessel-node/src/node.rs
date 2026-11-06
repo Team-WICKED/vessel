@@ -130,6 +130,7 @@ impl Node {
                     rpc: Arc::clone(&rpc),
                     token: Arc::clone(&token),
                     secure: secure.clone(),
+                    keepalive: config.keepalive,
                     connections: connections.clone(),
                 }),
             )

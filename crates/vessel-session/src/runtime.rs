@@ -13,8 +13,8 @@ use tracing::Instrument as _;
 use vessel_agent::{AgentProcess, AgentSetup};
 use vessel_harness::{McpFile, Profile};
 use vessel_proto::{
-    EventRecord, EventSeq, HarnessSessionId, ModelId, ResolvedMcpServers, SessionId, SessionInfo,
-    SessionMode, SessionSpec, SessionStatus, TerminalSize,
+    EventRecord, HarnessSessionId, ModelId, ResolvedMcpServers, SessionId, SessionInfo,
+    SessionMode, SessionSpec, TerminalSize,
 };
 use vessel_pty::{PtyProcess, WindowSize};
 
@@ -67,8 +67,9 @@ pub struct SessionRuntime {
 /// - Debug shows names only: `Profile` and `ResolvedValue` redact values.
 #[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
-    /// The profile; `None` is the spec's harness's default profile (the
-    /// launch from before profiles).
+    /// The profile `spec.profile` names, resolved by the caller; `None` is
+    /// the spec's harness's default profile (the launch from before
+    /// profiles), which is right only when the spec names no profile.
     pub profile: Option<Profile>,
     /// MCP servers, values resolved. Structured sessions get them over ACP;
     /// terminal ones in the harness's launch-time form, when it has one.
@@ -320,15 +321,7 @@ impl SessionRuntime {
         input: Input,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
         let id = SessionId::random();
-        let (info, info_receiver) = watch::channel(SessionInfo {
-            id,
-            spec,
-            status: SessionStatus::Starting,
-            created_at: Utc::now(),
-            ended_at: None,
-            next_seq: EventSeq::ZERO,
-            harness_session: None,
-        });
+        let (info, info_receiver) = watch::channel(SessionInfo::new(id, spec, Utc::now()));
         let kill = self.shutdown.child_token();
         let shared = Arc::new(Shared {
             id,

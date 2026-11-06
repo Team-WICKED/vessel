@@ -133,14 +133,14 @@ pub(crate) fn client() -> ClientInfo {
 }
 
 pub(crate) fn terminal_spec(fixture: &Fixture, harness: HarnessKind) -> SessionSpec {
-    SessionSpec {
+    SessionSpec::new(
         harness,
-        cwd: Some(fixture.cwd()),
-        mode: SessionMode::Terminal {
+        SessionMode::Terminal {
             args: Vec::new(),
             size: TerminalSize::default(),
         },
-    }
+    )
+    .with_cwd(fixture.cwd())
 }
 
 /// Keys typed into a terminal session. End lines with `\r`, as a terminal
@@ -160,7 +160,9 @@ pub(crate) fn output_of(records: &[EventRecord]) -> String {
         .iter()
         .filter_map(|record| match &record.event {
             SessionEvent::Terminal(output) => Some(output.data.bytes().to_vec()),
-            SessionEvent::Status { .. } | SessionEvent::Agent { .. } => None,
+            SessionEvent::Status { .. }
+            | SessionEvent::Agent { .. }
+            | SessionEvent::ProfileChanged { .. } => None,
         })
         .flatten()
         .collect();
@@ -190,7 +192,9 @@ pub(crate) fn seqs(records: &[EventRecord]) -> Vec<u64> {
 pub(crate) fn status_of(record: &EventRecord) -> Option<&SessionStatus> {
     match &record.event {
         SessionEvent::Status { status } => Some(status),
-        SessionEvent::Terminal(_) | SessionEvent::Agent { .. } => None,
+        SessionEvent::Terminal(_)
+        | SessionEvent::Agent { .. }
+        | SessionEvent::ProfileChanged { .. } => None,
     }
 }
 
@@ -212,11 +216,11 @@ pub(crate) async fn read_all(client: &NodeClient, session: SessionId) -> Vec<Eve
 /// the model it had (the agent offers no model choice on `session/load`).
 pub(crate) fn structured_spec(fixture: &Fixture, resume: Option<HarnessSessionId>) -> SessionSpec {
     let model = resume.is_none().then(|| ModelId::new("fake-large"));
-    SessionSpec {
-        harness: HarnessKind::ClaudeCode,
-        cwd: Some(fixture.cwd()),
-        mode: SessionMode::Structured { model, resume },
-    }
+    SessionSpec::new(
+        HarnessKind::ClaudeCode,
+        SessionMode::Structured { model, resume },
+    )
+    .with_cwd(fixture.cwd())
 }
 
 pub(crate) fn prompt(text: &str) -> SessionInput {
@@ -231,7 +235,9 @@ pub(crate) fn prompt(text: &str) -> SessionInput {
 pub(crate) const fn agent_of(record: &EventRecord) -> Option<&AgentEvent> {
     match &record.event {
         SessionEvent::Agent { event } => Some(event),
-        SessionEvent::Status { .. } | SessionEvent::Terminal(_) => None,
+        SessionEvent::Status { .. }
+        | SessionEvent::Terminal(_)
+        | SessionEvent::ProfileChanged { .. } => None,
     }
 }
 

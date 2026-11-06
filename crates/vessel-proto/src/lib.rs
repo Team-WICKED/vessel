@@ -10,6 +10,7 @@
 //! - it is the only place wire types are defined.
 
 mod agent;
+mod base64_bytes;
 mod device;
 mod error;
 mod event;
@@ -40,9 +41,10 @@ pub use device::{
 pub use error::{ErrorCode, WireError};
 pub use event::{EventRecord, SessionEvent};
 pub use fleet::{
-    BlobHash, BundleFile, BundlePath, BundlePathRule, ConfigValue, Generation, HttpUrl,
-    InvalidBundlePath, InvalidHttpUrl, Manifest, McpDefinitions, McpServers, McpTransport,
-    ResolvedMcpServers, ResolvedValue,
+    BlobChunk, BlobHash, BundleFile, BundlePath, BundlePathRule, ConfigValue, FleetMember,
+    Generation, GetManifest, HttpUrl, InvalidBundlePath, InvalidHttpUrl, ListMembers, Manifest,
+    McpDefinitions, McpServers, McpTransport, ReadBlob, ReportApplied, ResolvedMcpServers,
+    ResolvedValue, WatchFleet,
 };
 pub use harness::{Harness, HarnessKind, StructuredSupport, UnknownHarness};
 pub use id::{
@@ -57,7 +59,9 @@ pub use node::{
     MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,
 };
 pub use pairing::{InvalidRoute, LinkError, OfferVersion, PairingLink, PairingOffer, RouteUrl};
-pub use profile::{AgentAuth, AgentSecret, Creator, ProfileInfo};
+pub use profile::{
+    AgentAuth, AgentSecret, Creator, ListProfiles, MoveProfile, ProfileInfo, ReloadProfiles,
+};
 pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use relay::{
@@ -84,14 +88,14 @@ mod tests {
 
     #[test]
     fn session_spec_flattens_mode() {
-        let spec = SessionSpec {
-            harness: HarnessKind::ClaudeCode,
-            cwd: Some(PathBuf::from("/work")),
-            mode: SessionMode::Structured {
+        let spec = SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Structured {
                 model: Some(ModelId::new("opus")),
                 resume: None,
             },
-        };
+        )
+        .with_cwd(PathBuf::from("/work"));
         let json = serde_json::to_string(&spec).unwrap();
         assert_eq!(
             json,

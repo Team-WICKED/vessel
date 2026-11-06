@@ -22,6 +22,11 @@ const CATCH_UP_PAGE: u32 = 500;
 
 /// Where the stream gets its next record.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one per stream, replaced in place, never queued; the live \
+              subscription is the common state, so boxing it would cost every stream"
+)]
 enum Source {
     /// A live subscription.
     Live(Subscription),

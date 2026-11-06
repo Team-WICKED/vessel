@@ -24,6 +24,10 @@ use vessel_proto::{
     Subscribed, SubscriptionEnd, TerminalBytes, TerminalInput, TerminalSize, Unsubscribe,
     WireError,
 };
+use vessel_proto::{
+    BlobChunk, FleetMember, Generation, GetManifest, ListMembers, ListProfiles, Manifest,
+    MoveProfile, ProfileInfo, ReadBlob, ReloadProfiles, ReportApplied, WatchFleet,
+};
 
 use crate::memory::{self, Disconnected, MemoryTransport};
 use crate::{
@@ -65,26 +69,27 @@ fn node() -> NodeInfo {
 }
 
 fn spec() -> SessionSpec {
-    SessionSpec {
-        harness: HarnessKind::Codex,
-        cwd: Some(PathBuf::from("/work")),
-        mode: SessionMode::Terminal {
+    SessionSpec::new(
+        HarnessKind::Codex,
+        SessionMode::Terminal {
             args: vec!["--help".to_owned()],
             size: TerminalSize::default(),
         },
-    }
+    )
+    .with_cwd(PathBuf::from("/work"))
 }
 
 fn info(id: SessionId, spec: SessionSpec) -> SessionInfo {
-    SessionInfo {
-        id,
-        spec,
-        status: SessionStatus::Running,
-        created_at: DateTime::UNIX_EPOCH,
-        ended_at: None,
-        next_seq: EventSeq::new(RECORDS),
-        harness_session: None,
-    }
+    let mut info = SessionInfo::new(id, spec, DateTime::UNIX_EPOCH);
+    info.status = SessionStatus::Running;
+    info.next_seq = EventSeq::new(RECORDS);
+    info
+}
+
+/// A session whose log holds a protocol 5 event (`ProfileChanged`), for
+/// checking what older connections receive instead.
+fn moved() -> SessionId {
+    session(97)
 }
 
 fn record(seq: u64) -> EventRecord {
@@ -212,10 +217,18 @@ impl Handler for Fake {
     }
 
     async fn read_events(&self, _: &Context, request: ReadEvents) -> Result<EventPage, WireError> {
+        let session = request.session;
         self.saw(request.into_call());
         let next = request.from.next().unwrap();
+        let mut record = record(request.from.get());
+        if session == moved() {
+            record.event = SessionEvent::ProfileChanged {
+                from: None,
+                to: Some("alt".parse().unwrap()),
+            };
+        }
         Ok(EventPage {
-            records: vec![record(request.from.get())],
+            records: vec![record],
             next,
             at_end: next.get() >= u64::from(request.limit),
         })
@@ -320,6 +333,78 @@ impl Handler for Fake {
         self.saw(request.into_call());
         Ok(Ack)
     }
+
+    async fn list_profiles(
+        &self,
+        _context: &Context,
+        request: ListProfiles,
+    ) -> Result<Vec<ProfileInfo>, WireError> {
+        self.unsupported(request)
+    }
+
+    async fn reload_profiles(
+        &self,
+        _context: &Context,
+        request: ReloadProfiles,
+    ) -> Result<Vec<ProfileInfo>, WireError> {
+        self.unsupported(request)
+    }
+
+    async fn move_profile(
+        &self,
+        _context: &Context,
+        request: MoveProfile,
+    ) -> Result<SessionInfo, WireError> {
+        self.unsupported(request)
+    }
+
+    async fn get_manifest(
+        &self,
+        _context: &Context,
+        request: GetManifest,
+    ) -> Result<Manifest, WireError> {
+        self.unsupported(request)
+    }
+
+    async fn read_blob(
+        &self,
+        _context: &Context,
+        request: ReadBlob,
+    ) -> Result<BlobChunk, WireError> {
+        self.unsupported(request)
+    }
+
+    async fn watch_fleet(
+        &self,
+        _context: &Context,
+        request: WatchFleet,
+    ) -> Result<Generation, WireError> {
+        self.unsupported(request)
+    }
+
+    async fn report_applied(
+        &self,
+        _context: &Context,
+        request: ReportApplied,
+    ) -> Result<Ack, WireError> {
+        self.unsupported(request)
+    }
+
+    async fn list_members(
+        &self,
+        _context: &Context,
+        request: ListMembers,
+    ) -> Result<Vec<FleetMember>, WireError> {
+        self.unsupported(request)
+    }
+}
+
+impl Fake {
+    /// Record a call this fake has no data for and refuse it.
+    fn unsupported<R: Request, T>(&self, request: R) -> Result<T, WireError> {
+        self.saw(request.into_call());
+        Err(WireError::new(ErrorCode::Unsupported, "not in this fake"))
+    }
 }
 
 struct Served {
@@ -398,4 +483,5 @@ async fn start(config: ClientConfig) -> Running {
 
 mod calls;
 mod lifecycle;
+mod protocol;
 mod subscriptions;

@@ -20,7 +20,7 @@ use vessel_node::Node;
 use vessel_proto::{
     EventRecord, EventSeq, HarnessKind, PairingOffer, RelayClose, RelayToken, RouteUrl, SessionId,
 };
-use vessel_relay::{LinkState, RelayConfig, TlsConfig};
+use vessel_relay::{Keepalive, LinkState, RelayConfig, TlsConfig};
 use vessel_rpc::CallError;
 use vessel_secure::NodeKeypair;
 use vessel_testkit::relay::{MisbehavingRelay, Tamper, Toward};
@@ -109,14 +109,22 @@ async fn pair(owner: &NodeClient, name: &str) -> Paired {
 type Device = Pinned<SecureConnector<WsDialer>>;
 
 fn device(paired: &Paired, direct: &[&RouteUrl], relays: &[&RouteUrl]) -> Arc<Device> {
+    device_via(dialer(), paired, direct, relays)
+}
+
+fn device_via(
+    dialer: WsDialer,
+    paired: &Paired,
+    direct: &[&RouteUrl],
+    relays: &[&RouteUrl],
+) -> Arc<Device> {
     let target = SecureTarget {
         key: paired.credential.key,
         direct: direct.iter().map(|&route| route.clone()).collect(),
         relays: relays.iter().map(|&route| route.clone()).collect(),
     };
     let node = paired.node.id;
-    let connector =
-        SecureConnector::new(dialer(), target, node, paired.credential.clone()).unwrap();
+    let connector = SecureConnector::new(dialer, target, node, paired.credential.clone()).unwrap();
     Arc::new(Pinned::new(connector, Some(node)))
 }
 
@@ -400,6 +408,146 @@ async fn a_tampering_relay_ends_the_connection_and_no_frame_gets_through() {
         }
         node.stop().await.unwrap();
         relay.stop().await;
+    })
+    .await;
+}
+
+/// A TCP forwarder that can freeze the connections it carries: they stay
+/// open but carry nothing to the client, and what the node sends is read
+/// and dropped, as on a path that went half-open (a laptop asleep, a NAT
+/// mapping gone). New connections still pass. It reports each frozen
+/// connection the node then closes.
+struct Freezer {
+    address: std::net::SocketAddr,
+    freeze: tokio::sync::watch::Sender<u64>,
+    closed_by_node: tokio::sync::mpsc::Receiver<()>,
+    task: JoinHandle<()>,
+}
+
+impl Freezer {
+    async fn start(upstream: std::net::SocketAddr) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (freeze, _) = tokio::sync::watch::channel(0_u64);
+        let (report, closed_by_node) = tokio::sync::mpsc::channel(8);
+        let generations = freeze.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((down, _peer)) = listener.accept().await {
+                let up = tokio::net::TcpStream::connect(upstream).await.unwrap();
+                let frozen = generations.subscribe();
+                drop(tokio::spawn(carry(down, up, frozen, report.clone())));
+            }
+        });
+        Self {
+            address,
+            freeze,
+            closed_by_node,
+            task,
+        }
+    }
+
+    fn route(&self) -> RouteUrl {
+        format!("ws://{}", self.address).parse().unwrap()
+    }
+
+    /// Freeze every connection open now.
+    fn freeze(&self) {
+        self.freeze
+            .send_modify(|generation| *generation = generation.saturating_add(1));
+    }
+}
+
+impl Drop for Freezer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn carry(
+    down: tokio::net::TcpStream,
+    up: tokio::net::TcpStream,
+    mut frozen: tokio::sync::watch::Receiver<u64>,
+    closed_by_node: tokio::sync::mpsc::Sender<()>,
+) {
+    use tokio::io::AsyncReadExt as _;
+    let born = *frozen.borrow();
+    let (mut down_read, mut down_write) = down.into_split();
+    let (mut up_read, mut up_write) = up.into_split();
+    let carrying = async {
+        tokio::try_join!(
+            tokio::io::copy(&mut down_read, &mut up_write),
+            tokio::io::copy(&mut up_read, &mut down_write),
+        )
+    };
+    tokio::select! {
+        _done = carrying => return,
+        _frozen = frozen.wait_for(|generation| *generation > born) => {}
+    }
+    // Frozen: the client hears nothing more; the node's pings are read and
+    // dropped until the node gives up and closes.
+    let mut sink = [0_u8; 4096];
+    while matches!(up_read.read(&mut sink).await, Ok(read) if read > 0) {}
+    let _reported = closed_by_node.send(()).await;
+    // The client's side stays open, silent, until the test ends.
+    std::future::pending::<()>().await;
+}
+
+/// P5 on a direct route: the path freezes mid-attach. The node's pings
+/// stop arriving, the client's carrier gives up after the silence limit,
+/// and the attach resumes on a new connection with nothing lost or
+/// repeated; the node, hearing no pongs, drops its end too. (Keepalive in
+/// milliseconds here; 10 s and 30 s by default.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_frozen_direct_route_is_dropped_by_keepalive_and_the_attach_resumes() {
+    within(async {
+        // Short, with room for a loaded machine: a ping is late by up to
+        // 800 ms before the quiet connection below counts as silent.
+        let fast = Keepalive {
+            ping: Duration::from_millis(200),
+            silence: Duration::from_secs(1),
+        };
+        let fixture = Fixture::new();
+        let node = fixture.start_with(|config| config.keepalive = fast).await;
+        let owner = fixture.connect(&node).await;
+        let mut offer = invite(&owner, 600).await;
+        offer.direct = vec![direct_route(&node)];
+        let (paired, _route) = pair_over(&dialer(), &offer, "laptop", RouteTimeouts::default())
+            .await
+            .unwrap();
+        let session = terminal(&fixture, &owner).await;
+
+        let mut path = Freezer::start(node.address().unwrap()).await;
+        let route = path.route();
+        let laptop = device_via(dialer().with_keepalive(fast), &paired, &[&route], &[]);
+        let mut stream =
+            follow_resuming(laptop, client(), session, EventSeq::ZERO).with_backoff(FAST);
+        let (mut records, mut notices) = (Vec::new(), Vec::new());
+        until(&mut stream, &mut records, &mut notices, "> ").await;
+        // Quiet past the silence limit: the node's pings keep it up.
+        tokio::time::sleep(fast.silence.saturating_mul(2)).await;
+        owner.send(session, keys("before\r")).await.unwrap();
+        until(&mut stream, &mut records, &mut notices, "echo: before").await;
+        assert!(notices.is_empty(), "{notices:?}");
+
+        path.freeze();
+        owner.send(session, keys("after\r")).await.unwrap();
+        until(&mut stream, &mut records, &mut notices, "echo: after").await;
+        assert!(gap_free(&records), "{:?}", seqs(&records));
+        assert!(
+            matches!(
+                notices.as_slice(),
+                [
+                    StreamError::Reconnecting { attempt: 1, .. },
+                    StreamError::Resumed { .. }
+                ]
+            ),
+            "{notices:?}"
+        );
+        assert!(
+            path.closed_by_node.recv().await.is_some(),
+            "the node dropped the frozen connection"
+        );
+        node.stop().await.unwrap();
     })
     .await;
 }

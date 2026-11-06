@@ -37,6 +37,11 @@ use crate::error::ServiceError;
 use crate::persist::{self, Durability, Persisted};
 
 /// Where a session was found.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "returned once per lookup and matched at once, never queued or \
+              stored; boxing would add an allocation to every lookup"
+)]
 pub(crate) enum Found {
     /// Created in this run and not yet handed over to the store.
     Live {
