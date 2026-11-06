@@ -527,6 +527,22 @@ reproduced problems, fixed in this order:
     every existing node's id, so it needs a protocol version and a
     migration (an alias table on homes and in node books); not for
     milestone 4.
+- **2 (medium): revoking the home's device on a member did not hold.** The
+  pull loop made a new grant on every connection whose recorded device was
+  revoked, so a restart, or a home dropping the connection, gave the home
+  its access back. A member now grants once per join (`granted.json`
+  records the join it was made for): after a revocation the home stays
+  cut off until the node joins again (`e2e/grants.rs`).
+- **4 (medium-low): devices for a home without a record.** A home switch
+  could delete the next home's fresh record (`reconcile` deleted the file
+  unconditionally), and a grant failing after the home redeemed the link
+  left a device nobody recorded. Grants and `reconcile` now take one
+  lock; a record is deleted only if it still names the revoked device; a
+  failed grant withdraws its invitation and revokes the device it made;
+  and `reconcile` revokes every live device labelled for a fleet home
+  (`fleet home <id>`, reserved: a device paired by hand under such a label
+  is revoked too) that is not the one on record (`e2e/grants.rs`: one
+  paired by hand, and one left by a grant the home refused after pairing).
 - **6 (low): a grant made the home dial any routes.** A link names at most
   8 routes, and a failure to pair answers in general terms; the details go
   to the home's log (`e2e/grants.rs`).
@@ -585,7 +601,7 @@ Envelope (Track X):
 | `fleet.forward` | Read | `Forward { node: NodeId, call: Call }` → `Forwarded { reply: Reply }` | A client (CLI, device, agent) asks its own node to run `call` on fleet node `node`. The node checks `call`'s own row scope (and, for an agent, the ownership and limits it can check locally) against the caller, as if the call were local, builds the `Origin` (below), and sends `fleet.relay` to its home (or, on the home, `fleet.deliver` to the member). `node` equal to the node itself runs the call locally. |
 | `fleet.relay` | Relay | `RelayCall { node, call, origin: Origin }` → `Forwarded` | A member asks the home to pass a call on. The home refuses an `origin.node` other than the member's own node (a member speaks only for its own principals), then sends `fleet.deliver` to `node` with its credential there, or, when `node` is the home itself, runs the call as `fleet.deliver` would. |
 | `fleet.deliver` | Read | `Deliver { call, origin }` → `Forwarded` | The home asks a member to run a call on behalf of `origin`. The member runs it as a delegated principal (below), and accepts it only from its home's device (the one `fleet.grant` made). Never passed on: delivering is the last hop, so there are no loops and at most two hops. |
-| `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member. |
+| `fleet.grant` | Sync | `GrantHome { link: PairingLink }` → `Ack` | The mutual grant (ADR 0012): a member hands the home a single-use pairing link to itself, made with its own `device.invite` and the scopes its owner chose (`vessel fleet join --grant`, default `read`, `operate`). The home redeems it over the link's routes like any device (ADR 0010) and keeps the credential. Revoking it on the member cuts the home off from that member until the member joins again (a member grants once per join). |
 | `fleet.peers` | Sync | `ListPeers` → `Vec<FleetNode>` | The home's view of the fleet for members: `FleetNode { node, name, protocol, reachable }`, the home included. |
 | `fleet.nodes` | Read | `ListNodes` → `Vec<FleetNode>` | What any node knows of its fleet (a member asks its home with `fleet.peers`); the agents' `list_nodes`. |
 
