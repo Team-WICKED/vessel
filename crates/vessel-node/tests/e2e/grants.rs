@@ -1,0 +1,409 @@
+//! Who a member device speaks for on its home (protocol 6, the review of
+//! 2026-11-06): a grant names a node by an id the node chose, so the home
+//! binds each member device to the id and key of its first grant and
+//! refuses grants that would let one node stand in for another.
+//!
+//! The first test is the review's proof of concept turned around: a
+//! device holding only `sync` (what every member's device holds) grants a
+//! link from a stock node whose `node.id` names another member. Before the
+//! fix the home kept it, listed that member twice, and its calls to the
+//! member went to the impostor.
+
+use std::time::Duration;
+
+use chrono::Utc;
+use vessel_client::secure::{RouteTimeouts, pair_over};
+use vessel_client::{Connector as _, NodeClient};
+use vessel_node::fleet::{self, DEFAULT_GRANT, FleetFiles};
+use vessel_proto::{
+    ErrorCode, GrantHome, HarnessKind, ListPeers, ListSessions, PairingLink, PairingOffer,
+    RouteUrl, Scope,
+};
+
+use crate::across::{Member, home, member_granting};
+use crate::agents::vessel_mcp;
+use crate::fleet::fleet_config;
+use crate::secure::{Relay, closed_route, device_via, dialer, relayed_with};
+use crate::support::{Fixture, client, structured_spec, within};
+
+/// A node of its own on `relay`, named `name`, whose `node.id` is `id`
+/// when given (a stock node: only the file differs).
+async fn stock_node(
+    relay: &Relay,
+    name: &str,
+    id: Option<vessel_proto::NodeId>,
+) -> (Fixture, vessel_node::Node, NodeClient) {
+    let fixture = Fixture::new();
+    if let Some(id) = id {
+        std::fs::write(fixture.cwd().join("node.id"), format!("{id}\n")).unwrap();
+    }
+    let node = relayed_with(&fixture, &[&relay.url], |config| {
+        config.name = Some(name.to_owned());
+    })
+    .await;
+    let owner = fixture.connect(&node).await;
+    (fixture, node, owner)
+}
+
+/// A link to `owner`'s node, as a member grants its home.
+async fn link(owner: &NodeClient, label: &str) -> PairingLink {
+    owner
+        .invite_with_scopes(
+            Some(label.to_owned()),
+            600,
+            vec![Scope::Read, Scope::Operate],
+        )
+        .await
+        .unwrap()
+        .link
+}
+
+/// A link that claims node `id`, from a node holding another key, and that
+/// node (kept running while the link is used). On Unix it is the review's
+/// impostor, a stock node whose `node.id` holds `id`. On Windows two nodes
+/// of one id cannot run on one machine (the id names the node's pipe), so
+/// there it is another node's link rewritten to name `id`: the home
+/// refuses the claim before it dials, either way.
+async fn impostor_link(
+    relay: &Relay,
+    id: vessel_proto::NodeId,
+) -> (Fixture, vessel_node::Node, PairingLink) {
+    #[cfg(unix)]
+    {
+        let (fixture, node, owner) = stock_node(relay, "desktop-too", Some(id)).await;
+        assert_eq!(node.info().id, id);
+        let link = link(&owner, "bait").await;
+        (fixture, node, link)
+    }
+    #[cfg(not(unix))]
+    {
+        let (fixture, node, owner) = stock_node(relay, "desktop-too", None).await;
+        let mut offer = link(&owner, "bait").await.decode().unwrap();
+        offer.node = id;
+        (fixture, node, PairingLink::encode(&offer).unwrap())
+    }
+}
+
+/// A device on `home` with only `sync`, connected.
+async fn sync_device(
+    relay: &Relay,
+    home: &Member,
+) -> std::sync::Arc<impl vessel_client::Connector> {
+    let offer = home
+        .owner
+        .invite_with_scopes(Some("someone".to_owned()), 600, vec![Scope::Sync])
+        .await
+        .unwrap()
+        .link
+        .decode()
+        .unwrap();
+    let (paired, _route) = pair_over(&dialer(), &offer, "someone", RouteTimeouts::default())
+        .await
+        .unwrap();
+    device_via(dialer(), &paired, &[], &[&relay.url])
+}
+
+fn code<T: std::fmt::Debug>(result: Result<T, vessel_rpc::CallError>) -> (ErrorCode, String) {
+    match result {
+        Err(vessel_rpc::CallError::Remote(error)) => (error.code, error.message),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_device_cannot_speak_for_another_members_node() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let someone = sync_device(&relay, &home)
+            .await
+            .connect(client())
+            .await
+            .unwrap();
+        let victim = member_granting(
+            &relay,
+            &home,
+            "desktop",
+            vec![Scope::Sync],
+            DEFAULT_GRANT.to_vec(),
+        )
+        .await;
+        let theirs = victim
+            .owner
+            .create_session(structured_spec(&victim.fixture, None))
+            .await
+            .unwrap();
+
+        // A stock node claiming the victim's id: refused, and the victim
+        // is still the one the home lists and reaches.
+        let (_fixture, _impostor, bait) = impostor_link(&relay, victim.id()).await;
+        let refused = someone.call(GrantHome { link: bait }).await;
+        let (refusal, message) = code(refused);
+        assert_eq!(refusal, ErrorCode::Conflict, "{message}");
+        let peers = home.owner.call(ListPeers).await.unwrap();
+        assert_eq!(
+            peers.iter().filter(|peer| peer.node == victim.id()).count(),
+            1,
+            "{peers:?}"
+        );
+        let listed = home.owner.call_on(victim.id(), ListSessions).await.unwrap();
+        assert!(
+            listed.iter().any(|session| session.id == theirs.id),
+            "{listed:?}"
+        );
+
+        // The device's own node is granted; then that device keeps it.
+        let (_fixture, _own, own) = stock_node(&relay, "tablet", None).await;
+        let _ack = someone
+            .call(GrantHome {
+                link: link(&own, "home").await,
+            })
+            .await
+            .unwrap();
+        let (_fixture, _other, other) = stock_node(&relay, "phone", None).await;
+        let (refusal, message) = code(
+            someone
+                .call(GrantHome {
+                    link: link(&other, "home").await,
+                })
+                .await,
+        );
+        assert_eq!(refusal, ErrorCode::Conflict, "{message}");
+        assert!(message.contains("never changes"), "{message}");
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// A grant's link names the routes the home dials: a few, and a failure to
+/// pair says nothing about them to the device that sent it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_grant_cannot_make_the_home_dial_where_it_likes() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let someone = sync_device(&relay, &home)
+            .await
+            .connect(client())
+            .await
+            .unwrap();
+        let (_fixture, _node, owner) = stock_node(&relay, "tablet", None).await;
+        let offer: PairingOffer = link(&owner, "home").await.decode().unwrap();
+        let closed = closed_route().await;
+        let rerouted = |direct: Vec<RouteUrl>| {
+            let mut offer = offer.clone();
+            offer.direct = direct;
+            offer.relays = Vec::new();
+            PairingLink::encode(&offer).unwrap()
+        };
+
+        let many = someone
+            .call(GrantHome {
+                link: rerouted(vec![closed.clone(); 9]),
+            })
+            .await;
+        let (refusal, message) = code(many);
+        assert_eq!(refusal, ErrorCode::InvalidRequest, "{message}");
+        let unreachable = someone
+            .call(GrantHome {
+                link: rerouted(vec![closed.clone()]),
+            })
+            .await;
+        let (refusal, message) = code(unreachable);
+        assert_eq!(refusal, ErrorCode::Unavailable, "{message}");
+        let port = closed
+            .as_str()
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .trim_end_matches('/');
+        assert!(
+            !message.contains("127.0.0.1") && !message.contains(port),
+            "the refusal describes the route: {message}"
+        );
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// The live devices `owner`'s node made for a fleet home.
+async fn home_devices(owner: &NodeClient) -> Vec<vessel_proto::DeviceId> {
+    owner
+        .devices()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|device| device.revoked_at.is_none() && device.label.starts_with("fleet home "))
+        .map(|device| device.id)
+        .collect()
+}
+
+/// Wait until `member`'s device on `home` reported after `since`: its pull
+/// loop connected again and got past granting (which comes first).
+async fn reported_after(home: &Member, label: &str, since: chrono::DateTime<Utc>) {
+    for _ in 0..800 {
+        let members = home.owner.fleet_members().await.unwrap();
+        if members
+            .iter()
+            .any(|member| member.label == label && member.reported_at.is_some_and(|at| at > since))
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("{label} never reported again");
+}
+
+/// The review's item 2: the member's owner revokes the home's device; a
+/// restart (or a home dropping the connection) used to grant a new one.
+/// Joining again is what grants again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_the_homes_device_on_a_member_holds_until_it_joins_again() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let member = member_granting(
+            &relay,
+            &home,
+            "desktop",
+            vec![Scope::Sync],
+            DEFAULT_GRANT.to_vec(),
+        )
+        .await;
+        assert!(home.owner.call_on(member.id(), ListSessions).await.is_ok());
+        let granted = home_devices(&member.owner).await;
+        assert_eq!(granted.len(), 1, "{granted:?}");
+        member.owner.revoke_device(granted[0]).await.unwrap();
+        assert!(home.owner.call_on(member.id(), ListSessions).await.is_err());
+
+        // A restart: the pull loop connects and reports again, and grants
+        // nothing.
+        let Member { fixture, node, .. } = member;
+        let id = node.info().id;
+        node.stop().await.unwrap();
+        let restarted_at = Utc::now();
+        let applied = fixture.cwd().join("member-codex");
+        let node = relayed_with(&fixture, &[&relay.url], |config| {
+            config.name = Some("desktop".to_owned());
+            config.fleet = fleet_config(HarnessKind::Codex, applied);
+            config.vessel_mcp = Some(vessel_mcp(&fixture));
+        })
+        .await;
+        reported_after(&home, "desktop", restarted_at).await;
+        let owner = fixture.connect(&node).await;
+        assert!(home_devices(&owner).await.is_empty());
+        assert!(home.owner.call_on(id, ListSessions).await.is_err());
+
+        // Leaving and joining again grants again.
+        assert!(fleet::leave(&FleetFiles::new(&fixture.data_dir())).unwrap());
+        let offer = home
+            .owner
+            .invite_with_scopes(Some("desktop".to_owned()), 600, vec![Scope::Sync])
+            .await
+            .unwrap()
+            .link
+            .decode()
+            .unwrap();
+        let _joined = fleet::join(
+            &FleetFiles::new(&fixture.data_dir()),
+            &offer,
+            "desktop",
+            DEFAULT_GRANT.to_vec(),
+        )
+        .await
+        .unwrap();
+        let mut back = false;
+        for _ in 0..800 {
+            if home.owner.call_on(id, ListSessions).await.is_ok() {
+                back = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(back, "joining again did not grant the home access");
+        assert_eq!(home_devices(&owner).await.len(), 1);
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// The review's item 4: a device made for a fleet home that the member has
+/// no record of is revoked, whether a grant failed after the home redeemed
+/// it (here: the home refuses a second member named like the first) or it
+/// came from anywhere else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_keeps_no_device_for_a_home_it_has_no_record_of() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let first = member_granting(
+            &relay,
+            &home,
+            "desktop",
+            vec![Scope::Sync],
+            DEFAULT_GRANT.to_vec(),
+        )
+        .await;
+
+        // Paired by hand under the reserved label: swept.
+        let offer = first
+            .owner
+            .invite_device(Some(format!("fleet home {}", home.id())), 600)
+            .await
+            .unwrap()
+            .link
+            .decode()
+            .unwrap();
+        let (_paired, _route) = pair_over(&dialer(), &offer, "stray", RouteTimeouts::default())
+            .await
+            .unwrap();
+        let mut swept = false;
+        for _ in 0..800 {
+            if home_devices(&first.owner).await.len() == 1 {
+                swept = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(swept, "{:?}", home_devices(&first.owner).await);
+        assert!(home.owner.call_on(first.id(), ListSessions).await.is_ok());
+
+        // A second node named like the first: the home pairs with it, then
+        // refuses the grant; the device it made there is revoked at once.
+        let fixture = Fixture::new();
+        let applied = fixture.cwd().join("member-codex");
+        let second = relayed_with(&fixture, &[&relay.url], |config| {
+            config.name = Some("desktop".to_owned());
+            config.fleet = fleet_config(HarnessKind::Codex, applied);
+        })
+        .await;
+        let since = Utc::now();
+        let offer = home
+            .owner
+            .invite_with_scopes(Some("other desktop".to_owned()), 600, vec![Scope::Sync])
+            .await
+            .unwrap()
+            .link
+            .decode()
+            .unwrap();
+        let _joined = fleet::join(
+            &FleetFiles::new(&fixture.data_dir()),
+            &offer,
+            "other desktop",
+            DEFAULT_GRANT.to_vec(),
+        )
+        .await
+        .unwrap();
+        reported_after(&home, "other desktop", since).await;
+        let owner = fixture.connect(&second).await;
+        assert!(home_devices(&owner).await.is_empty());
+        let refused = home.owner.call_on(second.info().id, ListSessions).await;
+        assert!(refused.is_err(), "{refused:?}");
+        relay.stop().await;
+    })
+    .await;
+}

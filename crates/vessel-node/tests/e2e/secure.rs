@@ -94,7 +94,7 @@ pub(crate) async fn relayed_with(
     node
 }
 
-fn dialer() -> WsDialer {
+pub(crate) fn dialer() -> WsDialer {
     WsDialer::new(TlsConfig::with_roots(rustls::RootCertStore::empty()).unwrap())
 }
 
@@ -122,7 +122,7 @@ fn device(paired: &Paired, direct: &[&RouteUrl], relays: &[&RouteUrl]) -> Arc<De
     device_via(dialer(), paired, direct, relays)
 }
 
-fn device_via(
+pub(crate) fn device_via(
     dialer: WsDialer,
     paired: &Paired,
     direct: &[&RouteUrl],
@@ -143,7 +143,7 @@ fn direct_route(node: &Node) -> RouteUrl {
 }
 
 /// A loopback address nothing listens on.
-async fn closed_route() -> RouteUrl {
+pub(crate) async fn closed_route() -> RouteUrl {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);

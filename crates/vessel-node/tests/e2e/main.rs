@@ -12,6 +12,8 @@ mod agents;
 #[cfg(test)]
 mod fleet;
 #[cfg(test)]
+mod grants;
+#[cfg(test)]
 mod isolation;
 #[cfg(test)]
 mod local;
@@ -36,3 +38,5 @@ mod terminal;
 mod transfers;
 #[cfg(test)]
 mod transfers_across;
+#[cfg(test)]
+mod waiting;

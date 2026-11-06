@@ -28,7 +28,11 @@ use crate::secure::{MAX_UNADMITTED, NotServed};
 use crate::{Config, Node};
 
 async fn node() -> (TempDir, Node) {
-    let temp = tempfile::tempdir().unwrap();
+    node_in(tempfile::tempdir().unwrap()).await
+}
+
+/// A node with its data directory at `<temp>/data`.
+async fn node_in(temp: TempDir) -> (TempDir, Node) {
     let mut config = Config::new(
         DataDir::new(temp.path().join("data")),
         vessel_harness::HarnessEnv::new(temp.path().join("user")),
@@ -509,29 +513,12 @@ async fn relaying_needs_its_own_scope_and_a_missing_secret_is_not_copied() {
 /// (the one its grant made), as that device cut down to the origin.
 #[tokio::test]
 async fn a_member_takes_delivered_calls_from_its_home_device_only() {
-    let (temp, node) = node().await;
-    let mut devices = Vec::new();
-    for label in ["fleet home", "phone"] {
-        let device = DeviceInfo {
-            id: DeviceId::random(),
-            label: label.to_owned(),
-            created_at: Utc::now(),
-            last_seen: None,
-            scopes: vec![Scope::Read, Scope::Operate],
-            revoked_at: None,
-        };
-        let secret = DeviceSecret::from_bytes([5; 32]);
-        node.secure
-            .devices
-            .store
-            .add_device(device.clone(), CredentialHash::of(&secret))
-            .await
-            .unwrap();
-        devices.push((device.id, secret));
-    }
     // A member of a home it granted the first device to, as `links` and
-    // `vessel fleet join` would have left it.
+    // `vessel fleet join` would have left it: written before the node
+    // starts, so its fleet loop never looks at them half written.
+    let ids = [DeviceId::random(), DeviceId::random()];
     let home = NodeId::random();
+    let temp = tempfile::tempdir().unwrap();
     let fleet = temp.path().join("data").join("fleet");
     std::fs::create_dir_all(&fleet).unwrap();
     let key = *NodeKeypair::generate().unwrap().public();
@@ -550,13 +537,38 @@ async fn a_member_takes_delivered_calls_from_its_home_device_only() {
         fleet.join("granted.json"),
         serde_json::json!({
             "home": home,
-            "device": devices[0].0,
+            "device": ids[0],
             "scopes": ["read", "operate"],
             "since": Utc::now(),
         })
         .to_string(),
     )
     .unwrap();
+    let (_temp, node) = node_in(temp).await;
+    // The home's device under the label its grant gives it, which the
+    // fleet loop keeps because it is the one on record.
+    let mut devices = Vec::new();
+    for (id, label) in ids
+        .into_iter()
+        .zip([format!("fleet home {home}"), "phone".to_owned()])
+    {
+        let device = DeviceInfo {
+            id,
+            label,
+            created_at: Utc::now(),
+            last_seen: None,
+            scopes: vec![Scope::Read, Scope::Operate],
+            revoked_at: None,
+        };
+        let secret = DeviceSecret::from_bytes([5; 32]);
+        node.secure
+            .devices
+            .store
+            .add_device(device.clone(), CredentialHash::of(&secret))
+            .await
+            .unwrap();
+        devices.push((device.id, secret));
+    }
     let home_device = authenticate(&node, devices[0].0, &devices[0].1)
         .await
         .unwrap();

@@ -58,6 +58,9 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }
+# An agent's `vessel` tools driven across a fleet (e2e `across`). Not a
+# cycle: vessel-mcp itself needs only vessel-client and vessel-proto.
+vessel-mcp.workspace = true
 # The misbehaving relay (feature `relay`) for the secure e2e tests.
 vessel-testkit = { workspace = true, features = ["relay"] }
 

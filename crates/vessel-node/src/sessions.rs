@@ -309,10 +309,15 @@ impl Sessions {
     /// - Purpose: an agent waits for another node's session to finish a
     ///   turn without a subscription across hops (ADR 0013: a long poll,
     ///   as `fleet.watch`).
-    /// - Choice: wait on the session's info, whose `next_seq` moves with
-    ///   every record and whose status says when it ended; then read as
-    ///   usual, so the page is the same as without waiting. An ended or
-    ///   stored session answers at once.
+    /// - Choice: follow the session's ring from `from` and wait for its
+    ///   first record there, or for the live stream to close (the session
+    ///   ended); then read as usual, so the page is the same as without
+    ///   waiting. Records already at `from`, an ended or stored session,
+    ///   and a `from` the read refuses all answer at once.
+    /// - Not the info watch: `next_seq` there moves with every record but
+    ///   does not notify (that would wake every info watcher on every
+    ///   event), so a wait on it slept through a turn's records until a
+    ///   status changed or the wait ran out.
     /// - Bound: the caller caps `wait` ([`ReadEvents::MAX_WAIT`]), so a
     ///   waiting call holds one of the connection's call slots for at most
     ///   a minute.
@@ -325,21 +330,13 @@ impl Sessions {
         limit: u32,
         wait: std::time::Duration,
     ) -> Result<EventPage, ServiceError> {
-        if let Found::Live { handle, .. } = self.find(id).await? {
-            let mut info = handle.watch_info();
-            let waited = tokio::time::timeout(wait, async {
-                loop {
-                    let (next, live) = {
-                        let current = info.borrow_and_update();
-                        (current.next_seq, current.status.is_live())
-                    };
-                    if next > from || !live || info.changed().await.is_err() {
-                        return;
-                    }
-                }
-            })
-            .await;
-            if waited.is_err() {
+        if let Found::Live { handle, .. } = self.find(id).await?
+            && let Ok(follow) = handle.follow(from)
+            && follow.cached.is_empty()
+        {
+            // A record, a lag (records landed) or the end: read now.
+            let mut live = follow.live;
+            if tokio::time::timeout(wait, live.recv()).await.is_err() {
                 tracing::trace!(session = %id, "a waiting read found nothing new");
             }
         }

@@ -37,7 +37,16 @@ yet", after the scope check like every method.)
   on the member, so the home holds a credential there (a member's node
   sends it when it connects, with the scopes chosen at join, `read` and
   `operate` by default; the device the home's redemption creates is the
-  only one the member takes `fleet.deliver` from, and leaving revokes it); `fleet.peers`
+  only one the member takes `fleet.deliver` from, and leaving revokes it).
+  A member grants once per join: if its owner revokes the home's device,
+  the home stays cut off until the node joins again.
+  The home binds a member device to the node id and key of its first
+  grant and answers `conflict` to a grant that would rebind it, that
+  names an id or key another member device's grant holds, the home's own
+  id, or a name the home or another member uses (the same id and key
+  through another device is the node joined again, and replaces the older
+  grant); `invalid_request` to a link with no route or more than 8; and
+  `unavailable`, without details, when it cannot pair; `fleet.peers`
   (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
   `protocol`, `reachable`), the home included.
 - Transfers (F4): `session.export { session, force? }` (operate,
@@ -89,8 +98,13 @@ yet", after the scope check like every method.)
   its members only `sync` and `relay`, is `forbidden` with a pointer to
   `vessel fleet secret set` there. No error carries a value.
 - `session.read` takes `wait?` (seconds, capped at 60, protocol 6): with
-  nothing at `from` yet, the node answers when something arrives or the
-  wait ends (an empty page).
+  nothing at `from` yet, the node answers as soon as a record lands there
+  or the session ends, or when the wait ends (an empty page). An ended or
+  stored session answers at once. Waiting reads may hold at most half of a
+  connection's calls (32 of 64), and one origin at most 8 on a node; a
+  read past either answers at once, as without `wait` (passed on to
+  another node, it goes without its wait). A client that gets an empty
+  page before its wait could have ended should pause before asking again.
 - `SessionInfo` takes `via?` (the home a creating call came through) and
   `origin?`: `{"kind":"remote","node","by"}` (`by` owner or `{"kind":
   "device","id"}`) for a session created by a forwarded call, `{"kind":

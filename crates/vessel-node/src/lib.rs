@@ -80,6 +80,7 @@ mod shutdown;
 mod subscribe;
 mod transfers;
 mod transport;
+mod waits;
 
 pub use config::{Config, VesselMcp};
 
