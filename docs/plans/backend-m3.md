@@ -418,7 +418,32 @@ Owns `vessel-store`, `vessel-node`, `vessel-client` and `vessel-cli` changes.
   `ARCHITECTURE.md`, `README.md` and `docs/ROADMAP.md` describe relays and
   pairing.
 
-## Open decisions
+## Decisions (coordinator, 2026-11-06)
+
+All eight proposals below are accepted as written:
+
+1. **TLS for `wss://` relays:** `rustls` with the `ring` provider, installed
+   explicitly at startup (the M1 panic came from a missing provider), and the
+   OS root certificates. This lets a relay sit behind an existing HTTPS
+   proxy on 443, which is how TeamWicked would host it (Cloudflare and nginx
+   in front of ingwprox1).
+2. **QR codes:** `qrcode` 0.14 with default features off.
+3. **Short typeable codes:** not in M3. A short code cannot carry a key, so it
+   would need a PAKE.
+4. **Relay registration:** one token per relay for nodes; clients need none
+   and are rate limited.
+5. **Default relay:** none built in; configured per node.
+6. **Route order:** direct first with a 3 s timeout, then relays in order.
+7. **Invitations:** in memory; a node restart voids pending ones.
+8. **`snow` without a formal audit:** accepted. Its primitives are audited,
+   and the published NK vectors plus our tamper and fuzz tests cover the
+   composition.
+
+ADRs 0009 and 0010 are accepted with these decisions. The protocol 4 contract
+(below) is the coordinator's next change. Tracks start after it lands on
+`backend/m3`.
+
+## Open decisions (as drafted, kept for the record)
 
 1. **TLS for `wss://` relays.**
    - Proposed: `rustls` with the `ring` crypto provider and the OS's root
