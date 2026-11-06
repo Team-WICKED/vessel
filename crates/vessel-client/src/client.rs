@@ -1,11 +1,12 @@
 //! [`NodeClient`]: one typed method per protocol call.
 
 use vessel_proto::{
-    ClientInfo, CreateSession, DeviceId, DeviceInfo, EventPage, EventSeq, GetNode, GetSession,
-    Harness, HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
-    ListProfiles, ListSessions, MoveProfile, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion,
-    ReadEvents, ReloadProfiles, RevokeDevice, SendInput, SessionId, SessionInfo, SessionInput,
-    SessionSpec, StopNode, StopWhen, Subscribe,
+    BlobChunk, BlobHash, BundlePath, ClientInfo, CreateSession, DeviceId, DeviceInfo, EventPage,
+    EventSeq, FleetMember, Generation, GetManifest, GetNode, GetSession, Harness, HarnessKind,
+    Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles,
+    ListSessions, Manifest, MoveProfile, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion,
+    ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice, Scope, SendInput, SessionId,
+    SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen, Subscribe, WatchFleet,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 
@@ -265,6 +266,89 @@ impl NodeClient {
     /// protocol 5; otherwise see [`CallError`].
     pub async fn reload_profiles(&self) -> Result<Vec<ProfileInfo>, CallError> {
         self.connection.call(ReloadProfiles).await
+    }
+
+    /// `fleet.manifest` (ADR 0012): the home's current bundle. Needs the
+    /// `sync` scope.
+    ///
+    /// # Errors
+    /// `Unavailable` from a node that is not a fleet home or has no bundle
+    /// yet; `Unsupported` on a node before protocol 5; otherwise see
+    /// [`CallError`].
+    pub async fn fleet_manifest(&self) -> Result<Manifest, CallError> {
+        self.connection.call(GetManifest).await
+    }
+
+    /// `fleet.blob`: up to 1 MiB of blob `hash` from `offset`, and the
+    /// blob's size. Needs the `sync` scope.
+    ///
+    /// # Errors
+    /// `NotFound` for a blob the current bundle does not have (it may have
+    /// changed: fetch the manifest again); `InvalidRequest` for an offset
+    /// past the end; otherwise see [`CallError`].
+    pub async fn fleet_blob(&self, hash: BlobHash, offset: u64) -> Result<BlobChunk, CallError> {
+        self.connection.call(ReadBlob { hash, offset }).await
+    }
+
+    /// `fleet.watch`: wait for a generation other than `after`; the home
+    /// answers with its current one when its wait limit (about 50 s)
+    /// passes. Needs the `sync` scope.
+    ///
+    /// # Errors
+    /// As [`fleet_manifest`](Self::fleet_manifest).
+    pub async fn fleet_watch(&self, after: Generation) -> Result<Generation, CallError> {
+        self.connection.call(WatchFleet { after }).await
+    }
+
+    /// `fleet.report`: this member applied `generation`, leaving
+    /// `conflicts` as they are. Needs the `sync` scope, as a paired device.
+    ///
+    /// # Errors
+    /// `InvalidRequest` from anything but a paired device; otherwise see
+    /// [`CallError`].
+    pub async fn fleet_report(
+        &self,
+        generation: Generation,
+        conflicts: Vec<BundlePath>,
+    ) -> Result<(), CallError> {
+        self.connection
+            .call(ReportApplied {
+                generation,
+                conflicts,
+            })
+            .await
+            .map(drop)
+    }
+
+    /// `fleet.members`: the home's members and what each last reported.
+    /// Needs the `admin` scope.
+    ///
+    /// # Errors
+    /// `Unsupported` on a node before protocol 5; otherwise see
+    /// [`CallError`].
+    pub async fn fleet_members(&self) -> Result<Vec<FleetMember>, CallError> {
+        self.connection.call(ListMembers).await
+    }
+
+    /// `device.invite` with explicit `scopes` (protocol 5): `[sync]` makes
+    /// a link for a node joining this fleet's home.
+    ///
+    /// # Errors
+    /// `CallError::NotInProtocol` on a node before protocol 5; otherwise
+    /// as [`invite_device`](Self::invite_device).
+    pub async fn invite_with_scopes(
+        &self,
+        label: Option<String>,
+        ttl_secs: u32,
+        scopes: Vec<Scope>,
+    ) -> Result<Invitation, CallError> {
+        self.connection
+            .call(InviteDevice {
+                label,
+                ttl_secs,
+                scopes: Some(scopes),
+            })
+            .await
     }
 
     /// `session.move_profile` (ADR 0011): the structured session `session`
