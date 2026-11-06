@@ -31,6 +31,9 @@ jobs:
       # build of that set compiles about 30 crates, and doing it here keeps
       # it out of the test timings (see vessel_testkit::within).
       - run: cargo build -p vessel-testkit --bins
+      # The node binary for tests outside vessel-node (vessel_testkit::vesseld),
+      # under vessel-node's own feature set, for the same reason.
+      - run: cargo build -p vessel-node --bin vesseld
       # Every test binary runs even after one fails, so a single failure
       # does not hide the state of the rest (on Windows it hid all of it).
       - run: cargo test --workspace --no-fail-fast
