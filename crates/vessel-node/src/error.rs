@@ -182,6 +182,10 @@ pub(crate) enum ServiceError {
     /// stay.
     #[error("the profiles in effect stay")]
     Profiles(#[source] ProfilesFileError),
+    /// A transfer could not be opened, read, pulled or placed (protocol
+    /// 6).
+    #[error(transparent)]
+    Transfer(#[from] crate::transfers::TransferError),
 }
 
 impl ServiceError {
@@ -210,6 +214,7 @@ impl ServiceError {
             | Self::UnknownProfile(_)
             | Self::ProfileHarness { .. } => ErrorCode::InvalidRequest,
             Self::Session(error) => error.code(),
+            Self::Transfer(error) => error.code(),
             Self::Store(error) | Self::Profiles(ProfilesFileError::Read(error)) => error.code(),
             Self::Outbound(error) => error.code(),
             Self::Unpersisted(_)

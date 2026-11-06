@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use vessel_client::{LocalConnectError, LocalCredential, NodeClient, SessionStream};
 use vessel_node::VesselMcp;
 use vessel_proto::{
-    AgentAuth, AgentSecret, Creator, ErrorCode, EventRecord, EventSeq, HarnessKind, SessionId,
-    SessionStatus, StopWhen,
+    AgentAuth, AgentSecret, Creator, ErrorCode, EventRecord, EventSeq, HarnessKind, ImportSession,
+    SessionId, SessionRef, SessionStatus, StopWhen,
 };
 use vessel_rpc::{CallError, ConnectError};
 
@@ -144,6 +144,22 @@ async fn an_agent_drives_the_sessions_it_started_and_no_others() {
         let theirs = structured(&owner, &fixture).await;
         assert_eq!(code(agent.kill(theirs.id).await), ErrorCode::Forbidden);
         assert_eq!(code(agent.kill(first.id).await), ErrorCode::Forbidden);
+        // Nor copy them away (protocol 6). The import names a profile this
+        // node lacks, so a broken check fails without reading any home.
+        assert_eq!(
+            code(agent.export_session(theirs.id, true).await),
+            ErrorCode::Forbidden
+        );
+        let copy = ImportSession {
+            from: SessionRef {
+                node: node_id,
+                session: theirs.id,
+            },
+            profile: Some("nope".parse().unwrap()),
+            cwd: None,
+            start: false,
+        };
+        assert_eq!(code(agent.import_session(copy).await), ErrorCode::Forbidden);
         let mut other = theirs;
         let (_, _, other_auth) = credential(&owner, &mut other).await;
         let other_agent = as_agent(&socket, &other_auth).await;
