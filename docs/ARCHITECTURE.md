@@ -36,7 +36,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`, `profiles.toml`, `mcp/`), SQLite event log (schema 3: sessions' current profile and creator), retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to) and agent principals (`agents`: a credential per session, grants, limits, ownership) (milestone 4). | proto, rpc, harness, session, store, secure, relay |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting) (milestone 4). | proto, rpc, harness, session, store, secure, relay, fleet, client |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
@@ -429,6 +429,27 @@ they started.
     temporary trees: the operator's linked layout, aliased roots, plans
     made stale between plan and apply (a link swap, a FIFO), name
     collisions (`tests/fleet/`).
+  - `vessel-node` `fleet` (F2, 2026-11-06): fleet state is files under
+    `<data_dir>/fleet/` (`manifest.json`, `managed.json`, `state.json`,
+    `members.json`, `member.json` and `member.credential`, `blobs/`, a
+    `lock`), with `<data_dir>/fleet.toml` making a node the home. One loop
+    looks every 5 s: on the home it bundles when a metadata stamp of the
+    sources changed (at least every 10 minutes), publishes, cleans the
+    store and applies to the home's own profiles (its sources protected);
+    on a member it runs the pull loop for `member.json`. The home serves
+    `fleet.manifest`, `fleet.blob` (current blobs only), `fleet.watch` (a
+    50 s long poll answering when the generation differs), `fleet.report`
+    (devices only) and `fleet.members` (devices with `sync`). A member
+    pulls on (re)connecting, on a watch answer and every 10 minutes,
+    fetches missing blobs in 1 MiB chunks, applies into every profile's
+    home (`vessel_harness::home`; `OpenCode` left out when `~/.claude` is
+    a target) and reports. `vessel fleet init|invite|join|leave|status|
+    members|restore`; `join` pairs with a `sync` link from stdin
+    (`vessel_node::fleet::join`, also for `vessel init --join`); `restore`
+    forgets the deleted files' records under the fleet lock and leaves a
+    request the node applies. Tested in process over in-memory channels
+    through the real device gateway, between two nodes through an
+    in-process relay, and through the CLI.
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

@@ -347,6 +347,24 @@ member vesseld                         home vesseld
   checks that a device's grant caps its sessions' agents.
 - **Next:** Track H is done; Track X needs F2.
 
+### Track F progress
+
+2026-11-06, branch `backend/m4-fleet`.
+
+- **F1 (done, merged):** `vessel-fleet`, then hardened after an
+  independent review (owner-only files, canonical roots, directory-handle
+  access, opaque plans, name collisions, strict `SKILL.md`); ADR 0012
+  "As built".
+- **F2 (done):** the node's `fleet` module (home publishing and serving
+  `fleet.*`, members joining, pulling, applying, reporting), the client's
+  fleet calls, `vessel fleet init|invite|join|leave|status|members|
+  restore`. Not built: the mutual grant and `fleet.push` (Track X,
+  protocol 6). Tests: in process over in-memory channels through the real
+  gateway (follow, kept edits, reports, scopes, delete and restore),
+  between two nodes through an in-process relay (join while running,
+  follow an edit, leave), and the CLI through a relay.
+- **Next:** F3 (secrets and the `McpSource`).
+
 ## Track F: fleet and first run
 
 - **F1. `vessel-fleet`.** Manifests, blob store, plan and apply with
