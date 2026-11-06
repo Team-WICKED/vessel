@@ -42,12 +42,22 @@ proposed ADRs 0009 and 0010.
 
 ## Phase 2: fleet sync
 
-- [ ] Harness profiles (one harness, several accounts or configs).
-- [ ] Sync skills, MCP server configs, memory, and conversation history.
+Milestone 4 is drafted in `docs/plans/backend-m4.md` (2026-11-06), with
+proposed ADRs 0011 (harness profiles), 0012 (fleet sync and `vessel init`)
+and 0013 (agent principals and cross-node sessions).
+
+- [ ] Harness profiles (one harness, several accounts or configs), and
+      moving a structured session to another profile without losing the
+      conversation.
+- [ ] Sync skills, MCP server configs, memory, and conversation history:
+      one fleet home that members pull from; MCP servers handed to
+      harnesses at launch; secrets referenced by name and kept per node;
+      memory and history moved on request.
 - [ ] First-run setup: `vessel init` on a fresh machine pulls the fleet's
       config and installs harnesses.
 - [ ] Agent-to-agent visibility: a session on one node can list and spawn
-      sessions on another.
+      sessions on another, as an agent principal with its own credential,
+      scopes that only shrink, and ownership of what it started.
 
 ## Phase 3: model routing
 
