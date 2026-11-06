@@ -412,6 +412,13 @@ async fn a_member_keeps_no_device_for_a_home_it_has_no_record_of() {
         assert!(home_devices(&owner).await.is_empty());
         let refused = home.owner.call_on(second.info().id, ListSessions).await;
         assert!(refused.is_err(), "{refused:?}");
+        // The member says why, and how to fix it (`vessel fleet status`).
+        let status = fleet::status(&FleetFiles::new(&fixture.data_dir())).unwrap();
+        let why = status.state.grant.unwrap_or_default();
+        assert!(
+            why.contains("named `desktop`") && why.contains("--name <name>"),
+            "{why}"
+        );
         relay.stop().await;
     })
     .await;

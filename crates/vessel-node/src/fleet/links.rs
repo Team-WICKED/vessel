@@ -247,6 +247,15 @@ fn conflict(message: String) -> WireError {
     WireError::new(ErrorCode::Conflict, message)
 }
 
+/// How a member named like another node fixes it, for the refusal it logs
+/// and shows in `vessel fleet status`. Its grant is asked for again on its
+/// next connection, so a restart under the new name is all it takes.
+const RENAME: &str = "give this node a name of its own and restart it: `vessel node start \
+                      --name <name>` (or `vesseld --name`, or `VESSEL_NAME`; for the service \
+                      `vessel init --service` installed, add `--name <name>` after `node start` \
+                      in its unit); it asks the home again when it reconnects, nothing to join \
+                      again";
+
 /// Whether `claim` may be granted, given the home's record of bindings
 /// (`bindings.rs`), the grants of active member devices `held`, and the
 /// home's own id and name; the member devices whose grants it replaces
@@ -266,7 +275,8 @@ fn check_claim(
     }
     if claim.name == Some(home_name) {
         return Err(conflict(format!(
-            "the node is named `{home_name}`, as this home is; rename one of them"
+            "this node is named `{home_name}`, as the fleet's home is; names pick nodes \
+             (`--to`, `vessel mcp`), so they are unique in a fleet: {RENAME}"
         )));
     }
     // The record, revoked and replaced devices included: a device keeps its
@@ -327,8 +337,9 @@ fn check_claim(
         }
         if claim.name == Some(grant.name.as_str()) {
             return Err(conflict(format!(
-                "another member, node {}, is named `{}`; rename one of them",
-                grant.node, grant.name
+                "this node is named `{}`, as member node {} is; names pick nodes (`--to`, \
+                 `vessel mcp`), so they are unique in a fleet: {RENAME}",
+                grant.name, grant.node
             )));
         }
     }
@@ -471,9 +482,9 @@ impl Links {
         client: &NodeClient,
         membership: &Membership,
         stop: &CancellationToken,
-    ) {
+    ) -> Result<(), WireError> {
         if membership.grant.is_empty() {
-            return;
+            return Ok(());
         }
         let previous = {
             let _granting = self.granting.lock().await;
@@ -486,12 +497,12 @@ impl Links {
                              until this node joins again"
                         );
                     }
-                    return;
+                    return Ok(());
                 }
                 Ok(previous) => previous,
                 Err(error) => {
                     tracing::warn!(%error, "cannot read what this node granted its home");
-                    return;
+                    return Err(error);
                 }
             }
         };
@@ -502,9 +513,11 @@ impl Links {
                     self.revoke(previous.device, "the device of an earlier grant")
                         .await;
                 }
+                Ok(())
             }
             Err(error) => {
                 tracing::warn!(home = %membership.home, %error, "could not grant the fleet's home a credential here");
+                Err(error)
             }
         }
     }

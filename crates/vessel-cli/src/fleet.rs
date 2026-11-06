@@ -143,7 +143,27 @@ async fn join(files: FleetFiles, yes: bool, grant: Vec<Scope>) -> Result<(), Cli
         joined.home.name, joined.home.id, joined.route
     ))
     .await?;
+    if let Some(clash) = named_like_home(&joined.home.name) {
+        io::note(&clash).await?;
+    }
     Ok(())
+}
+
+/// A warning when this machine is named like the home it joined: a node
+/// takes the machine's name unless told otherwise, and the home refuses a
+/// member named like a node of the fleet (machines cloned from one image
+/// share a name). Other members' names show later, in `vessel fleet
+/// status`, if the home refuses.
+pub(crate) fn named_like_home(home: &str) -> Option<String> {
+    let name = node_name();
+    (name == home).then(|| {
+        format!(
+            "this machine is named `{name}`, as the fleet's home is: unless this node runs \
+             with a name of its own, the home refuses its grant. Start it with `vessel node \
+             start --name <name>` (or `VESSEL_NAME`; for the service `vessel init --service` \
+             installed, add `--name <name>` after `node start` in its unit)\n"
+        )
+    })
 }
 
 /// The question before joining, saying what the home will get here.
@@ -263,6 +283,9 @@ fn render_status(status: &FleetStatus) -> String {
     }
     if let Some(error) = &state.error {
         let _infallible = writeln!(text, "error      {error}");
+    }
+    if let Some(refused) = &state.grant {
+        let _infallible = writeln!(text, "grant      not taken by the home: {refused}");
     }
     text
 }
