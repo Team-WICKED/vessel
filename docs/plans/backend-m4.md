@@ -499,6 +499,38 @@ Progress (2026-11-06):
   `secret.copy` over the envelope. A member's agents reach other members
   but not the home itself (members hold only `sync`/`relay` there).
 
+### Track X: the security review (2026-11-06)
+
+An independent review of the envelope and the delegated principals
+reproduced problems, fixed in this order:
+
+- **1 (high): a member device could speak for another member's node.** A
+  grant named its node by the id the node chose (`node.id`), which its key
+  does not prove: pairing checks only that the answering node claims the
+  link's id. A `sync` device granted a link from a stock node whose
+  `node.id` held another member's id; the home listed that member twice
+  and sent its calls to the impostor (prompts, input, copied secrets, and
+  forged `created_by`/`origin` through the relay check). Fixed in
+  `fleet/links.rs`: a member device is bound to the id and key of its
+  first grant; a grant that rebinds it, names an id or key another
+  device's grant holds, the home's own id, or a name in use is refused
+  (`conflict`); the same pair through another device is the node joined
+  again and replaces the older grant; calls go to the one device bound
+  to a node, never the first match. Tested by the review's proof of
+  concept turned into a refusal (`e2e/grants.rs`) and the checks one by
+  one (`fleet::links` unit test).
+  - **Proposed, not done: derive `NodeId` from the node's key** (for
+    example the first 16 bytes of a hash of it, as a UUID). Then the
+    pairing handshake would prove the id, the binding above would follow
+    from the key alone, and the trust-on-first-grant window (a device
+    claiming an id before the real node grants) would close. It changes
+    every existing node's id, so it needs a protocol version and a
+    migration (an alias table on homes and in node books); not for
+    milestone 4.
+- **6 (low): a grant made the home dial any routes.** A link names at most
+  8 routes, and a failure to pair answers in general terms; the details go
+  to the home's log (`e2e/grants.rs`).
+
 ## Protocol 6 (accepted)
 
 Drafted 2026-11-06 by Track H's worker, accepted by the coordinator the

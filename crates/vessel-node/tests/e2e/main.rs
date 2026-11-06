@@ -12,6 +12,8 @@ mod agents;
 #[cfg(test)]
 mod fleet;
 #[cfg(test)]
+mod grants;
+#[cfg(test)]
 mod isolation;
 #[cfg(test)]
 mod local;
