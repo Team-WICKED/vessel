@@ -1,6 +1,7 @@
 # ADR 0011: Harness profiles
 
-Status: accepted 2026-11-06 with the coordinator decisions in `docs/plans/backend-m4.md`; drafted as proposed, 2026-11-06 (milestone 4, `docs/plans/backend-m4.md`).
+Status: accepted, 2026-11-06, with the coordinator decisions in
+`docs/plans/backend-m4.md`; built in milestone 4 ("As built" below).
 
 ## Context
 
@@ -17,7 +18,7 @@ logins side by side on one machine and moves work between them:
   per login, selected with `CLAUDE_CONFIG_DIR`.
 - In Paseo each is a provider that extends the built-in one:
   `{ "extends": "claude", "label": ..., "env": { "CLAUDE_CONFIG_DIR": ... } }`
-  (the operator's account-swap plugin notes, "Add another account").
+  (the notes of the operator's account-switching plugin).
   Adding an account is configuration, not code.
 - When one account reaches its usage limit, a plugin moves a running agent
   to another account without losing the conversation. It hard-links the

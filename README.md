@@ -31,48 +31,23 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Milestone 1 (one node, done properly; see
-[docs/plans/backend-m1.md](docs/plans/backend-m1.md)) is implemented:
+Milestones 1 to 4 are built and green on Linux, macOS and Windows (branch
+`backend/m4`; [docs/ROADMAP.md](docs/ROADMAP.md) has the details and
+what is next):
 
-- the protocol 2 contract in `vessel-proto` (typed RPC, durable event log,
-  ACP-shaped agent timeline);
-- the session runtime: terminal sessions in a PTY and structured sessions
-  over ACP (`vessel-proc`, `vessel-harness`, `vessel-pty`, `vessel-agent`,
-  `vessel-session`), with fake harnesses in `vessel-testkit` for tests;
-- the RPC layer (`vessel-rpc`), the SQLite event store (`vessel-store`),
-  the node daemon `vesseld` (`vessel-node`), the typed client
-  (`vessel-client`) and the `vessel` CLI (`vessel-cli`).
+1. **One node, done properly.** Terminal sessions in a PTY and structured
+   sessions over ACP, a durable log every client can follow and resume,
+   a token on every connection, the `vessel` CLI.
+2. **Any machine over SSH.** `vessel` installs and updates `vesseld` there
+   itself; an attach survives a lost connection.
+3. **Any machine behind NAT.** A relay that carries only end-to-end
+   encrypted traffic, and devices paired with a node, each revocable.
+4. **One person's machines as one fleet.** Harness profiles, instructions,
+   skills and MCP servers shared from one home node, conversations and
+   memory moved on request, first-run setup, and agents that start and
+   drive sessions on any node of the fleet (below).
 
-Milestone 2 (any node, over SSH; see
-[docs/plans/backend-m2.md](docs/plans/backend-m2.md)) is in progress: a
-remote machine needs only SSH access. `vessel` installs its own `vesseld`
-there on first contact, `attach` starts the node, and attaching survives
-a lost connection.
-
-Milestone 3 (a node behind NAT, through a relay; see
-[docs/plans/backend-m3.md](docs/plans/backend-m3.md)) is built and awaits
-its manual smoke test: the end-to-end secure channel (`vessel-secure`),
-the relay (`vessel-relay`, `vesseld relay`), and pairing devices with a
-node, which they then reach directly or through relays.
-
-Milestone 4 (one person's machines as one fleet; see
-[docs/plans/backend-m4.md](docs/plans/backend-m4.md)) is in progress.
-Built so far on one node: harness profiles (`profiles.toml`, `vessel run
---profile`, `vessel profiles`), moving a structured session to another
-profile (`vessel session move-profile`) or copying it to one (`vessel
-session copy|move`), and agent tools: every session's
-agent gets the `vessel` MCP server (`vessel mcp`) with a credential of its
-own, to start and drive sessions of its own. `vessel init` sets a machine
-up and can be run again: the node, its harnesses (offering their install
-commands), profiles for the other accounts it finds, their logins, and
-with `--service` the node as a per-user service.
-
-Fleet sync is built: one node, the home, shares its instructions and
-skills, and every member node follows it into every profile (below).
-
-Not yet: copying secrets between nodes, moving session history between
-machines, model routing, the LSP bridge. See
-[docs/ROADMAP.md](docs/ROADMAP.md).
+Not yet: model routing, the LSP bridge, a web UI.
 
 ## Try it
 
@@ -185,71 +160,145 @@ vessel node devices revoke 3fa9       # its open connections close
   (0600); the book points to it and never holds the secret. Moving a
   device means pairing it again.
 
-### A fleet: one home, many members
+## Profiles, the fleet and agent tools
 
-One node keeps your instructions and skills (the home); every other node
-gets copies in each of its harness profiles, keeping any local edit
-(ADR 0012).
+Milestone 4 (ADRs 0011 to 0013). Each part works on its own: profiles on
+one node; a fleet, where every node follows one home; conversations and
+memory copied on request; and agents that use all of it through the
+`vessel` MCP tools.
+
+### Profiles: one harness, several accounts
+
+A profile is a harness with its own environment, typically another
+account's configuration directory. Profiles belong to the machine that runs
+them: `profiles.toml` in the node's data directory (owner-only, like the
+token).
+
+```toml
+[profiles.claude-work]
+harness = "claude"
+label = "Claude (work)"
+env = { CLAUDE_CONFIG_DIR = "~/.claude-work" }
+unset = ["ANTHROPIC_API_KEY"]   # removed from the node's own environment
+
+[profiles.codex-work]
+harness = "codex"
+env = { CODEX_HOME = "~/.codex-work" }
+```
 
 ```bash
-# on the home
-vessel fleet init --instructions ~/.codex/AGENTS.md --skills ~/.codex/skills --skip 'paseo*'
-vessel fleet invite --label laptop    # a single-use link with the `sync` scope
-vessel fleet invite --label laptop --relay   # also lets the laptop reach other members
-# on the laptop: paste the link at the prompt, never on the command line
-vessel fleet join                     # the home gets read, operate here (--grant to choose)
-vessel fleet status                   # generation, and files left as they are
+vessel profiles                              # the default per harness, and these
+vessel profiles --reload                     # after an edit; a broken file changes nothing
+vessel run claude --profile claude-work
+vessel session move-profile 3f2a claude-work # at a usage limit: same conversation, other account
+```
+
+- Every harness has a default profile with its own name (`claude`,
+  `codex`, `gemini`, `opencode`): the node's own environment.
+- `vessel init` writes profiles for the other accounts' homes it finds and
+  offers each one's login.
+- A move keeps the session's id, log and followers. It works for
+  structured Claude Code and Codex sessions, between turns (`--force`
+  cancels a running one), and only to a profile that is logged in.
+
+### A fleet: one home, many members
+
+One node keeps your instructions and skills: the home. Every other node is
+a member, and gets copies in each of its profiles (ADR 0012).
+
+```bash
+# on the home: name the sources (here, a directory you keep them in)
+vessel fleet init --instructions ~/agents/AGENTS.md --skills ~/agents/skills --skip 'draft-*'
+vessel fleet invite --label laptop            # a single-use link, valid 10 minutes
+# on the laptop: a fresh machine sets itself up and joins in one step,
+# reading the link from standard input (never the command line)
+vessel init --service --join
+vessel fleet status                           # what it applied, and the files it left alone
 # on the home
 vessel fleet members
 ```
 
-- Calls across nodes go through the home: a member's node grants the home
-  the scopes chosen at join when it connects, and a call to another node
-  runs there with no more than that grant and the caller's own scopes
-  (protocol 6, ADR 0013). `vessel fleet join --grant none` grants nothing.
-  An agent's `vessel` tools take `node` (a name from `list_nodes`) to
-  start and drive its own sessions on another member; a member's calls
-  reach the other members only if it was invited with `--relay`.
-- The home binds each member's node id to its key for good. A member
-  reinstalled with a new key is refused until you run `vessel fleet forget
-  <node id>` on the home (`--data-dir` of the home's node); revoke its old
-  device there too if it should not sync any more.
+- Edit the sources on the home; members follow within seconds.
+- A file you edited on a member is kept, with the home's version beside it
+  as `<name>.vessel-incoming`, and listed as a conflict by `vessel fleet
+  status`. A fleet file you deleted stays deleted until `vessel fleet
+  restore <path>`. Files Vessel did not write are never touched.
+- `vessel fleet join` joins a node that is already set up; `vessel fleet
+  leave` stops following, and the files stay.
+- The home binds each member's node id to its key. A member reinstalled
+  with a new key is refused until `vessel fleet forget <node id>` on the
+  home.
 
-- Edit the sources on the home; members follow within seconds (the home
-  watches `<data_dir>/fleet.toml` and its sources).
-- A file you edited is kept, with the home's version beside it as
-  `<name>.vessel-incoming`; a fleet file you deleted stays deleted until
-  `vessel fleet restore <path>`. Files Vessel did not write are never
-  touched.
-- `vessel fleet leave` stops following; the files stay.
-- MCP servers defined in the home's `fleet.toml` reach every session; a
-  secret they need is set on each node with `vessel fleet secret set
-  NAME` (typed, not shown, or piped), or copied from a node that has it
-  with `vessel fleet secret copy NAME --to NODE_ID` (the target's whole
-  node id; it must have joined with `--grant read,operate,admin`); it is
-  never shown.
+### MCP servers and secrets
 
-### Copying a conversation or a memory
+MCP servers defined on the home reach every session on every node, handed
+to the harness at launch (never written into its configuration files).
+A value they need is a secret, kept per node:
 
-A structured session's conversation, or a profile's memory, is copied on
-demand, between profiles of one node or between the nodes of a fleet
-(`--to NODE`; a member pulling from another needs `relay` on the home,
-and memory needs the source to have granted the home `admin`):
+```toml
+# in the home's fleet.toml
+[mcp.servers.docs]
+type = "stdio"
+command = "docs-mcp"
+env = { DOCS_TOKEN = { secret = "DOCS_TOKEN" } }
+```
+
+```bash
+vessel fleet secret set DOCS_TOKEN                 # typed (not shown) or piped, never an argument
+vessel fleet secret list                           # names only
+vessel fleet secret copy DOCS_TOKEN --to NODE_ID   # to another node of the fleet
+```
+
+- A session on a node without the secret runs without that server, and
+  its log says which secret is missing.
+- A value is never shown, logged or passed as an argument. Copying one
+  needs the target to have granted the home `admin` (`vessel fleet join
+  --grant read,operate,admin`); it is asked before the value is sent.
+
+### Conversations and memory, on request
+
+A structured session's conversation, or a profile's memory, is copied
+between profiles of one node or to another node of the fleet (`--to`):
 
 ```bash
 vessel session copy 3f2a --profile claude-work --cwd /srv/app --start   # resume a copy there
-vessel session move 3f2a --profile claude-work   # copy, resume there, stop it here
-vessel fleet memory copy --from-profile claude-alt --from-project /srv/app --profile claude-work
+vessel session move 3f2a --to gpu-box --profile claude                  # copy, resume there, stop here
+vessel fleet memory copy --from-profile claude --from-project /srv/app --profile claude-work
 ```
 
-- Between turns only. Nothing is overwritten: a session lands whole or
-  not at all, and memory that differs is written beside the existing
-  file as `<name>.vessel-incoming`.
-- The copy is renamed for the working directory it goes to (Claude Code
-  names its projects after it); the new session records where it came
-  from.
+- Between turns only. Nothing is overwritten: a session lands whole or not
+  at all, and memory that differs goes beside the existing file as
+  `<name>.vessel-incoming`. Memory is never synced continuously; each
+  account keeps its own.
+- The copy is renamed for the working directory it goes to, and the new
+  session records where it came from.
 
-### Environment
+### Calls across nodes, and what they may do
+
+Calls from one node to another go through the home (protocol 6). A member
+grants the home scopes on itself when it joins (`--grant`, by default
+`read,operate`; `none` grants nothing), and a call runs on its target with
+no more than that grant and the caller's own scopes. A member's calls
+reach the other members only if it was invited with `vessel fleet invite
+--relay`.
+
+### Agent tools
+
+Every session's agent gets the `vessel` MCP server (`vessel mcp`, started
+by the node) with a credential of its own, ending with the session. Its
+tools: `list_nodes`, `list_sessions`, `create_session` (with a first
+prompt), `send_input`, `answer_permission`, `read_events`, `wait_turn`
+and `kill_session`; each but `list_nodes` takes `node`, so an agent can
+start a session on another machine and read its answer.
+
+- An agent has its creator's scopes, at most `read` and `operate`, and
+  operates only on sessions it started (and theirs).
+- At most 8 live sessions of its own per node, and agents start agents at
+  most 3 levels deep.
+- Sessions record who started them. This is attribution under one OS
+  user, not a sandbox (ADR 0013).
+
+## Environment
 
 | Variable | Means | Default |
 | --- | --- | --- |

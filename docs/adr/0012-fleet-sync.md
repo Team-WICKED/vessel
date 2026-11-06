@@ -1,6 +1,9 @@
 # ADR 0012: Fleet sync and joining a fleet
 
-Status: accepted 2026-11-06 with the coordinator decisions in `docs/plans/backend-m4.md`; drafted as proposed, 2026-11-06 (milestone 4, `docs/plans/backend-m4.md`).
+Status: accepted, 2026-11-06, with the coordinator decisions in
+`docs/plans/backend-m4.md`; built in milestone 4 (the "As built" sections
+below: MCP servers at launch, the materialiser, history and memory, `vessel
+init`).
 
 ## Context
 
@@ -13,7 +16,7 @@ productive in minutes (`vessel init`).
 
 On one machine, five agent configurations (Codex and four Claude Code
 logins) share one set of global instructions and one set of skills
-(the operator's global instructions and their `agent-config-sync` script):
+(the operator's global instructions and a sync script of theirs):
 
 - **One source, links everywhere.** Instructions live in `~/.codex/AGENTS.md`;
   `~/.claude/CLAUDE.md` is a symlink to it. Skills live in
@@ -23,8 +26,8 @@ logins) share one set of global instructions and one set of skills
   and a 10-minute timer run an idempotent script under one lock. A skill
   created on a Claude side is moved into the source and linked back.
 - **Conflicts never overwrite the source**: the same name with different
-  content keeps the source, backs the copy up, and writes a line to
-  `CONFLICTS.log` for a person to settle.
+  content keeps the source, backs the copy up, and logs the conflict for a
+  person to settle.
 - **Not synced, on purpose**: memory, `settings.json`, subagents (per
   account); skills that another product manages (Paseo copies its own and
   refuses symlinks; marked by `.paseo-managed-files.json`); claude.ai

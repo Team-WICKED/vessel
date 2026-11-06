@@ -1,7 +1,9 @@
 # Backend milestone 4: the fleet
 
-Status: proposed (draft 2026-11-06). Starts once milestone 3 is merged and
-green on all three CI platforms. Owner: coordinator. Two implementation
+Status: built on `backend/m4` (2026-11-06), green on Linux, macOS and
+Windows; closing with the manual smokes of the done criteria
+(`docs/smoke/`). Drafted the same day, to start once milestone 3 was merged
+and green on all three CI platforms. Owner: coordinator. Two implementation
 tracks, then a short joint one, as in earlier milestones.
 
 Read first: `AGENTS.md`, `docs/VISION.md` section 3 (the fleet),
@@ -23,7 +25,7 @@ Roadmap Phase 2. One person's machines behave as one fleet:
 # a harness with several accounts: one profile per account, chosen per session
 vessel profiles                                  # claude, claude-alt, codex, ...
 vessel run claude --profile claude-alt
-vessel session move-profile 3f2a claude-alalt    # at a usage limit: same conversation, next account
+vessel session move-profile 3f2a claude-work     # at a usage limit: same conversation, next account
 
 # a new machine joins in minutes
 vessel init --service                            # node, harnesses, profiles, logins
@@ -40,7 +42,7 @@ vessel sessions --node gpu-box                   # the session the agent started
    each node (`profiles.toml`: environment to set or remove, extra
    arguments), chosen per session and recorded with it. A structured Claude
    Code session can move to another profile and keep its conversation,
-   which is what the operator's account-swap plugin does today.
+   which is what the operator's account-switching plugin does today.
 2. **Fleet sync** (ADR 0012): one node is the fleet's home; members pull its
    bundle (instructions, skills, MCP server definitions) and write it into
    every profile's harness home, keeping local edits and reporting
@@ -930,8 +932,8 @@ carry a condition:
   write the small server the plan sketches. The track records the check's
   result either way.
 - **4, memory:** one-time copies only, never continuous sync. The operator
-  keeps per-account memory separate on purpose (the account-swap plugin
-  never shares `memory/`).
+  keeps per-account memory separate on purpose (the account-switching
+  plugin never shares `memory/`).
 - **2 and 6, one home and calls through it:** this matches the operator's
   single-source rule for instructions and skills (`~/.codex` as origin,
   everything else links or copies).
@@ -945,7 +947,8 @@ contract change; tracks start after it.
 
 1. **Profile switch of a live session in M4** (ADR 0011). Proposed: yes,
    structured Claude Code first; it is the operator's daily need and the
-   only part of the account-swap plugin Vessel cannot replace otherwise.
+   only part of the account-switching plugin Vessel cannot replace
+   otherwise.
    Alternative: profiles only, switching later.
 2. **One fleet home** (ADR 0012). Proposed: one home node, members pull, the
    operator's single-source rule. Alternatives: multi-master merging, or a
@@ -981,15 +984,15 @@ contract change; tracks start after it.
   source and `~/.claude/CLAUDE.md` links to it; skills live in
   `~/.codex/skills/<dir>` and every Claude login has a link per skill,
   named by `SKILL.md`'s `name` (a directory with a Korean name is linked
-  under its English `name`). `agent-config-sync` keeps it true: a systemd path
+  under its English `name`). A sync script of theirs keeps it true: a systemd path
   unit plus a 10-minute timer, an idempotent script under one lock; a skill
   made on a Claude side moves into the source; a same-name conflict keeps
-  the source and logs to `CONFLICTS.log`. Not synced: memory,
+  the source and logs the conflict. Not synced: memory,
   `settings.json`, subagents, Paseo-managed copies, claude.ai account
-  skills (the script's README and the global instructions).
+  skills (the script's documentation and the global instructions).
 - **Accounts**: four Claude Code logins (`~/.claude` and three more
   configuration directories), each a Paseo provider with
-  `extends: "claude"` and `CLAUDE_CONFIG_DIR` in its `env`. The account-swap
+  `extends: "claude"` and `CLAUDE_CONFIG_DIR` in its `env`. An account-switching
   plugin hard-links one session's transcript files (never `memory/`) into
   the target login, points the agent's `CLAUDE_CONFIG_DIR` at it through a
   per-agent symlink, and restarts only the Claude process, measured at about

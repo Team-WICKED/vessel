@@ -1,6 +1,8 @@
 # ADR 0008: Installing and updating `vesseld` on a remote
 
-Status: accepted, 2026-11-06, with the coordinator decisions in `docs/plans/backend-m2.md`. Drafted (milestone 2, `docs/plans/backend-m2.md`)
+Status: accepted, 2026-11-06, with the coordinator decisions in
+`docs/plans/backend-m2.md`; built in milestone 2 ("As built in milestone 2"
+below).
 
 ## Context
 

@@ -1,7 +1,8 @@
 # Backend milestone 3: any node, with no SSH and no open port
 
-Status: proposed (draft 2026-11-06). Starts once milestone 2 is merged and
-green on all three CI platforms (it is: `backend/m2` at 2cd316b). Owner:
+Status: built on `backend/m3` (2026-11-06; "State" and "Smoke on one
+machine" below). Drafted the same day, to start once milestone 2 was merged
+and green on all three CI platforms (`backend/m2` at 2cd316b). Owner:
 coordinator. Two implementation tracks, as in M1 and M2.
 
 Read first: `AGENTS.md`, `docs/VISION.md` section 2 (the change of

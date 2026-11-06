@@ -1,28 +1,37 @@
 # Architecture
 
-Target shape of the backend after milestone 1. Status per crate is in
-"State" below; the plan is `docs/plans/backend-m1.md`, the reasons are in
-`docs/adr/`.
+The backend as built through milestone 4 (2026-11-06). What each crate
+holds now is in "State" below; each milestone's plan is in `docs/plans/`,
+and the reasons are in `docs/adr/`.
 
 ## Pieces
 
 ```
-  vessel CLI        editor plugins        web UI          (clients)
-        \                 |                  /
-         +---- protocol 2: typed frames over one connection ----+
-                 (websocket today; SSH stdio and relay later)
-                                |
+  vessel CLI      agents (`vessel mcp`)      editors, web UI (later)   (clients)
+        \                 |                        /
+   protocol 2..=6: typed frames over one connection, which is one of
+   a websocket with the token, the local socket, SSH stdio (`vesseld
+   attach`), or a Noise channel to the node's key, direct or relayed
+                                  |
                        vesseld (one per machine)
-          +---------------------+----------------------+
-          |                     |                      |
-     rpc server            session runtime          store
-     (auth, dispatch,      (one actor per session)  (SQLite event log,
-      subscriptions)          /            \         identity, token)
-                       terminal mode   structured mode
-                       (PTY, raw TUI)  (ACP client)
-                              \            /
-                       claude / codex / gemini / opencode
+     +-------------+--------------+--------------+---------------+
+     |             |              |              |               |
+  rpc server    session        store          fleet          secure gateway
+  (principals,  runtime        (SQLite log,   (home or       (paired devices,
+   scopes, the  (one actor     identity,      member;        relay links)
+   envelope)    per session)   devices)       transfers,
+                /        \                    secrets)
+     terminal mode      structured mode
+     (PTY, raw TUI)     (ACP client)
+                \        /
+     claude / codex / gemini / opencode, each under a profile
+
+  vesseld relay: splices end-to-end encrypted connections, keeps nothing
 ```
+
+A fleet is nodes of this shape: one is the home, the others are members
+that follow it, and calls between nodes go through the home (ADRs 0012
+and 0013).
 
 ## Crates
 
@@ -30,12 +39,12 @@ Target shape of the backend after milestone 1. Status per crate is in
 | --- | --- | --- |
 | `vessel-proto` | Wire contract: ids, sessions, events, agent timeline, errors, typed RPC table; keys, devices, pairing links, relay control (milestone 3); validated names, profiles, creators, agent credentials, fleet manifests and MCP server definitions (milestone 4); protocol 6's envelope (`forward`: `Origin`, `fleet.forward`/`relay`/`deliver`), transfers (`transfer`, with the size limits) and secrets on the wire (`secret`: `SecretValue`, redacted). No I/O. | - |
 | `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. From protocol 5 it holds both sides to the negotiated version: a call newer than the connection (`Call::since`) is refused by the client before sending and by the server before dispatch, and outgoing frames are adapted to an older client where they are encoded (`ServerFrame::for_protocol`). | proto |
-| `vessel-proc` | Command specs, spawning in a process group, killing the group. | - |
+| `vessel-proc` | Command specs, spawning in a process group (a kill-on-close job object on Windows), killing the group. | - |
 | `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; `HarnessEnv` (the account harnesses run as, given by the binaries, never read from the process by a library); since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, a profile's memory files and renaming a path for another working directory (transfers, protocol 6), MCP servers for terminal sessions, and what `vessel init` offers (install and login commands, other accounts' homes). | proto, proc |
-| `vessel-pty` | Runs a command in a PTY; byte I/O and resize. | proc |
+| `vessel-pty` | Runs a command in a PTY; byte I/O and resize; on Windows, answers the pseudo console's startup cursor query. | proc |
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
-| `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`, `profiles.toml`, `mcp/`), SQLite event log (schema 3: sessions' current profile and creator; schema 4: where a session came from, `origin` and `via`, protocol 6), retention, restart recovery. | proto |
+| `vessel-store` | Data directory (`node.id`, `token`, `node.key`, `vessel.db`, `profiles.toml`, `mcp/`) and its locks, SQLite event log (schema 2: paired devices; schema 3: sessions' current profile and creator; schema 4: where a session came from, `origin` and `via`, protocol 6), retention, restart recovery. | proto |
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting; this node's secrets) (milestone 4); transfers (`transfers`: `session.export`/`memory.export` snapshots held for whoever opened them, `transfer.read`/`close`, expiry, and `session.import`/`memory.import` pulling through a `Source`: this node, or another through the envelope as the caller) (protocol 6, F4); `envelope` and `fleet/links` (protocol 6, Track X): `fleet.forward`/`relay`/`deliver` with the delegated principal (the delivering device's scopes ∩ the origin's, ownership and agent limits applied to the origin), the mutual grant (`fleet.grant`, `fleet/granted.json` on a member, `fleet/grants/` and the binding record `fleet/bindings.json` on the home, `vessel fleet forget`), `fleet.peers`/`nodes`, and `session.read` waiting with its shares (`waits`). | proto, rpc, harness, session, store, secure, relay, fleet, client |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4); fetching a file chunk by chunk into a caller's `ChunkSink` (`fetch_chunks`, protocol 6). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
@@ -55,16 +64,21 @@ they started.
 
 ## Data flow
 
-1. A client opens `/rpc` with `Authorization: Bearer <token>` (ADR 0005),
-   sends `Hello` with its protocol range, and gets `Welcome` with the
-   negotiated version and `NodeInfo`.
-2. `session.create` asks `vessel-harness` for a launch command, and
-   `vessel-session` starts an actor in terminal mode (`vessel-pty`) or
-   structured mode (`vessel-agent`). The command carries the session's
-   profile (variables set and removed; terminal arguments) and, for a
-   terminal session, its MCP servers in the harness's launch-time form; a
-   structured session gets its MCP servers in `session/new` or
-   `session/load` instead (ADRs 0011, 0012).
+1. A client opens a connection and presents who it is: the bearer token on
+   `/rpc` or as the local socket's first frame (the owner, ADR 0005), a
+   paired device's credential inside the Noise channel (ADR 0010), or a
+   session's agent credential on the local socket (ADR 0013). It sends
+   `Hello` with its protocol range and gets `Welcome` with the negotiated
+   version and `NodeInfo`. Every call is then checked against its
+   method's scope and, for an agent, against ownership.
+2. `session.create` resolves the profile, asks `vessel-harness` for a
+   launch command, and `vessel-session` starts an actor in terminal mode
+   (`vessel-pty`) or structured mode (`vessel-agent`). The command carries
+   the profile's environment and, for a terminal session, its MCP servers
+   in the harness's launch-time form; a structured session gets them in
+   `session/new` or `session/load` (ADRs 0011, 0012). The fleet's servers
+   come with this node's secrets, and the session's own `vessel` server
+   with its agent credential.
 3. The actor turns process output into `SessionEvent`s, numbers them
    (`EventSeq`, gap-free from zero), caches them in a ring, pushes each one
    into the bounded durable channel (the node writes it to the store), and
@@ -94,10 +108,29 @@ they started.
    first frame; its calls run as `Principal::Agent`, and `operate` calls on
    a session need the session to descend from the agent's. The credential
    and the agent's connections end with the session.
-6. On shutdown the node kills each session's process group, waits for final
-   statuses, and flushes the store. On the next start, sessions that were live
-   are marked `Interrupted`. Their logs stay readable, and structured ones can
-   be resumed through their `HarnessSessionId`.
+8. Fleet sync (ADR 0012): the home bundles its sources (instructions,
+   skills, MCP definitions) into a manifest and a content-addressed blob
+   store whenever they change. A member, paired with the home as a `sync`
+   device, long-polls `fleet.watch`, fetches the manifest and the blobs it
+   lacks, applies them into every profile's home (keeping local edits as
+   conflicts), and reports what it did.
+9. Calls across nodes (protocol 6): a client or agent asks its own node
+   with `fleet.forward { node, call }`. A member passes it to the home
+   (`fleet.relay`, needs `relay`), and the home delivers it to the target
+   (`fleet.deliver`) as the device the target granted it at join. The target
+   runs it as `Principal::Delegated`: the scopes it granted the home,
+   intersected with the origin's, with ownership and agent limits applied
+   to the origin.
+10. Transfers (protocol 6): `session.export` or `memory.export` snapshots
+    files on the source for the caller that asked; `session.import` or
+    `memory.import` on the target pulls them chunk by chunk (from this
+    node, or from another through the envelope as the same caller), checks
+    each file's hash, renames paths for the new working directory and
+    places them without overwriting anything.
+11. On shutdown the node kills each session's process group, waits for final
+    statuses, and flushes the store. On the next start, sessions that were live
+    are marked `Interrupted`. Their logs stay readable, and structured ones can
+    be resumed through their `HarnessSessionId`.
 
 ## Design rules
 
@@ -106,488 +139,327 @@ they started.
 - Wire types exist once, in `vessel-proto`.
 - No panics, no unbounded queues, no untyped JSON (see `AGENTS.md`).
 
-## State (2026-11-05)
+## State (2026-11-06)
 
-- Done: `vessel-proto` (protocol 2 contract).
-- Runtime track, terminal and structured sessions working end to end:
-  - `vessel-proc`: `CommandSpec`, `spawn` as a process-group leader,
-    `ProcessGroup` (Unix). Stopping signals the whole group, and the group
-    is swept once its leader exits. On Windows each child starts suspended
-    in its own kill-on-close job object (`process-wrap`), so stopping ends
-    the whole tree: an npm `.cmd` shim's `cmd.exe`, the adapter it started,
-    and their children. PTY sessions (`vessel-pty`) still terminate only
-    the direct child on Windows; the rest end when the pseudo console
-    closes.
-  - `vessel-harness`: one descriptor module per harness, `Lookup` (explicit
-    search path), concurrent `discover` with a version-probe timeout,
-    `launch` (working directory absolute and existing: a relative one is
-    refused with `InvalidRequest`, since it would name a directory relative
-    to `vesseld`'s own; the home directory when none is given). The `fakes`
-    feature installs testkit binaries under real harness names for other
-    crates' tests. Model selection is not here: it goes over ACP in
-    `vessel-agent`.
-  - `vessel-pty`: `PtyProcess` over `portable-pty`, with dedicated reader,
-    control (input and resize, in order) and waiter threads behind bounded
-    channels; modules `process`, `streams`, `threads`, `command`.
-  - `vessel-agent`: ACP v1 client on `agent-client-protocol` 5.0.
-    `AgentProcess` (own process group), `AgentInput` (prompt, cancel,
-    permission answers with typed refusals), `AgentOutputs` (bounded).
-    A single driver loop owns the session; handlers forward into one
-    ordered channel (`driver/`: the loop, the agent's traffic, the
-    client's commands, settling after a close). The model is chosen through the `model` config option.
-    The whole handshake has a deadline (`AgentSetup::handshake_timeout`,
-    60 s by default); a stuck adapter fails the session instead of leaving
-    it `Starting`. A node sets it through
-    `RuntimeConfig::agent_handshake_timeout` (`vesseld
-    --agent-handshake-timeout SECONDS`). The `mapper` is pure and tested against fixtures in
-    `crates/vessel-agent/tests/fixtures/acp/`.
-  - `vessel-session`: the R6 API (`SessionRuntime`, `SessionHandle`,
-    `Follow`/`FollowError`, `Created::durable`; records shared as
-    `Arc<EventRecord>`). Terminal actor and structured actor share the
-    `lifecycle` module (stop-responsive publishing, two-step stop).
-    Structured status is `Starting` until the agent's `Ready`, then
-    `Running`; a session that never became ready ends `Failed`, unless it
-    was killed while starting (then `Exited`, as a killed terminal
-    session). Ended
-    sessions stay (ring included) until the node calls
-    `SessionRuntime::remove`, which it may only do once the session ended
-    (`SessionHandle::ended`); the node is to call it once the store has the
-    whole log.
-  - `vessel-testkit`: `fake-tui`, `fake-acp`, `fake-ssh` (the OpenSSH
-    command line, running the "remote" command locally under a fake home,
-    with an injectable connection drop; milestone 2), the `Fake::path` locator
-    (a nested `cargo build` once per test process; the first one of a run
-    recompiles about 30 crates under this package's own feature set), and
-    `within`, the test safety net whose clock starts after that build.
-- Spine track:
-  - `vessel-rpc`: handshake, typed calls with cancellation and an in-flight
-    bound (calls beyond it are refused `Unavailable`; the connection keeps
-    being read so `Cancel` gets through), per-connection outbound queue
-    with bounded flush batching, subscription ordering, release and lag on
-    both ends (ADR 0006), in-memory transport for tests, and `Framed`
-    (length-delimited frames over any byte stream: SSH stdio and the
-    node's local socket, PROTOCOL.md version 3). The `Welcome`'s
-    `NodeInfo` is read from a watch, so a draining node says so. A
-    connection the server closes still answers the calls already running
-    (within the close timeout) and writes every frame it took off its
-    queue, so `node.stop{now}` gets its `ack`; a client whose `Hello`
-    cannot be sent still reports a waiting `rejected`.
-  - `vessel-store`: owner-only data directory (Unix: 0700, an existing
-    one tightened or refused if another user's; `node.id`, `token` and
-    the event log with its `-wal`/`-shm` files 0600), SQLite event
-    log with a batching writer thread, paged reads, restart recovery to
-    `Interrupted`, retention, `user_version` migrations. Milestone 2:
-    `NodeLock` (one node per data directory, an OS lock that cannot go
-    stale, with the holder's pid, binary and version in `vesseld.owner`),
-    the `StartLock` racing proxies share, and the `bin/`, `logs/` and
-    socket paths. Milestone 3 (Track P): `node.key` (the node's secret key,
-    32 bytes, 0600, created on first start and never replaced; its bytes
-    are wiped from memory when dropped), and the
-    `devices` table (schema version 2) holding each paired device with only
-    the SHA-256 of its credential, compared in constant time; a revoked
-    device stays as a tombstone.
-  - `vessel-client`: websocket connection with the bearer token, one typed
-    method per call, gap-free `SessionStream` (`follow`). `wss://` is
-    refused: no TLS stack in milestone 1 (ADR 0005 amendment).
-    Milestone 2 (Track C): `Connector` (`WsConnector` here,
-    the SSH one in `vessel-remote`), `follow_resuming`/`ResumingStream`
-    (redials with 0.5–30 s jittered backoff and follows again from its
-    cursor; never repeats a call), `Pinned` (refuses a node whose id is
-    not the pinned one, so a reconnect cannot land on another machine),
-    `NodeClient::stop_node` (protocol 3 only), the plain-data
-    `NodeAddress`/`SshTarget`/`RemotePath`, and the node `book`
-    (`<config_dir>/vessel/nodes.toml`, a project's `.vessel/config.toml`
-    that may only pick one of the user's nodes, `resolve` for `--node`;
-    edited with `toml_edit`, keeping comments).
-    Milestone 3 (Track P): a third kind of book entry, a paired node
-    (`key`, `relay`, `direct`, `credential = { file }`; exactly one of
-    `ssh`, `url` and `key` per node, and a `key` node needs a credential
-    and a route), as `NodeAddress::Secure(SecureTarget)`;
-    `DeviceCredential` files (`<config_dir>/vessel/credentials/<node
-    id>.secret`: the node id and key from the pairing link, the device
-    id and secret; directory 0700, file 0600, replaced atomically through
-    a randomly named temporary file), bound to their node: `check` refuses
-    another key or id before anything is dialled, so a book entry naming
-    someone else's key cannot draw the secret out; `pairing::pair`
-    (checks that the node pinned is the link's) and `authenticate`, the
-    device preamble over any frame transport. `secure::SecureConnector`
-    is the paired node's `Connector`: direct routes first (3 s dial
-    timeout), then relays (10 s), each followed by the handshake to the
-    pinned key, the preamble and `hello`. Before the handshake completes
-    a failure is the route's, and the next route is tried; after it, the
-    node's answer holds for every route, so a refusal ends the search.
-    `4401` (a wrong key), a refused `Revoked` or `UnknownDevice`, and
-    tampering are final; a network failure, `4404`, `4408` and `4429`
-    are transient; all routes failed is final if any failure was. Carriers
-    come from a `Dialer`: `WsDialer` (`vessel_relay::connect` to a direct
-    route's `/secure`, `vessel_relay::dial` through a relay, close codes
-    through `node_close`/`relay_close`, TLS from the system roots), or
-    in-memory ones in tests. `pair_over` pairs over the link's routes and
-    stops once a channel is up.
-  - `vessel-remote` (milestone 2, Track C): `ssh` (the system
-    client with fixed options, `ControlMaster` sharing on Unix, commands
-    built from fixed words and single-quoted values, the last 64 stderr
-    lines kept), `platform` (`uname -sm` through `sh -s`, four release
-    targets; a local build matches by OS and architecture), `install`
-    (one remote script: upload through stdin into a `.vesseld-*.tmp`,
-    SHA-256 check, `tar -xzO` for release archives, run its `version`
-    there, then `mv -f` onto `vesseld-<version>` or
-    `vesseld-<version>-dev-<hash>`; then `cleanup`; what is installed is
-    a `build::Build` with its `digest::Sha256Digest`), `release` (the
-    archive and `SHA256SUMS` fetched locally with `gh release download`
-    and checked), `provision` (which build a machine gets: `local`,
-    `release`, or `auto`, shared by `node install` and the connector) and
-    `connector` (`SshConnector`: `ssh … <data_dir>/bin/<binary> attach`,
-    protocol frames over the child's stdio, `ProxyExit` codes as typed
-    errors, exit 127 installs and retries once, 60 s handshake). Tested
-    against a temporary home through `ssh` and `gh` stand-ins, and with
-    the real `vesseld` through `fake-ssh` (Unix only).
-  - Release workflow (`.github/workflows/release.yml`, milestone 2): on a
-    `v<version>` tag matching the workspace version, it builds `vesseld`
-    for the four targets (musl through `cargo-zigbuild`), packaged as
-    `vesseld-<version>-<target>.tar.gz` with `SHA256SUMS`, and attaches
-    them to the tag's release. Not run yet: no tag has been pushed.
-    Signing waits for the owner's decision on public releases.
-  - `vessel-node` (`vesseld`): axum `/health` and token-checked `/rpc`,
-    the `Handler` routing to `sessions` (live runtime sessions plus stored
-    ones; a session whose log is complete, final status included, is
-    removed from the runtime with `SessionRuntime::remove` and served from
-    the store; reading a live session serves records retention already
-    pruned from the store but the ring still holds from the ring), `persist`
-    (one task per session drains its durable channel into the store and
-    publishes "durable through N"),
-    `subscribe` (ring, then a durable-gated store gap fill, then live;
-    `Lagged` when a subscriber falls behind), and an ordered shutdown in
-    which subscribers still receive the final `Interrupted` status. Both
-    modes run end to end (`tests/e2e`: `fake-tui` as `claude`, `fake-acp`
-    as its ACP adapter), including restart, `Interrupted` and resume.
-    Milestone 2, node side (ADR 0007, 0008): a local socket (Unix socket
-    0600, or a named pipe on Windows) whose first frame must be the token;
-    `--bind none` (no TCP listener); `vesseld attach`, the byte-pumping
-    proxy SSH runs, which starts the node in the background through a login
-    shell when none answers (start lock, readiness line, `ProxyExit` codes);
-    `vesseld version` and `vesseld cleanup`; `node.stop` (`now`, or drain:
-    refuse new sessions and stop once none is live); the node lock;
-    `--agent-handshake-timeout` (seconds, default 60). Tested
-    in process (`tests/e2e/local.rs`) and with real processes through
-    `fake-ssh` (`tests/e2e/remote.rs`, Unix).
-    Milestone 3 (Track P, in progress; ADR 0010): every connection has a
-    principal (`Owner` for the token and the local socket, `Device` for a
-    paired device), and every call is checked against its method's scope
-    by `guard::Guarded`, generated from one row per method with the method
-    taken from the request type. `device.invite` (single-use invitations
-    in memory, by hash, at most a day, at most 64 waiting), `device.list`,
-    `device.revoke` (closes the device's open connections: each device
-    connection has its own RPC server whose shutdown token is registered
-    under the device; pairing registers the connection before it stores
-    the device). `NodeService`'s calls are inherent methods, so only
-    `Guarded` can be served. `SecureGateway::accept` answers the Noise
-    handshake with the node's key pair (`vessel-secure`, from `node.key`,
-    which is created on start) through `vessel_relay::respond`, which
-    closes with 4401 when it fails, then runs the device preamble
-    (`devices::preamble`) and the protocol; at most 64 channels may be in
-    their handshake or preamble at once, and their frames are limited to
-    64 KiB until the preamble is answered. `NodeInfo.public_key` carries the
-    public key. Carriers arrive from `/secure` on the node's listener (an
-    `AxumCarrier`, messages capped at one record, pinged every 10 s and
-    dropped after 30 s of silence, `Config::keepalive`) and from one `NodeLink`
-    per `--relay` (registering with `--relay-token-file`'s token, TLS for
-    `wss://` from the system roots; `Node::relay_links` reports their
-    state). `--public` adds direct routes to pairing links. Device labels
-    lose control and invisible formatting characters.
-  - `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
-    `sessions`, `run`, `attach`, `send`, `log`, `kill` (and, since
-    milestone 4, `profiles` and `session move-profile`); sessions named by
-    id prefix; terminal attach in raw mode with `Ctrl-]` to detach, also
-    under the kitty keyboard protocol and `modifyOtherKeys`, and on
-    `SIGTERM`/`SIGHUP`/`SIGINT`; the terminal is reset on every way out;
-    keystrokes go through one ordered sender task so output never waits on
-    input (live resize on Unix, initial size only on Windows); structured
-    attach as a conversation with numbered permission answers; `log` in
-    record order across stdout and stderr. The local token file is sent
-    only to a loopback `--node`, and a relative `--cwd` is resolved only
-    for one. Tested through the binary (`tests/cli/`).
-    Milestone 2 (Track C): `--node` is resolved through the
-    node book (a name, then `ssh://`/`user@host`, then a websocket
-    address; else the project's or the book's `default_node`, else this
-    machine's node), and `vessel nodes add|list|show|remove|default` edits
-    the book. A book node's id is pinned on first contact and a different
-    node is refused. Attach (both modes) follows through a
-    `ResumingStream`: a lost connection shows `[vessel] connection lost;
-    reconnecting…`, then `[vessel] reconnected`, and the attach goes on
-    without repeats or gaps; input lost with the connection is reported,
-    not resent (tested through a TCP proxy the test cuts). `vessel node
-    install` uploads a local build or this version's release to an SSH
-    node; any command reaches an SSH node through `SshConnector`, which
-    installs on first contact. `vessel node status` shows the version,
-    serving or draining, and live sessions. `vessel node update` installs,
-    then stops the node at once with no live session, lists them and
-    changes nothing by default, drains with `--when-idle`, or stops with
-    `--now` after confirming. End to end through `fake-ssh` and the real
-    `vesseld` (`tests/remote/`, Unix): fresh install and start, run and
-    attach, a changed pinned id refused, update side by side with
-    refuse-then-drain, and an SSH drop during attach resumed. Besides
-    `VESSEL_NODE`, `VESSEL_TOKEN` and `VESSEL_DATA_DIR` (milestone 1), the
-    CLI reads `VESSEL_CONFIG_DIR` (where the node book lives),
-    `VESSEL_SSH` (the `ssh` program) and `VESSEL_GH` (the GitHub CLI);
-    tests set all three so they never touch the user's book, the real
-    `ssh`, or GitHub (the README lists them).
-    Milestone 3 (Track P): `vessel node pair [--label] [--ttl 10m]` (the
-    link alone on stdout, a QR code from `qrcode` 0.14 when stdout is a
-    terminal, instructions on stderr), `vessel node devices` and `vessel
-    node devices revoke ID-PREFIX`, over any connection with the `admin`
-    scope; `nodes show` for a paired node, and `node status`, show the
-    key's fingerprint. `vessel nodes add NAME --pair` reads the link from
-    standard input only (argv is visible to other users and kept in shell
-    history, so `--pair LINK` is refused as exposed), shows the node id,
-    key fingerprint, routes and expiry, confirms at a terminal (`--yes`
-    otherwise), pairs, and writes the credential and then the book entry.
-    Every command reaches a paired node by name through
-    `Pinned<SecureConnector<WsDialer>>`, and an attach resumes over the
-    routes as it does over SSH. Tested end to end through an in-process
-    relay (`tests/cli/devices.rs`).
-- Milestone 3, Track S (in progress, `backend/m3-secure`):
-  - `vessel-secure` (2026-11-06): `initiate`/`respond` run Noise
-    `NK_25519_ChaChaPoly_SHA256` (prologue `vessel/secure/1`, 48-byte
-    messages with empty payloads, one 10 s deadline) over any `Carrier`
-    (in memory, `u16` length-prefixed bytes; websockets come with
-    `vessel-relay`). `SecureChannel` is a `FrameTransport`: frames are
-    chunked canonically into records of at most 65,535 bytes, sealed only
-    when the carrier can take them, and every size and chunk rule is
-    checked before anything is buffered. Any tampering ends the channel.
-    `NodeKeypair`, `routing_id`, `fingerprint`, and the relay's possession
-    proof (prologue `vessel/relay-proof/1`). Tested with the two published
-    NK vectors, tamper cases (corrupt, replay, reorder, drop, truncate,
-    each chunk rule), a seeded fuzz of the parser, 16 MiB frames, and a
-    `vessel-rpc` connection over the channel. The cipher crates are
-    optimised in dev builds (`Cargo.toml` explains why). `try_respond`
-    hands the carrier back after a failed handshake. `set_max_frame`
-    changes the frame limit from the next announcement on, so the node can
-    admit under 64 KiB and raise it after the preamble.
-  - `vessel-relay` (2026-11-06): `serve` on plain HTTP behind a reverse
-    proxy (`/v1/node`, `/v1/accept`, `/v1/connect`, `/health`), state in
-    memory only. A node registers with the relay token (constant-time) and
-    the possession proof, and replaces an earlier registration only after
-    proving the key. A client is not read until the node's data connection
-    arrives (no buffering), then both directions are forwarded a message at
-    a time; a sender's close frame (a node's `4401`) goes through
-    unchanged. Limits: one record per message (from the frame header), 64
-    waiting clients per node, 10 s to accept, pings every 10 s and a drop
-    after 30 s of silence, a per-address token bucket (IPv6 by `/64`; the
-    address may come from a proxy header). `NodeLink` keeps a node
-    registered (0.5-30 s jittered backoff, `LinkState` on a watch) and hands
-    each client's data connection to the node as a `WsCarrier`; `dial` and
-    `connect` are the client's. One `Keepalive` (a ping every 10 s, a drop
-    after 30 s of silence) covers the relay's connections and direct ones:
-    a node's `AxumCarrier` on `/secure` pings its client from inside the
-    carrier (from the reading side when nothing is being written, never
-    taking the writing task's waker), and every client carrier, relayed or
-    direct, fails after the same silence. `respond` runs the node's handshake on a
-    websocket and closes with `4401` when it fails; `relay_close` and
-    `node_close` read the codes back. `vesseld relay --bind --token-file
-    [--client-address-header]` runs it (README, "Running a relay"). Tested
-    on loopback with real relays, raw protocol peers, a byte tap (no
-    plaintext), a relay restart behind a forwarder, and
-    `vessel-testkit`'s misbehaving relay (drop, replay, reorder, corrupt
-    both ways end the channel; delay does not).
-- Milestone 4, Track F (in progress, `backend/m4-fleet`):
-  - `vessel-fleet` (F1, 2026-11-06; hardened after an independent review
-    the same day): `bundle` turns the home's sources (an instructions
-    file, a skills directory, `skip` globs, MCP definitions) into a
-    `Manifest` and a content-addressed `BlobStore` (`<root>/<2
-    hex>/<sha256>`, owner-only, written under temporary names, chunked
-    reads for `fleet.blob`, hash-checked writers for members; a damaged
-    blob is removed so it is fetched again). Bundle paths are
-    `instructions.md` and `skills/<name>/...`, `<name>` being the `name`
-    in the skill's `SKILL.md` (that one field, read as strictly as YAML
-    would, a checked `SkillName`). The generation rises only when files
-    (hash and executable bit) or MCP servers change. Symlinks in the
-    sources are followed only inside the skills directory; dot entries
-    are never bundled (silently at the top of the skills directory,
-    reported inside a skill); names that are one file on macOS or Windows
-    (case, NFC/NFD) and names ending in `.vessel-incoming` are reported.
-    `plan` decides per place in each `Target` (a harness home with its
-    instruction file and skills directory names, from
-    `vessel_harness::layout`; Gemini CLI takes no skills), by canonical
-    root, skipping a home that does not exist: write, adopt identical
-    content, keep a local edit (or a file Vessel never wrote) with the
-    incoming version beside it as a conflict, leave a deleted file
-    deleted (a conflict of its own kind, the record kept) until
-    `Managed::restore` (`vessel fleet restore <path>`), remove what left
-    the bundle if unchanged and not adopted and not the same file as a
-    placed one, release (forget) it otherwise, ignore bundle paths it
-    does not know, skip places in or linked to the sources, symlinks below
-    the root, and places it cannot read (per place, so other targets carry
-    on). A missing source is protected through its canonical directory.
-    The `Plan` is opaque and carries what it protects; `apply` reaches
-    every place through directories held open from the root (`openat`
-    with `O_NOFOLLOW` on Unix), decides again right before acting, writes
-    owner-only (0600, 0700 executable and directories) and atomically,
-    and records by canonical root and plain relative path in `Managed`
-    (`managed.json` version 2, checked when loaded). `resolve` fills
-    secret references and names every missing secret. Tested over
-    temporary trees: the operator's linked layout, aliased roots, plans
-    made stale between plan and apply (a link swap, a FIFO), name
-    collisions (`tests/fleet/`).
-  - `vessel-node` `fleet` (F2, 2026-11-06): fleet state is files under
-    `<data_dir>/fleet/` (`manifest.json`, `managed.json`, `state.json`,
-    `members.json`, `member.json` and `member.credential`, `blobs/`, a
-    `lock`), with `<data_dir>/fleet.toml` making a node the home. One loop
-    looks every 5 s: on the home it bundles when a metadata stamp of the
-    sources changed (at least every 10 minutes), publishes, cleans the
-    store and applies to the home's own profiles (its sources protected);
-    on a member it runs the pull loop for `member.json`. The home serves
-    `fleet.manifest`, `fleet.blob` (current blobs only), `fleet.watch` (a
-    50 s long poll answering when the generation differs), `fleet.report`
-    (devices only) and `fleet.members` (devices with `sync`). A member
-    pulls on (re)connecting, on a watch answer and every 10 minutes,
-    fetches missing blobs in 1 MiB chunks, applies into every profile's
-    home (`vessel_harness::home`; `OpenCode` left out when `~/.claude` is
-    a target) and reports. `vessel fleet init|invite|join|leave|status|
-    members|restore`; `join` pairs with a `sync` link from stdin
-    (`vessel_node::fleet::join`, also for `vessel init --join`); `restore`
-    forgets the deleted files' records under the fleet lock and leaves a
-    request the node applies. Tested in process over in-memory channels
-    through the real device gateway, between two nodes through an
-    in-process relay, and through the CLI.
-  - `vessel-node` `fleet` secrets and MCP (F3, 2026-11-06):
-    `<data_dir>/secrets.toml` (`NAME = "value"`, owner-only, errors
-    without values), `vessel fleet secret set|list|delete` (a prompt
-    without echo or stdin, never argv), and `FleetMcp`, the node's
-    `McpSource`: the definitions of the manifest applied here and the
-    secrets, a snapshot the fleet loop replaces, resolved per launch with
-    `vessel_fleet::resolve`. A session's agent gets every fleet server with
-    this node's values; one missing a secret is left out and named in the
-    session's log (end to end with `fake-acp`). Protocol 6's `secret.set`,
-    `secret.list` and `secret.delete` (admin) call the same functions;
-    `secret.copy` reads the value here and sends it as `secret.set`
-    through the envelope as the caller (`vessel fleet secret copy NAME
-    --to NODE_ID`, a whole node id), so the target must have granted the home `admin`; the
-    refusal says how (join again with `--grant`).
-  - Transfers on one node (F4, 2026-11-06): `vessel-harness` knows which
-    files (`SessionFiles::regular_files`, the files a profile move links,
-    never `memory/`; `memory_files`, Claude Code's per project and Codex's
-    `memories/`) and how a path is renamed for another working directory
-    (`rebase`: Claude Code's project directory, whatever spelling the
-    source used; Codex's dated rollouts stay). `vessel-fleet` copies them
-    into a staging blob store (`snapshot`, opened through directories held
-    open, no link followed, 256 MiB per file and 2 GiB in all checked as
-    read) and writes a received set (`place`, never overwriting).
-    `vessel-node` `transfers` keeps snapshots under
-    `<data_dir>/transfers/<id>/` for the caller that opened them (another
-    caller gets `not_found`), at most 16 at once, for 10 idle minutes, and
-    empties the directory at start; `session.export` refuses a live
-    session mid-turn unless forced (`SessionHandle::turn_running`) and
-    terminal sessions; `session.import` and `memory.import` pull through a
-    `Source` (this node's own export for the caller, an agent only from
-    sessions it started), fetch with hashes checked (`fleet::chunks`,
-    shared with the member's pull), rename and place, and with `start`
-    create the session through `session.create`'s path with `origin:
-    imported`. From another fleet node the same four calls go through the
-    envelope (`pass_on`) as the importing caller, so the source's grant to
-    the home and its ownership rules apply there. The client
-    has the calls and `fetch_transfer_file`, which streams a file into a
-    `ChunkSink` (the fleet's blob writer: hashed as written, kept only if
-    right) through `fetch_chunks`, the one per-file loop the member's pull
-    and the import use too; the CLI `vessel session
-    copy|move [--to NODE] [--profile] [--cwd]` (a move kills the source once
-    the copy started) and `vessel fleet memory copy`. Tested end to end with
-    `fake-acp` (Claude Code and Codex profiles in temporary homes) and
-    through the CLI.
-- Milestone 1 is merged on `backend/m1` (draft PR #1).
-- Manual smoke on Linux (2026-11-05) with real binaries:
-  - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.
-  - A structured Claude Code session (Haiku, `claude-agent-acp` 0.100.0)
-    answered.
-  - A `SIGTERM` stop left no adapter processes behind. After a restart the
-    session showed `interrupted` with its full log.
-  - `--resume` (ACP `session/load`) continued the conversation.
-  - `/rpc` without a token returned 401.
-- Harness environment: `vesseld` passes its own environment to harnesses.
-  For Claude Code that means the `CLAUDE_CONFIG_DIR` of whoever started the
-  node decides which account a session uses. Milestone 4 Track H (below)
-  makes this per session.
-- Milestone 4 Track H, the harness side (2026-11-06, branch
-  `backend/m4-profiles`; the node wiring follows the protocol 5 contract):
-  - `vessel-harness`: `profile` (`Profile`, the implicit default profile per
-    harness, `parse_profiles` for `profiles.toml` text, typed errors that
-    name the profile and key and never quote values); `home` (`home`,
-    `login_check`); `sessions` (`session_files` per the descriptor's
-    layout, `link_session`: hard links, never `memory/`, never through a
-    symbolic link, conflicts found before anything is linked); `mcp`
-    (`McpFile`, the owner-only per-session file, `WrittenMcpFile` removes
-    it on drop). `launch(lookup, spec, profile, mcp)` returns `Launch`
-    (command, MCP file, servers the harness cannot take); it takes the
-    directory for the MCP file (the node's own, ADR 0012; no shared
-    fallback) and checks the profile against `spec.profile`. `layout(harness)` says where
-    shared instructions and skills live in a home (for fleet sync). Descriptors now
-    carry the default profile name, home, login check, session finder and
-    terminal MCP form. No MCP value is ever an argument: Claude Code reads
-    an owner-only `--mcp-config=` file, Codex gets `-c mcp_servers.<name>`
-    overrides that name variables set in its environment.
-  - `vessel-agent`: `AgentSetup::mcp_servers`, converted to ACP in `mcp`;
-    HTTP servers only when the agent advertises them.
-  - `vessel-session`: `create_with(spec, LaunchOptions { profile,
-    mcp_servers, mcp_dir, created_by })`; `create` is the defaults.
-    `move_profile(id, ProfileMove)` (H2, `moving`): a structured actor
-    takes a `Control::Move` while it runs. Input is held (`Moving`,
-    `conflict`) for the move's length; the driver's `turn_running` answers
-    in order with the commands before it, so a prompt already sent
-    counts. Mid-turn is `MoveError::TurnInProgress` unless forced (then
-    the turn is cancelled, waited for up to 10 s); the files are linked
-    while the old agent still runs; the agent is stopped (`SIGTERM`, then
-    `SIGKILL` after 5 s) and the new one started with `session/load`, its
-    replay dropped until it is ready. If it does not start, the previous
-    command starts again on the same conversation and the move fails
-    (`spawn_failed`) without `ProfileChanged`.
-  - `vessel-agent`: `AgentInput::turn_running`, answered by the driver.
-  - `vessel-node` (H1): the `profiles` module reads `profiles.toml` at
-    start (a broken file stops the node) and on `profile.reload` (a broken
-    one leaves the set in effect); `profiles::launch` turns a spec and the
-    caller's principal into `LaunchOptions` (the profile resolved, an
-    owner-only `<data_dir>/mcp`, `created_by`). Its `McpSource` is where
-    fleet sync's resolved MCP servers come in (H3, node side; empty until
-    Track F plugs in); missing secrets become `vessel:` lines in the
-    session's log (`LaunchOptions::notices`). The store's schema 3 keeps each session's
-    current profile (following `ProfileChanged`) and its creator. The terminal actor holds the
-    MCP file until the session ends.
-  - `vessel-node` (H2): `profiles::moving::plan` resolves the target
-    (none: the harness's default; unknown or another harness's:
-    `invalid_request`) and the session's current profile (gone from
-    `profiles.toml`: `conflict`), computes both homes with the node's
-    environment, and runs the target's login check with its environment,
-    bounded by 30 s (not logged in, or no answer: `conflict`). Terminal
-    sessions are refused first (`unsupported`), before any harness runs.
-    `Sessions::move_profile` moves live sessions; an ended one is
-    `conflict`. MCP servers for the new agent come from the same seam as
-    `session.create`'s.
-  - `vessel-client`: `move_profile`; `vessel-cli`: `vessel session
-    move-profile <session> <profile> [--force]`.
-  - F5, `vessel init`: `vessel-cli`'s `init` runs idempotent steps (node
-    identity, harnesses, install offers, profiles for other accounts'
-    homes, login checks, `--service`), each reporting done, already done or
-    skipped; `--join` waits for fleet sync. `vessel-harness`'s `setup`
-    holds the harness knowledge it needs; `vessel-store`'s
-    `DataDir::write_profiles` writes the file owner-only and atomically.
-  - H4, agent principals: `vessel-node`'s `agents` registry (credential
-    hashes in memory, scopes, depth, the agent's connections; limits of 8
-    live sessions an agent created and depth 3, checked under one lock),
-    the agent preamble on the local socket (`ipc`), the ownership rule in
-    the guard (each request type declares the session an `operate` call
-    acts on), and the `vessel` server in `profiles::launch` from
-    `Config::vessel_mcp` (`vessel node start` sets its own executable,
-    `vesseld` a `vessel` beside it). `vessel-session` takes the session id
-    from `LaunchOptions::id`, so the credential is bound before the agent
-    starts. `vessel-client`: `NodeClient::connect_local`. `vessel-mcp`:
-    the tools (`list_nodes`, `list_sessions`, `create_session`,
-    `send_input`, `answer_permission`, `read_events`, `wait_turn`,
-    `kill_session`); `vessel mcp` runs them on stdio. Since protocol 6
-    (Track X) each tool but `list_nodes` takes `node` and goes through
-    `NodeClient::call_on` (`fleet.forward`) for another node, and
-    `wait_turn` is a long poll of `session.read` with `wait`.
+### Milestones
+
+- **Milestone 1** (one node; `docs/plans/backend-m1.md`): merged on
+  `backend/m1`, draft PR #1; CI first all green in run 42141788299.
+  Checked by hand on Linux (2026-11-05) with real binaries: `vesseld`
+  with the CLI ran `codex --version` in terminal mode; a structured Claude
+  Code session (`claude-agent-acp` 0.100.0) answered; a `SIGTERM` stop
+  left no adapter processes behind, and after a restart the session showed
+  `interrupted` with its full log; `--resume` (ACP `session/load`)
+  continued the conversation; `/rpc` without a token returned 401.
+- **Milestone 2** (SSH; `docs/plans/backend-m2.md`, ADRs 0007 and 0008):
+  merged on `backend/m2`. Checked by hand over real OpenSSH: install by
+  upload, auto-start with `--bind none`, `run` over SSH, `update` refused
+  while a session was live, a clean stop.
+- **Milestone 3** (relay and pairing; `docs/plans/backend-m3.md`, ADRs 0009
+  and 0010): built on `backend/m3`. Checked by hand on one machine
+  through a local relay (pairing, every command through it, revocation).
+  Still to do by hand: `wss://` behind an HTTPS proxy on a public host.
+- **Milestone 4** (the fleet; `docs/plans/backend-m4.md`, ADRs 0011 to
+  0013, protocols 5 and 6): Tracks H, F and X and the review fixes
+  (Track R) are merged on `backend/m4`, green on Linux, macOS and Windows.
+  Still to do by hand: the plan's two smokes (four profiles on one node; a
+  fresh machine joining), with the scripts in `docs/smoke/`.
+
+### By crate
+
+In the crate table's order.
+
+- `vessel-proto`: the wire contract, versions 2 to 6 (`docs/PROTOCOL.md`).
+  Protocol 2, milestone 1: typed RPC, the event log, the ACP-shaped agent
+  timeline. 3: `node.stop` and `NodeInfo.state`. 4: devices, scopes on
+  every method, the node's public key. 5: profiles, `session.move_profile`,
+  creators, agent credentials, fleet manifests, `fleet.*` and MCP server
+  definitions. 6: the `relay` scope, the envelope (`forward`: `Origin`,
+  `fleet.forward`/`relay`/`deliver`), `fleet.grant`/`peers`/`nodes`,
+  `session.read` with `wait`, transfers (`transfer`, with the size
+  limits) and secrets (`secret`: `SecretValue`, redacted in `Debug`).
+  Every method has a first version (`since`), and a call that uses a
+  later field needs that version (`Call::since`). No I/O.
+- `vessel-rpc`: handshake, typed calls with cancellation and an in-flight
+  bound (calls beyond it are refused `Unavailable`; the connection keeps
+  being read so `Cancel` gets through), per-connection outbound queue
+  with bounded flush batching, subscription ordering, release and lag on
+  both ends (ADR 0006), in-memory transport for tests, and `Framed`
+  (length-delimited frames over any byte stream: SSH stdio and the local
+  socket). The `Welcome`'s `NodeInfo` is read from a watch, so a draining
+  node says so. A connection the server closes still answers the calls
+  already running (within the close timeout) and writes every frame it
+  took off its queue, so `node.stop{now}` gets its `ack`. Both sides hold
+  to the negotiated version: a call newer than the connection is refused
+  by the client before sending and by the server before dispatch, and
+  outgoing frames are adapted to an older client (`ServerFrame::for_protocol`).
+- `vessel-proc`: `CommandSpec`, `spawn` as a process-group leader,
+  `ProcessGroup` (Unix). Stopping signals the whole group, and the group
+  is swept once its leader exits (`signal_with_leader`: an `EPERM` from a
+  leader that has begun exiting counts as gone only once the group is).
+  On Windows each child starts suspended in its own kill-on-close job
+  object (`process-wrap`), so stopping ends the whole tree: an npm `.cmd`
+  shim's `cmd.exe`, the adapter it started, and their children.
+- `vessel-harness`: one descriptor module per harness, `Lookup` (explicit
+  search path), concurrent `discover` with a version-probe timeout, and
+  `launch` (the working directory absolute and existing, the home
+  directory when none is given). `HarnessEnv` is the account harnesses
+  run as (the user's home and the harness home variables), given by the
+  binaries and never read from the process by library code: every
+  in-process node a test starts gets a temporary one. Milestone 4:
+  `profile` (`Profile`, the implicit default profile per harness,
+  `parse_profiles`, typed errors that name the profile and key and never
+  quote values); `home` and `login_check`; `layout` (where shared
+  instructions and skills live in a home); `sessions` (`session_files`,
+  `link_session`: hard links, never `memory/`, never through a symbolic
+  link, conflicts found before anything is linked); `memory_files` and
+  `rebase` (a path renamed for another working directory: Claude Code's
+  project directory; Codex's dated rollouts stay); `mcp` (`McpFile`, the
+  owner-only per-session file). No MCP value is ever an argument: Claude
+  Code reads an owner-only `--mcp-config=` file, Codex gets `-c
+  mcp_servers.<name>` overrides that name variables in its environment.
+  `setup` holds what `vessel init` offers (install and login commands,
+  other accounts' homes). The `fakes` feature installs testkit binaries
+  under real harness names. Model selection is not here: it goes over ACP
+  in `vessel-agent`.
+- `vessel-pty`: `PtyProcess` over `portable-pty`, with dedicated reader,
+  control (input and resize, in order) and waiter threads behind bounded
+  channels. On Windows it answers the pseudo console's startup cursor
+  query itself (`startup`), and a session terminates only its direct
+  child; the rest end when the pseudo console closes.
+- `vessel-agent`: ACP v1 client on `agent-client-protocol` 5.0.
+  `AgentProcess` (own process group), `AgentInput` (prompt, cancel,
+  permission answers with typed refusals, `turn_running`), `AgentOutputs`
+  (bounded). A single driver loop owns the session; handlers forward into
+  one ordered channel. The model is chosen through the `model` config
+  option. The handshake has a deadline (60 s by default, `vesseld
+  --agent-handshake-timeout`); a stuck adapter fails the session. MCP
+  servers go in `session/new` and `session/load` (HTTP servers only when
+  the agent advertises them). The `mapper` is pure and tested against
+  fixtures in `crates/vessel-agent/tests/fixtures/acp/`.
+- `vessel-session`: `SessionRuntime`, `SessionHandle`, `Follow`, records
+  shared as `Arc<EventRecord>`; terminal and structured actors share the
+  `lifecycle` module (stop-responsive publishing, two-step stop).
+  Structured status is `Starting` until the agent's `Ready`, then
+  `Running`; one that never became ready ends `Failed`, unless it was
+  killed while starting. An ended session stays (ring included) until the
+  node removes it once the store has the whole log. Milestone 4:
+  `create_with(spec, LaunchOptions)` (profile, MCP servers and directory,
+  creator, origin, the id chosen by the node so an agent credential is
+  bound before the agent starts), and `move_profile` (`moving`): input is
+  held for the move, a running turn is refused unless forced (then
+  cancelled, waited for up to 10 s), the files are linked while the old
+  agent runs, the agent is stopped and started again with
+  `session/load`; if the new one does not start, the old command starts
+  again on the same conversation and the move fails without
+  `ProfileChanged`.
+- `vessel-store`: an owner-only data directory (Unix: 0700, an existing
+  one tightened or refused if another user's; secrets 0600), the SQLite
+  event log with a batching writer thread, paged reads, restart recovery
+  to `Interrupted`, retention, `user_version` migrations. `node.id`,
+  `token`, `node.key` (32 bytes, created on first start and never
+  replaced, wiped from memory when dropped); `NodeLock` (one node per data
+  directory, an OS lock with the holder in `vesseld.owner`) and the
+  `StartLock`; `profiles.toml` (`DataDir::write_profiles`, owner-only and
+  atomic). Schemas: 2 adds `devices` (only the SHA-256 of each
+  credential, compared in constant time; a revoked device stays as a
+  tombstone), 3 each session's current profile and creator, 4 where a
+  session came from (`origin`, `via`).
+- `vessel-node` (`vesseld`):
+  - Sessions: axum `/health` and token-checked `/rpc`, the `Handler`
+    routing to `sessions` (live runtime sessions plus stored ones; a
+    session whose log is complete is served from the store, and a live
+    one serves from its ring the records retention already pruned),
+    `persist` (one task per session drains its durable channel into the
+    store), `subscribe` (ring, then a durable-gated store gap fill, then
+    live; `Lagged` when a subscriber falls behind), and an ordered
+    shutdown in which subscribers still receive the final `Interrupted`.
+  - Transports: the local socket (Unix socket 0600, or a named pipe on
+    Windows) whose first frame is the token or an agent's credential;
+    `--bind none`; `vesseld attach`, the byte-pumping proxy SSH runs,
+    which starts the node through a login shell when none answers;
+    `vesseld version` and `cleanup`; `node.stop` (`now`, or drain).
+  - Devices (milestone 3): every connection has a principal (`Owner`,
+    `Device`, `Agent`, `Delegated`), and every call is checked against its
+    method's scope by `guard::Guarded`, generated from one row per method;
+    `NodeService`'s calls are inherent methods, so only `Guarded` can be
+    served. `device.invite` (single-use, in memory by hash, at most a day,
+    at most 64 waiting), `device.list`, `device.revoke` (closes the
+    device's connections, each of which has its own RPC server).
+    `SecureGateway::accept` answers the Noise handshake with the node's key
+    pair through `vessel_relay::respond` (closing with `4401` when it
+    fails), then the device preamble; at most 64 channels may be in their
+    handshake or preamble at once, with frames limited to 64 KiB until
+    admitted. Carriers come from `/secure` (pinged every 10 s, dropped
+    after 30 s of silence) and from one `NodeLink` per `--relay`;
+    `--public` adds direct routes to pairing links. Device labels lose
+    control and invisible formatting characters.
+  - Profiles (H1, H2): `profiles` reads `profiles.toml` at start (a broken
+    file stops the node) and on `profile.reload` (a broken one leaves the
+    set in effect); `NodeProfiles` owns the `HarnessEnv` and is the one
+    place node code resolves a home; `profiles::launch` turns a spec and
+    the caller's principal into `LaunchOptions` (missing secrets become
+    `vessel:` lines in the session's log). `profiles::moving::plan`
+    resolves the target, computes both homes, and runs the target's login
+    check (30 s); terminal sessions are refused first.
+  - Agents (H4, ADR 0013): the `agents` registry (credential hashes in
+    memory, scopes, depth, the agent's connections; at most 8 live
+    sessions an agent created and depth 3, checked under one lock), the
+    agent preamble on the local socket, the ownership rule in the guard,
+    and the `vessel` MCP server in every session from `Config::vessel_mcp`.
+  - Fleet (F2, F3, ADR 0012): state under `<data_dir>/fleet/`, with
+    `<data_dir>/fleet.toml` making a node the home. One loop looks every
+    5 s: the home bundles when its sources changed (at least every 10
+    minutes), publishes, and applies to its own profiles (its sources
+    protected); a member pulls on (re)connecting, on a `fleet.watch`
+    answer and every 10 minutes, fetches missing blobs in 1 MiB chunks,
+    applies into every profile's home and reports. The home serves
+    `fleet.manifest`, `fleet.blob`, `fleet.watch` (a 50 s long poll),
+    `fleet.report` and `fleet.members`. `<data_dir>/secrets.toml`
+    (owner-only, errors without values) and `FleetMcp`, which resolves
+    the fleet's MCP servers with this node's secrets at each launch;
+    `secret.set`/`list`/`delete`, and `secret.copy`, which asks the target
+    `secret.list` first and sends the value as `secret.set` only if that
+    passes.
+  - Across nodes (Track X, protocol 6): `envelope` (`fleet.forward`,
+    `relay`, `deliver`, with `Principal::Delegated`: the delivering
+    device's scopes intersected with the origin's, ownership and the
+    agent limits applied to the origin); `fleet/links` (the mutual grant:
+    a member grants its home the scopes chosen at join, once per join,
+    `fleet/granted.json`; the home keeps the credentials under
+    `fleet/grants/` and binds each member device to the node id and key of
+    its first grant, `fleet/bindings.json`, released by `vessel fleet
+    forget`); `fleet.peers` and `fleet.nodes`; `session.read` with `wait`
+    and its shares (`waits`: at most half of a connection's calls, and 8
+    per origin on a node).
+  - Transfers (F4, protocol 6): `transfers` keeps `session.export` and
+    `memory.export` snapshots under `<data_dir>/transfers/<id>/` for the
+    caller that opened them (another caller gets `not_found`), at most 16
+    at once, for 10 idle minutes, and empties the directory at start; a
+    live session mid-turn and terminal sessions are refused.
+    `session.import` and `memory.import` pull through a `Source` (this
+    node, or another through the envelope as the importing caller),
+    fetch with hashes checked (`fleet::chunks`, shared with the member's
+    pull), rename and place, and with `start` create the session with
+    `origin: imported`.
+- `vessel-client`: the websocket connection with the bearer token (`wss://`
+  refused for token connections: ADR 0005's amendment), one typed method
+  per call, the gap-free `SessionStream`. `Connector` (`WsConnector`; the
+  SSH one is in `vessel-remote`), `follow_resuming`/`ResumingStream`
+  (redials with 0.5-30 s jittered backoff and follows again from its
+  cursor; never repeats a call), `Pinned` (refuses a node whose id is not
+  the pinned one). The node `book` (`<config_dir>/vessel/nodes.toml`, a
+  project's `.vessel/config.toml` that may only pick one of the user's
+  nodes, `resolve` for `--node`; edited with `toml_edit`, keeping
+  comments). Milestone 3: paired nodes in the book (`key`, `relay`,
+  `direct`, `credential = { file }`), `DeviceCredential` files (0600, in a
+  0700 directory, bound to their node's id and key, so a book entry naming
+  another key cannot draw the secret out), `pairing::pair` and the device
+  preamble, and `secure::SecureConnector`: direct routes first (3 s), then
+  relays (10 s), each followed by the handshake to the pinned key, the
+  preamble and `hello`; a refusal after the handshake ends the search.
+  Milestone 4: `NodeClient::connect_local` (the local socket, with the
+  token or an agent's credential), `call_on` (`fleet.forward`), the
+  fleet, secret and transfer calls, and `fetch_chunks`, the one per-file
+  loop that streams a file into a caller's `ChunkSink` (the fleet's blob
+  writer: hashed as written, kept only if right).
+- `vessel-remote`: `ssh` (the system client with fixed options,
+  `ControlMaster` sharing on Unix, commands from fixed words and
+  single-quoted values), `platform` (`uname -sm`, four release targets),
+  `install` (upload through stdin, SHA-256 check, run its `version`, then
+  rename onto `vesseld-<version>` or `vesseld-<version>-dev-<hash>`;
+  then `cleanup`), `release` (the archive and `SHA256SUMS` fetched with
+  `gh release download` and checked), `provision` (`local`, `release` or
+  `auto`), and `SshConnector` (`ssh … <data_dir>/bin/<binary> attach`,
+  `ProxyExit` codes as typed errors, exit 127 installs and retries once).
+  Tested against a temporary home through `ssh` and `gh` stand-ins, and
+  with the real `vesseld` through `fake-ssh` (Unix only).
+- `vessel-secure`: Noise `NK_25519_ChaChaPoly_SHA256` (prologue
+  `vessel/secure/1`, one 10 s deadline) over any `Carrier`.
+  `SecureChannel` is a `FrameTransport`: frames are chunked canonically
+  into records of at most 65,535 bytes, sealed only when the carrier can
+  take them, and every size and chunk rule is checked before anything is
+  buffered; any tampering ends the channel. `NodeKeypair`, `routing_id`,
+  `fingerprint`, the relay's possession proof, `set_max_frame` (the node
+  admits under 64 KiB and raises it after the preamble). Tested with the
+  published NK vectors, tamper cases, a seeded fuzz of the parser, and 16
+  MiB frames.
+- `vessel-relay`: `serve` on plain HTTP behind a reverse proxy
+  (`/v1/node`, `/v1/accept`, `/v1/connect`, `/health`), state in memory
+  only. A node registers with the relay token and the possession proof. A
+  client is not read until the node's data connection arrives (no
+  buffering), then both directions are forwarded a message at a time; a
+  sender's close frame goes through unchanged. Limits: one record per
+  message, 64 waiting clients per node, 10 s to accept, a per-address
+  token bucket. `NodeLink` keeps a node registered (jittered backoff,
+  `LinkState` on a watch). One `Keepalive` (a ping every 10 s, a drop after
+  30 s of silence) covers relayed and direct connections. `respond` runs
+  the node's handshake on a websocket and closes with `4401` when it
+  fails. `vesseld relay` runs it (README, "Running a relay").
+- `vessel-fleet`: `bundle` turns the home's sources into a `Manifest` and
+  a content-addressed `BlobStore` (owner-only, hash-checked writers; a
+  damaged blob is removed so it is fetched again). Skills are named by
+  their `SKILL.md`'s `name`; dot entries are never bundled; names that
+  collide on macOS or Windows are reported. `plan` decides per place in
+  each harness home (write, adopt identical content, keep a local edit
+  with the incoming version beside it, leave a deleted file deleted until
+  restored, remove what left the bundle if unchanged), skipping places in
+  or linked to the sources; `apply` reaches every place through
+  directories held open from the root (no symlink followed), decides
+  again right before acting, writes owner-only and atomically, and
+  records what it wrote in `managed.json`. `resolve` fills secret
+  references and names every missing secret. Transfers as file sets:
+  `snapshot` into a staging store (256 MiB per file, 2 GiB in all, checked
+  as read) and `place` (never overwriting: a session whole or not at all,
+  memory beside what differs).
+- `vessel-mcp`: `vessel mcp`, the MCP server on `rmcp` (stdio) a node
+  attaches to every session as `vessel`. Tools: `list_nodes`,
+  `list_sessions`, `create_session`, `send_input`, `answer_permission`,
+  `read_events`, `wait_turn` (a long poll of `session.read` with `wait`),
+  `kill_session`; each but `list_nodes` takes `node` and goes through
+  `fleet.forward` for another node.
+- `vessel-cli` (`vessel`): `node start`, `status`, `harnesses`,
+  `sessions`, `run`, `attach`, `send`, `log`, `kill`; terminal attach in
+  raw mode with `Ctrl-]` to detach (also under the kitty keyboard
+  protocol and `modifyOtherKeys`; the terminal is reset on every way out),
+  structured attach as a conversation with numbered permission answers.
+  The local token file is sent only to a loopback `--node`, and a relative
+  `--cwd` is resolved only for one. Milestone 2: `--node` through the book, `vessel nodes`, ids pinned on
+  first contact, attach through a `ResumingStream` (`[vessel] connection
+  lost; reconnecting…`), `vessel node install|status|update`. Milestone 3:
+  `vessel node pair` (the link on stdout, a QR code on a terminal),
+  `vessel node devices [revoke]`, `vessel nodes add NAME --pair` (the link
+  from standard input only), every command to a paired node through
+  `Pinned<SecureConnector<WsDialer>>`. Milestone 4: `profiles`, `run
+  --profile`, `session move-profile|copy|move`, `fleet
+  init|invite|join|leave|status|members|forget|restore`, `fleet secret
+  set|list|delete|copy` (values from a prompt without echo or stdin,
+  never argv), `fleet memory copy`, `init` (idempotent steps: node
+  identity, harnesses, install offers, profiles for other accounts' homes,
+  login checks, `--service` as a systemd user unit or launchd agent,
+  `--join`), and `mcp`. The CLI reads `VESSEL_NODE`, `VESSEL_TOKEN`,
+  `VESSEL_DATA_DIR`, `VESSEL_CONFIG_DIR`, `VESSEL_SSH` and `VESSEL_GH`;
+  tests set them so they never touch the user's book, `ssh` or GitHub.
+  Tested through the binary (`tests/cli/`), including a test that plants
+  secret values and searches every log, file and command line a fleet run
+  produced (`canary.rs`).
+- `vessel-testkit`: `fake-tui`, `fake-acp`, `fake-ssh` (the OpenSSH
+  command line, running the "remote" command locally under a fake home,
+  with an injectable connection drop), the `Fake::path` locator (a nested
+  `cargo build` once per test process; the first one of a run recompiles
+  about 30 crates), and `within`, the test safety net whose clock starts
+  after that build. The fakes report the environment, arguments, MCP
+  servers, loaded session id and working directory they got (`report
+  <path>` writes them to a file). With the `relay` feature, a relay that
+  drops, replays, reorders, corrupts or delays records on command.
+- Release workflow (`.github/workflows/release.yml`, milestone 2): on a
+  `v<version>` tag matching the workspace version, it builds `vesseld` for
+  four targets (musl through `cargo-zigbuild`), packaged with
+  `SHA256SUMS`, and attaches them to the tag's release. Not run yet: no
+  tag has been pushed. Signing waits for the owner's decision on public
+  releases.
 
 ## Later
 
-Peers, relay, SSH transport and self-update, sync, the
-model router and the LSP bridge each get a plan and ADRs when they start. See
-`ROADMAP.md`.
+Model routing (Phase 3), the LSP bridge (Phase 4) and the clients (Phase
+5) each get a plan and ADRs when they start. See `ROADMAP.md`.

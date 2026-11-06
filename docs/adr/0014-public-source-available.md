@@ -1,6 +1,6 @@
 # ADR 0014: A public repository under a source-available license
 
-Status: accepted, 2026-11-06 (operator's decision)
+Status: accepted, 2026-11-06 (the operator's decision).
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR 0006: Subscription ordering and lag on both ends of a connection
 
-Status: accepted, 2026-11-05 (Track S, `vessel-rpc`)
+Status: accepted, 2026-11-05 (Track S, `vessel-rpc`).
 
 ## Context
 
