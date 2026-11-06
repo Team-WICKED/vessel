@@ -14,25 +14,27 @@
 //!   Android, FreeBSD), the waiter waits for the exit without reaping, so
 //!   the zombie leader keeps its id reserved; then, under the lock, it sets
 //!   the flag, sweeps the group and reaps. A signal takes the same lock and
-//!   does nothing once the flag is set. No signal can reach a reused id.
+//!   does nothing once the flag is set. No signal can reach a reused id,
+//!   but for the one after a refused signal's reap (below), in the
+//!   microseconds the sweep after any reap has too.
 //! - Elsewhere (macOS: `nix` offers `WNOWAIT` but not `waitid` there) the
 //!   waiter reaps first and sets the flag right after: the window shrinks
 //!   from the escalation's seconds to the microseconds between the two, the
 //!   same race `vessel-proc` accepts for its sweep. Closing it there would
 //!   take `kqueue`'s `NOTE_EXIT`, which this crate cannot test.
 //! - In that window macOS refuses to signal the group (`EPERM`: every
-//!   member has exited, none is reaped yet). A refused signal therefore
-//!   waits, on a condition variable and at most [`REAP_GRACE`], for the
-//!   waiter to set the flag: if it does, the leader is gone and the signal
-//!   counts as delivered; if not, the refusal is real (a member running as
-//!   another user) and is returned.
+//!   member has exited, none is reaped yet). A refused signal follows the
+//!   rule `vessel-proc` keeps for every group signal
+//!   (`ProcessGroup::signal_with_leader`): it waits, on a condition
+//!   variable and at most `vessel_proc::REAP_GRACE`, for the waiter to set
+//!   the flag; if it does, the group is signalled again (gone, or a real
+//!   refusal from a member running as another user, which is returned); if
+//!   not, the first refusal is returned.
 //! - Windows has no process groups: the killer terminates the program and
 //!   the pseudo console's closing ends the rest.
 
 #[cfg(unix)]
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
-#[cfg(unix)]
-use std::time::Duration;
 
 use vessel_proc::{InvalidGroup, Signal, SignalError};
 
@@ -59,12 +61,6 @@ struct Leader {
     exiting: Condvar,
 }
 
-/// How long a refused signal waits for the waiter to report the leader's
-/// exit (macOS, see the module's Decision Log). The waiter reaps as soon as
-/// the leader exits, so this only bounds a real refusal's answer.
-#[cfg(unix)]
-const REAP_GRACE: Duration = Duration::from_millis(500);
-
 #[cfg(unix)]
 impl Leader {
     /// Signal the group, unless the leader has exited.
@@ -73,16 +69,13 @@ impl Leader {
         if *exited {
             return Ok(());
         }
-        match self.group.signal(signal) {
-            Err(refused) if refused.is_refused() => {
-                let (exited, _timeout) = self
-                    .exiting
-                    .wait_timeout_while(exited, REAP_GRACE, |exited| !*exited)
-                    .unwrap_or_else(PoisonError::into_inner);
-                if *exited { Ok(()) } else { Err(refused) }
-            }
-            delivered => delivered,
-        }
+        self.group.signal_with_leader(signal, move |grace| {
+            let (exited, _timeout) = self
+                .exiting
+                .wait_timeout_while(exited, grace, |exited| !*exited)
+                .unwrap_or_else(PoisonError::into_inner);
+            *exited
+        })
     }
 
     /// The leader exited: from now on signals do nothing. Sweeps the group

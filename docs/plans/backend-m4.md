@@ -291,7 +291,10 @@ member vesseld                         home vesseld
   Windows only inside the user's profile); Codex rollouts match the whole
   id and two are an error; one case rule for variable names (Windows
   ignores case); `EPERM` from an exited leader's group counts as gone only
-  once the group is (`vessel-proc`, `vessel-pty`); typed errors and
+  once the group is, through one rule for every group signal
+  (`ProcessGroup::signal_with_leader`: wait up to 500 ms for the leader's
+  reap, then signal again; a second `EPERM` is returned), since macOS
+  refuses a leader that has begun exiting before `try_wait` sees it; typed errors and
   config; links taken back on a failure partway; `memory` in any case.
 - **H1 on the node (done):** `profiles.toml` in the data directory, read
   at start (a broken file stops the node) and on `profile.reload` (a
