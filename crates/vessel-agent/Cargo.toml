@@ -12,11 +12,11 @@ vessel-proc.workspace = true
 vessel-proto.workspace = true
 
 agent-client-protocol.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
-tokio-util = { workspace = true, features = ["compat"] }
 tracing.workspace = true
 
 [dev-dependencies]

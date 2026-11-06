@@ -58,3 +58,16 @@ transport (for example Claude stream-json) can be added later behind the same
   adapter supports them. Terminal mode always has them.
 - Resume uses ACP `session/load` with the stored `HarnessSessionId`, where the
   agent supports it.
+- Backpressure through the SDK (amended 2026-11-06, Track S review): the
+  SDK (5.0) reads agent output into unbounded queues and expects the
+  transport to push back. `vessel-agent` therefore feeds it its own line
+  stream, which holds each `session/update` notification and
+  `session/request_permission` request back until the driver has taken
+  the previous ones (64 in flight); a stalled consumer stops the reading
+  and the agent blocks on write. Not bounded: responses to Vessel's own
+  requests (a handful outstanding at most) and methods Vessel does not
+  handle, which the SDK answers or drops itself; those can only queue up
+  while the driver is stalled and the agent sends unhandled methods.
+  Messages Vessel sends to the agent go through the SDK's unbounded
+  outgoing queue too; they are few (requests and answers) and need no
+  bound.
