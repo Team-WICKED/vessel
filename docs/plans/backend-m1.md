@@ -59,7 +59,16 @@ Owns: `vessel-proc`, `vessel-harness`, `vessel-pty`, `vessel-agent`,
   `ProcessGroup::kill(signal)` kills the whole group (Unix via `nix`; on
   Windows kill the child and document the gap). Map `ExitStatus` to
   `Option<i32>`.
+- Amended 2026-11-06 (Track S review): on Windows the gap was a bug, since
+  npm installs ACP adapters as `.cmd` shims and killing `cmd.exe` left the
+  adapter running. Each child now starts suspended in its own kill-on-close
+  job object through `process-wrap` (new dependency, Windows only; it
+  replaces terminating the direct child and keeps the Win32 `unsafe` out of
+  the workspace). Waiting still waits for the child only, then terminates
+  the job, as the Unix sweep does.
 - Tests: spawn the testkit binary, kill the group, check its child is gone.
+  On Windows the fakes run behind `.cmd` shims (`vessel_testkit::
+  write_cmd_shim`, and `vessel_harness::fakes::install`).
 
 ### R2. `vessel-testkit`: fakes
 - `fake-tui`: echoes stdin to stdout with a prompt, prints its window size on

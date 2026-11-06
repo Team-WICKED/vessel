@@ -105,6 +105,11 @@ hostname = "0.4"
 nix = { version = "0.31", features = ["signal"] }
 # PTYs on Unix and Windows ConPTY behind one API (vessel-pty).
 portable-pty = "0.9"
+# Windows job objects for vessel-proc (Windows only): the child starts
+# suspended, joins a kill-on-close job, then resumes, so the whole tree
+# (`.cmd` shim, node, the harness, its MCP servers) stops together. Keeps
+# the Win32 FFI and its `unsafe` out of this workspace.
+process-wrap = { version = "10", default-features = false, features = ["job-object", "kill-on-drop", "tokio1"] }
 # SQLite event log with the library compiled in (vessel-store, ADR 0004).
 rusqlite = { version = "0.41", features = ["bundled"] }
 # Safe `tcgetwinsize` for the fake-tui test binary (vessel-testkit only).

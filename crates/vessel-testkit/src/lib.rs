@@ -141,6 +141,32 @@ async fn timed<F: Future>(
     tokio::time::timeout(limit, test).await
 }
 
+/// Write `<dir>/<name>.cmd`, a shim that runs `program` with every argument
+/// and returns its exit code; returns the shim's path.
+///
+/// npm installs Windows command-line tools this way, so a test that runs a
+/// fake through a shim gets `cmd.exe` as the direct child and the fake as
+/// its child, the shape that stopping a session must handle there.
+///
+/// # Errors
+/// The file exists already or cannot be written.
+#[cfg(windows)]
+pub fn write_cmd_shim(dir: &Path, name: &str, program: &Path) -> std::io::Result<PathBuf> {
+    use std::io::Write as _;
+
+    let shim = dir.join(format!("{name}.cmd"));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&shim)?;
+    write!(
+        file,
+        "@echo off\r\n\"{}\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+        program.display()
+    )?;
+    Ok(shim)
+}
+
 /// Why a fake binary could not be provided.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LocateError {

@@ -13,8 +13,10 @@ Plan: `docs/plans/backend-m1.md`.
 - [x] Durable session log with resume by sequence number (SQLite).
 - [x] Token auth on every connection.
 - [x] Typed client library; CLI with interactive attach.
-- [ ] Verified on Windows and macOS in CI (Linux only so far; Windows kills
-      only the direct child, not the process tree).
+- [ ] Verified on Windows and macOS in CI (Linux only so far). Windows
+      structured sessions stop their whole process tree (job objects);
+      Windows PTY sessions terminate the direct child and rely on the
+      pseudo console closing for the rest.
 
 ## Phase 1: many nodes
 
