@@ -200,8 +200,12 @@ impl Forwarder {
                 sent_any = true;
             }
             if !sent_any {
-                // Pruned up to `until`: the ring takes over from there, and
-                // the client sees the jump.
+                // Retention pruned everything from the cursor up to `until`.
+                // Move the cursor to `until` so the next `follow` starts at
+                // the ring; the client sees the jump as missing records.
+                // Keeping the cursor would ask the ring for the same gap
+                // again, forever (a busy loop re-reading the store).
+                self.cursor = self.cursor.max(until);
                 break;
             }
         }

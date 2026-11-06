@@ -60,4 +60,6 @@ pub use config::Config;
 pub use error::NodeError;
 pub use node::Node;
 pub use shutdown::signal;
-pub use vessel_store::{DataDir, NodeToken, StoreError};
+// The store types named by `Config`'s public fields, so callers can build
+// a `Config` without depending on `vessel-store` themselves.
+pub use vessel_store::{ByteCount, DataDir, NodeToken, Retention, StoreConfig, StoreError};
