@@ -53,8 +53,9 @@ pub(crate) struct Threads {
 /// Start the waiter, reader and control threads.
 ///
 /// The waiter starts first: once it owns the child, the child is always
-/// reaped, even if a later thread fails to start. On error the caller must
-/// stop the program.
+/// reaped, even if a later thread fails to start. If the PTY's own ends
+/// cannot be taken, the child is stopped and reaped here; on any other
+/// error the caller must stop the program (the waiter then reaps it).
 pub(crate) fn start(
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -63,8 +64,16 @@ pub(crate) fn start(
     let attach = |error: &dyn std::fmt::Display| PtyError::Attach {
         message: error.to_string(),
     };
-    let reader = master.try_clone_reader().map_err(|error| attach(&error))?;
-    let writer = master.take_writer().map_err(|error| attach(&error))?;
+    let ends = master
+        .try_clone_reader()
+        .and_then(|reader| Ok((reader, master.take_writer()?)));
+    let (reader, writer) = match ends {
+        Ok(ends) => ends,
+        Err(error) => {
+            crate::process::stop_and_reap(child);
+            return Err(attach(&error));
+        }
+    };
 
     let (exit_sender, exit) = oneshot::channel();
     spawn("vessel-pty-wait", move || {
