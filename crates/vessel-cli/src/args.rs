@@ -382,6 +382,16 @@ pub(crate) enum SecretCommand {
         /// Its name.
         name: SecretName,
     },
+    /// Copy a secret to another node of the fleet, which keeps it under
+    /// the same name. That node must have granted the fleet's home `admin`
+    /// (`vessel fleet join --grant read,operate,admin`).
+    Copy {
+        /// Its name.
+        name: SecretName,
+        /// The node: its name in the fleet, or its id (or the start of it).
+        #[arg(long)]
+        to: String,
+    },
 }
 
 /// `vessel node devices ...`.

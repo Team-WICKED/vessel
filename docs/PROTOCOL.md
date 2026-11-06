@@ -7,11 +7,11 @@ an entry here. Additive, optional fields do not need a bump.
 ## Version 6 (2026-11-06)
 
 Nodes speak 2..=6; version 6 only adds. Milestone 4's F3, F4 and Track X
-implement it (`docs/plans/backend-m4.md`, "Protocol 6 (accepted)"); until
-each lands, its methods answer `unsupported` ("not built on this node yet",
-naming the track), after the scope check like every method. Track X's are
-built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
-`session.read` with `wait`.
+implement it (`docs/plans/backend-m4.md`, "Protocol 6 (accepted)"), all
+built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes`,
+`session.read` with `wait`, the transfers and the secret rows. (Until
+each landed, its methods answered `unsupported`, "not built on this node
+yet", after the scope check like every method.)
 
 - Scope `relay`: passing calls on to other fleet nodes. Independent of
   `sync`, and a member gets it only when the home's owner asks (`vessel
@@ -82,6 +82,12 @@ built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
   is no `secret.get`: a value leaves a node only into another node's store.
   `secret.copy` sends `secret.set` to `to` through the envelope, so it
   needs the target's owner to have granted the home `admin` there.
+  As built: `secret.copy` of a secret not set here is `not_found`, to this
+  node itself `invalid_request`; a target that did not grant the home
+  `admin` is `forbidden`, the message saying how to (`vessel fleet join
+  --grant read,operate,admin` there), and the home itself, which grants
+  its members only `sync` and `relay`, is `forbidden` with a pointer to
+  `vessel fleet secret set` there. No error carries a value.
 - `session.read` takes `wait?` (seconds, capped at 60, protocol 6): with
   nothing at `from` yet, the node answers when something arrives or the
   wait ends (an empty page).

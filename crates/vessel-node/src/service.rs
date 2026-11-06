@@ -8,14 +8,14 @@ use std::time::Duration;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, BlobChunk, CloseTransfer, CreateSession, Creator, DeleteSecret, DeviceInfo, ErrorCode,
-    EventPage, ExportMemory, ExportSession, FleetMember, Generation, GetManifest, GetNode,
-    GetSession, Harness, ImportMemory, ImportSession, Invitation, InviteDevice, KillSession,
-    ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions, Manifest,
-    MemoryImported, MoveProfile, NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReadTransfer,
-    ReloadProfiles, ReportApplied, RevokeDevice, SecretName, SendInput, SessionId, SessionImported,
-    SessionInfo, SessionOrigin, SessionSpec, SetSecret, StopNode, Subscribe, Subscribed,
-    TransferManifest, Unsubscribe, WatchFleet, WireError,
+    Ack, BlobChunk, CloseTransfer, CopySecret, CreateSession, Creator, DeleteSecret, DeviceInfo,
+    ErrorCode, EventPage, ExportMemory, ExportSession, FleetMember, Generation, GetManifest,
+    GetNode, GetSession, Harness, ImportMemory, ImportSession, Invitation, InviteDevice,
+    KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions,
+    Manifest, MemoryImported, MoveProfile, NodeInfo, ProfileInfo, ReadBlob, ReadEvents,
+    ReadTransfer, ReloadProfiles, ReportApplied, Request as _, RevokeDevice, SecretName, SendInput,
+    SessionId, SessionImported, SessionInfo, SessionOrigin, SessionSpec, SetSecret, StopNode,
+    Subscribe, Subscribed, TransferManifest, Unsubscribe, WatchFleet, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
@@ -576,6 +576,97 @@ impl NodeService {
                 format!("secret {} is not set on this node", request.name),
             ))
         }
+    }
+}
+
+/// `secret.copy` (protocol 6, F3): this node's value of a secret, sent to
+/// another fleet node's store as `secret.set`.
+///
+/// [Decision Log]
+/// - Purpose: one secret set once, on several nodes, without typing it on
+///   each; a value still leaves a node only into another node's store
+///   (there is no `secret.get`).
+/// - The value is read here and sent as `secret.set` through the envelope
+///   (`pass_on`) as the caller, so the target runs it as the home's device
+///   cut down to the caller's origin: copying needs the target to have
+///   granted the home `admin`, which the default grant (`read`, `operate`)
+///   leaves out on purpose. A refusal for that says so and how to grant it
+///   (join again with `--grant`); the home itself grants its members only
+///   `sync` and `relay`, so a secret is set there directly instead.
+/// - The value is never logged and never in an error: `SecretValue`
+///   redacts its `Debug`, `vessel-rpc` logs method names only, and the
+///   errors here name the secret, never its value.
+impl NodeService {
+    pub(crate) async fn copy_secret(
+        &self,
+        connection: &Connection,
+        request: CopySecret,
+    ) -> Result<Ack, WireError> {
+        let CopySecret { name, to } = request;
+        if to == self.lifecycle.info().id {
+            return Err(WireError::new(
+                ErrorCode::InvalidRequest,
+                format!("secret {name} is on this node already; name another fleet node"),
+            ));
+        }
+        let value = {
+            let files = self.fleet.files().clone();
+            let name = name.clone();
+            tokio::task::spawn_blocking(move || crate::fleet::secret_value(&files, &name))
+                .await
+                .map_err(|error| wire(&ServiceError::Task(error)))?
+                .map_err(|error| secrets_wire(&error))?
+        };
+        let Some(value) = value else {
+            return Err(WireError::new(
+                ErrorCode::NotFound,
+                format!("secret {name} is not set on this node"),
+            ));
+        };
+        let set = SetSecret {
+            name: name.clone(),
+            value,
+        };
+        let delivered = self
+            .pass_on(connection.principal(), to, Box::new(set.into_call()))
+            .await;
+        let forwarded = match delivered {
+            Ok(forwarded) => forwarded,
+            Err(error)
+                if error.code == ErrorCode::Forbidden && error.message.contains("`admin`") =>
+            {
+                return Err(self.not_granted(&name, to).await);
+            }
+            Err(error) => return Err(error),
+        };
+        let _ack = SetSecret::response_from(*forwarded.reply).map_err(|unexpected| {
+            WireError::new(
+                ErrorCode::Internal,
+                format!("node {to} answered out of turn: {unexpected}"),
+            )
+        })?;
+        tracing::info!(secret = %name, %to, "secret copied");
+        Ok(Ack)
+    }
+
+    /// Why `to` refused to store a secret for want of `admin`, and what to
+    /// do about it.
+    async fn not_granted(&self, name: &SecretName, to: vessel_proto::NodeId) -> WireError {
+        let message = if self.links.home().await == Some(to) {
+            format!(
+                "the fleet's home grants its members only `sync` and `relay`, so secret {name} \
+                 cannot be copied to it; set it there with `vessel fleet secret set {name}`"
+            )
+        } else {
+            format!(
+                "node {to} has not granted the fleet's home `admin`, which copying secret \
+                 {name} there needs (a member grants `read` and `operate` unless asked). On \
+                 that node, join again granting it: `vessel fleet leave`, then `vessel fleet \
+                 join --grant read,operate,admin` with a new link from `vessel fleet invite` \
+                 on the home"
+            )
+        };
+        WireError::new(ErrorCode::Forbidden, message)
     }
 }
 

@@ -68,7 +68,7 @@ pub(crate) async fn command(target: &Target, command: FleetCommand) -> Result<()
             io::out(render_members(&members).as_bytes()).await?;
             Ok(())
         }
-        FleetCommand::Secret { command } => Box::pin(secret::command(files, command)).await,
+        FleetCommand::Secret { command } => Box::pin(secret::command(target, files, command)).await,
         FleetCommand::Memory {
             command:
                 MemoryCommand::Copy {

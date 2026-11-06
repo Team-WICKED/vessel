@@ -71,6 +71,7 @@ pub(crate) use links::Links;
 pub use local::{RestoreError, restore};
 pub(crate) use mcp::FleetMcp;
 pub use member::{DEFAULT_GRANT, JoinError, Joined, join, leave};
+pub(crate) use secrets::secret_value;
 pub use secrets::{SecretsError, delete_secret, secret_names, set_secret};
 pub use state::{ConflictEntry, ConflictWhy, FailureEntry, FleetState, FleetStatus, Role, status};
 /// A `skip` pattern of `fleet.toml` (`vessel fleet init --skip`).
