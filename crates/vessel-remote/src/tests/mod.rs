@@ -1,11 +1,10 @@
 //! The SSH steps against a "remote" that is a temporary home on this
 //! machine. Unix only: the remote side of milestone 2 is (Windows remotes
-//! are out of scope), and the stand-ins are shell scripts.
+//! are out of scope), `fake-ssh` needs `sh`, and the stand-in `vesseld`
+//! and `gh` are shell scripts.
 //!
-//! `ssh` is played by a small stand-in script until `vessel-testkit`'s
-//! `fake-ssh` is on this branch; it does what `fake-ssh` does for these
-//! tests (drops the options, runs the command under `sh -c` in the fake
-//! home with `HOME` set to it).
+//! `ssh` is `vessel-testkit`'s `fake-ssh`: it drops the options and runs
+//! the command under `sh -c` in the fake home, with `HOME` set to it.
 
 mod connector;
 mod install;
@@ -20,7 +19,8 @@ use vessel_client::RemotePath;
 
 use crate::ssh::Ssh;
 
-/// A remote machine: an empty home directory, and the tools to reach it.
+/// A remote machine (an empty home directory), and a local directory for
+/// builds, archives and stand-in tools.
 pub(crate) struct Remote {
     pub(crate) home: TempDir,
     tools: TempDir,
@@ -30,20 +30,12 @@ impl Remote {
     pub(crate) fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
         let tools = tempfile::tempdir().unwrap();
-        executable(
-            &tools.path().join("ssh"),
-            "#!/bin/sh\n\
-             while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n\
-             shift\n\
-             cd \"$FAKE_SSH_HOME\" || exit 255\n\
-             HOME=\"$FAKE_SSH_HOME\" exec sh -c \"$*\"\n",
-        );
         Self { home, tools }
     }
 
     pub(crate) fn ssh(&self) -> Ssh {
         Ssh::new("gpu-box".parse().unwrap())
-            .with_program(self.tools.path().join("ssh"))
+            .with_program(vessel_testkit::Fake::Ssh.path().unwrap())
             .with_env("FAKE_SSH_HOME", self.home.path())
     }
 
