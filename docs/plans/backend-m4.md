@@ -861,6 +861,55 @@ reproduced problems, fixed in this order:
   wake-up, and the isolation of library code from the process
   environment.
 
+## Security review
+
+Eleven rounds by an independent reviewer, closed on 2026-11-06 with
+nothing at medium or above left open. Each round's findings came as
+proofs of concept, each ported as a failing-first test before its fix.
+The envelope and delegation rounds are under "Track X: the security
+review" above; the relay's and the node's admission limits are in ADR
+0009's amendments.
+
+The bar, set in round 8 and held since: a single host, or a single IPv6
+`/48`, must not be able to deny a relay or a node; nodes registered with
+a relay before must be able to register again under such a flood; many
+hosts at once (a botnet) are out of scope.
+
+### Accepted residuals
+
+1. Trust on first use for a never-seen id's first grant: an id is chosen,
+   not proved by the key, until ids derive from keys (ROADMAP follow-up).
+2. After `forget`, the first device paired afterwards takes the id and
+   name: forgetting is the owner's way to free them.
+3. "Is known as `X`" names a revoked node to someone who has its id: it
+   tells them only a name, and only with the id already in hand.
+4. Relay tickets are bearer credentials for one key, minted for 24 h (a
+   relay takes at most 48 h), and a token rotation voids them all: the
+   key must still prove possession, and rotation is the revocation.
+5. An unjoined `sync` device may use one relay slot for its chosen key for
+   1 h after pairing: first tickets are only minted in that hour, one key
+   kept on record, and the slot frees when the ticket expires.
+6. Two relaying nodes together can fill a connection's 32 wait shares,
+   which degrades to polling: the shares bound memory, and nothing is
+   lost.
+7. `MAX_OWNED` is counted per target node, and the relay grant cannot be
+   narrowed: both by design (ADR 0013, "Known limits"; a capped relay
+   grant is a follow-up).
+8. `secret.copy`: a grant revoked between the probe and the set gets the
+   value first and then refuses: a race of one call, against a grant that
+   was valid when the copy began.
+9. Clients of an attacker's own node are admitted but stay within 64 per
+   `/48` and 384 in all: a relay cannot tell whose node it is.
+10. DoS from many `/48`s or a botnet is out of scope; the startup check
+    keeps any one `/48` under half of every pool (`Limits::check`).
+11. Direct route: one `/48` holds at most 28 of the 64 places for
+    connections not yet admitted (7 per address). Closed for a node
+    behind a reverse proxy since round 11 (`--trusted-proxy`,
+    `--client-address-header`), which counts each client, not the proxy.
+12. A home changing its callback relays overlaps two link budgets for at
+    most 5 s: only the home can cause it, and the old link's budget goes
+    with the link.
+
 ## Protocol 6 (accepted)
 
 Drafted 2026-11-06 by Track H's worker, accepted by the coordinator the
