@@ -573,7 +573,10 @@ they started.
     starts. `vessel-client`: `NodeClient::connect_local`. `vessel-mcp`:
     the tools (`list_nodes`, `list_sessions`, `create_session`,
     `send_input`, `answer_permission`, `read_events`, `wait_turn`,
-    `kill_session`); `vessel mcp` runs them on stdio.
+    `kill_session`); `vessel mcp` runs them on stdio. Since protocol 6
+    (Track X) each tool but `list_nodes` takes `node` and goes through
+    `NodeClient::call_on` (`fleet.forward`) for another node, and
+    `wait_turn` is a long poll of `session.read` with `wait`.
 
 ## Later
 

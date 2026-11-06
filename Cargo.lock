@@ -2732,6 +2732,7 @@ dependencies = [
  "vessel-client",
  "vessel-fleet",
  "vessel-harness",
+ "vessel-mcp",
  "vessel-proto",
  "vessel-relay",
  "vessel-rpc",

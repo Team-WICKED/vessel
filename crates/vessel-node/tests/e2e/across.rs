@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, DuplexStream};
 use vessel_client::NodeClient;
 use vessel_node::Node;
 use vessel_node::fleet::{self, DEFAULT_GRANT, FleetFiles, FleetInit};
@@ -51,6 +53,7 @@ async fn home(relay: &Relay, sources: &std::path::Path) -> Member {
     .unwrap();
     let applied = fixture.cwd().join("home-claude");
     let node = relayed_with(&fixture, &[&relay.url], |config| {
+        config.name = Some("home".to_owned());
         config.fleet = fleet_config(HarnessKind::ClaudeCode, applied);
         config.vessel_mcp = Some(vessel_mcp(&fixture));
     })
@@ -63,12 +66,14 @@ async fn home(relay: &Relay, sources: &std::path::Path) -> Member {
     }
 }
 
-/// A member that joined `home` with a link of `scopes`, granting the home
-/// the default (`read`, `operate`); returned once the home lists it.
+/// A member named `label` that joined `home` with a link of `scopes`,
+/// granting the home the default (`read`, `operate`); returned once the
+/// home lists it.
 async fn member(relay: &Relay, home: &Member, label: &str, scopes: Vec<Scope>) -> Member {
     let fixture = Fixture::new();
     let applied = fixture.cwd().join("member-codex");
     let node = relayed_with(&fixture, &[&relay.url], |config| {
+        config.name = Some(label.to_owned());
         config.fleet = fleet_config(HarnessKind::Codex, applied);
         config.vessel_mcp = Some(vessel_mcp(&fixture));
     })
@@ -307,6 +312,186 @@ async fn an_agent_on_another_node_drives_only_what_it_started() {
         // Never `admin`, wherever the call goes.
         let revoke = agent.call_on(desktop.id(), vessel_proto::ListDevices).await;
         assert_eq!(code(revoke), ErrorCode::InvalidRequest, "not forwardable");
+        relay.stop().await;
+    })
+    .await;
+}
+
+/// An agent's `vessel` tools served on a pipe, the test speaking MCP's
+/// JSON-RPC lines to them as a harness would.
+struct Tools {
+    lines: tokio::io::Lines<BufReader<tokio::io::ReadHalf<DuplexStream>>>,
+    write: tokio::io::WriteHalf<DuplexStream>,
+    next: u64,
+}
+
+impl Tools {
+    /// Serve the tools of `agent` (connected with its session's
+    /// credential) and initialise them.
+    async fn serve(agent: NodeClient) -> Self {
+        let (server, client) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(server);
+        drop(tokio::spawn(::vessel_mcp::serve(
+            ::vessel_mcp::VesselTools::new(agent),
+            read,
+            write,
+        )));
+        let (read, write) = tokio::io::split(client);
+        let mut tools = Self {
+            lines: BufReader::new(read).lines(),
+            write,
+            next: 1,
+        };
+        let initialized = tools
+            .request(
+                "initialize",
+                json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "test", "version": "0" }
+                }),
+            )
+            .await;
+        assert_eq!(initialized["result"]["serverInfo"]["name"], "vessel");
+        tools
+            .send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+            .await;
+        tools
+    }
+
+    async fn send(&mut self, message: &Value) {
+        self.write
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+
+    /// A request's response (`result` or `error`).
+    async fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next;
+        self.next = self.next.saturating_add(1);
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .await;
+        loop {
+            let line = self.lines.next_line().await.unwrap().expect("server left");
+            let message: Value = serde_json::from_str(&line).unwrap();
+            if message["id"] == json!(id) {
+                return message;
+            }
+        }
+    }
+
+    /// A tool's result as JSON, or the text of its failure.
+    async fn call(&mut self, tool: &str, arguments: Value) -> Result<Value, String> {
+        let response = self
+            .request(
+                "tools/call",
+                json!({ "name": tool, "arguments": arguments }),
+            )
+            .await;
+        let result = &response["result"];
+        assert!(result.is_object(), "{response}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        if result["isError"] == json!(true) {
+            Err(text.to_owned())
+        } else {
+            Ok(serde_json::from_str(text).unwrap())
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agents_tools_reach_another_node_by_its_name() {
+    within(async {
+        let relay = Relay::start().await;
+        let sources = tempfile::tempdir().unwrap();
+        let home = home(&relay, sources.path()).await;
+        let laptop = member(&relay, &home, "laptop", vec![Scope::Sync, Scope::Relay]).await;
+        let desktop = member(&relay, &home, "desktop", vec![Scope::Sync]).await;
+        let mut session = structured(&laptop.owner, &laptop.fixture).await;
+        let (_program, socket, auth) = credential(&laptop.owner, &mut session).await;
+        let mut tools = Tools::serve(as_agent(&socket, &auth).await).await;
+
+        // The fleet, as the home lists it.
+        let nodes = tools.call("list_nodes", json!({})).await.unwrap();
+        let mut names: Vec<&str> = nodes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["name"].as_str().unwrap())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["desktop", "home", "laptop"], "{nodes}");
+
+        // A conversation on the desktop, named: started, prompted, and its
+        // reply waited for in long polls across two hops.
+        let created = tools
+            .call(
+                "create_session",
+                json!({
+                    "node": "desktop",
+                    "harness": "claude",
+                    "cwd": desktop.fixture.cwd(),
+                    "prompt": "plain"
+                }),
+            )
+            .await
+            .unwrap();
+        let started: SessionId = serde_json::from_value(created["session"]["id"].clone()).unwrap();
+        assert_eq!(created["session"]["via"], json!(home.id()));
+        let turn = tools
+            .call(
+                "wait_turn",
+                json!({
+                    "node": "desktop",
+                    "session": started,
+                    "from": created["from"],
+                    "timeout_secs": 30
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(turn["outcome"], "ended", "{turn}");
+        assert_eq!(turn["reply"], "echo: plain");
+        let there = desktop.owner.session(started).await.unwrap();
+        assert_eq!(
+            there.created_by,
+            Creator::Agent {
+                node: laptop.id(),
+                session: session.id,
+            }
+        );
+
+        // Its node by id too; left out, the call stays on the laptop.
+        let page = tools
+            .call(
+                "read_events",
+                json!({ "node": desktop.id(), "session": started }),
+            )
+            .await
+            .unwrap();
+        assert!(!page["records"].as_array().unwrap().is_empty(), "{page}");
+        let here = tools
+            .call("read_events", json!({ "session": started }))
+            .await;
+        assert!(here.unwrap_err().starts_with("\"not_found\""));
+
+        // Stopped the same way. A node the fleet does not have is an error
+        // of the call.
+        let _killed = tools
+            .call(
+                "kill_session",
+                json!({ "node": "desktop", "session": started }),
+            )
+            .await
+            .unwrap();
+        let unknown = tools
+            .request(
+                "tools/call",
+                json!({ "name": "list_sessions", "arguments": { "node": "elsewhere" } }),
+            )
+            .await;
+        assert!(unknown["error"].is_object(), "{unknown}");
         relay.stop().await;
     })
     .await;
