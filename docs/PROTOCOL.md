@@ -53,7 +53,9 @@ on this node yet", after the scope check like every method.)
   paired after it: the call withdraws the invitations outstanding on the
   home, a pairing that redeemed one before and completes after is
   revoked, and it returns `NodeForgotten { key, name?, devices,
-  withdrawn }`, so the node is invited again and joins from there. A
+  withdrawn }`. Any member device paired after it may then claim the id
+  and name, and the first claim binds them, so the owner invites the node
+  again before anything else and it joins from there. A
   refusal over a revoked or forgotten node says only that the name is
   reserved for, or the key bound to, another node, without ids or times;
   one over a live member's name names that member; the home's log has the

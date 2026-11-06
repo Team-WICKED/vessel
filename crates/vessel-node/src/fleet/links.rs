@@ -356,8 +356,11 @@ fn check_record(claim: Claim<'_>, bound: &Bindings, held: &[MemberGrant]) -> Res
         ));
     }
     // Names too, also while a member's device is revoked; a node keeps its
-    // own (round 3, finding 1). The name a node is known by is told only to
-    // that node: its key, checked above, is the one bound to its id.
+    // own (round 3, finding 1). The name a node is known by is told to a
+    // claim whose key, checked above, is the one bound to its id: the node
+    // itself, or a device that knows both, since this also runs before
+    // pairing proves the key. Accepted in review round 5 as low risk: the
+    // operator needs the fix, and a live node's name is on `fleet.peers`.
     if let Some(name) = claim.name {
         if let Some(known) = bound.name_of(claim.node)
             && known != name
