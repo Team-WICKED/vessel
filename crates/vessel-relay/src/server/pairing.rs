@@ -38,7 +38,8 @@ use vessel_proto::{ConnId, RelayClose, RoutingId};
 use super::accept::Authenticated;
 use super::control::after;
 use super::throttle::ByteRate;
-use super::{Client, Limits, Relay, close_with, lock, too_large};
+use super::{Limits, Relay, close_with, lock, too_large};
+use crate::address::Client;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ConnectQuery {
