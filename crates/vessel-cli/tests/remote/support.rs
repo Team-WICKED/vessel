@@ -181,10 +181,19 @@ impl Captured {
         Self(receiver)
     }
 
-    /// Wait until the output contains `needle`.
+    /// Wait until the output contains `needle`; fail with what was seen
+    /// if it does not within 40 s (well inside the safety net, so the
+    /// failure says where the test stopped).
     pub(super) async fn wait_for(&mut self, needle: &str) {
-        let seen = self.0.wait_for(|text| text.contains(needle)).await.is_ok();
-        assert!(seen, "output ended without {needle:?}: {}", self.text());
+        let seen = matches!(
+            tokio::time::timeout(
+                Duration::from_secs(40),
+                self.0.wait_for(|text| text.contains(needle))
+            )
+            .await,
+            Ok(Ok(_))
+        );
+        assert!(seen, "no {needle:?} in: {}", self.text());
     }
 
     pub(super) fn text(&self) -> String {

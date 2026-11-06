@@ -1,6 +1,6 @@
 //! The node book from the command line, and `vessel node install`.
 
-use crate::support::{self, Fixture, within};
+use crate::support::{Fixture, within};
 
 /// The node book: a websocket node added by name becomes the default, its
 /// id is recorded on first contact, and a different node answering later
@@ -151,7 +151,7 @@ async fn node_install_uploads_a_local_build_over_ssh() {
         };
         let triple = format!("{}-{os}", std::env::consts::ARCH);
         let vesseld = tools.path().join("vesseld");
-        support::executable(
+        crate::support::executable(
             &vesseld,
             &format!(
                 "#!/bin/sh\ncase \"$1\" in version) echo '0.2.0 {triple}' ;; cleanup) ;; *) exit 2 ;; esac\n"

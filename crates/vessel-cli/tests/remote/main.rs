@@ -198,6 +198,7 @@ async fn update_installs_side_by_side_refuses_then_drains() {
 /// depend on timing. The session is ended with `vessel kill`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dropped_ssh_connection_during_attach_resumes() {
+    const LINES: usize = 6;
     within(async {
         let machine = Machine::new();
         let home = machine.home.path().to_str().unwrap().to_owned();
@@ -210,23 +211,25 @@ async fn a_dropped_ssh_connection_during_attach_resumes() {
             .await;
         assert!(run.ok, "{}", run.stderr);
         let id = run.stdout.trim().to_owned();
-        for line in 0..4 {
-            let text = format!("big{line}-{}", "x".repeat(4000));
+        // Lines of 900 characters: a terminal in line mode takes at most
+        // 1024 per line on macOS (`MAX_CANON`), 4096 on Linux.
+        for line in 0..LINES {
+            let text = format!("big{line}-{}", "x".repeat(900));
             let sent = machine
                 .vessel(&[&node[..], &["send", &id, &text]].concat(), b"")
                 .await;
             assert!(sent.ok, "{}", sent.stderr);
         }
 
-        // Every connection of this attach drops after 24 KiB of node
-        // output: the four echoes are more than that, any one of them
-        // much less.
-        let drop_after = [("FAKE_SSH_DROP_AFTER", OsString::from("24576"))];
+        // Every connection of this attach drops after 6 KiB of node
+        // output: all the echoes are well over that, any one of them a
+        // fraction of it, so each connection gets further than the last.
+        let drop_after = [("FAKE_SSH_DROP_AFTER", OsString::from("6144"))];
         let mut child = machine.spawn(&[&node[..], &["attach", &id]].concat(), &drop_after);
         let stdin = child.stdin.take().unwrap();
         let mut stdout = Captured::start(child.stdout.take().unwrap());
         let mut stderr = Captured::start(child.stderr.take().unwrap());
-        for line in 0..4 {
+        for line in 0..LINES {
             stdout.wait_for(&format!("echo: big{line}-")).await;
         }
         stderr.wait_for("connection lost; reconnecting").await;
@@ -240,7 +243,7 @@ async fn a_dropped_ssh_connection_during_attach_resumes() {
         let status = child.wait().await.unwrap();
         assert!(status.success(), "{}", stderr.text());
         let shown = stdout.text();
-        for line in 0..4 {
+        for line in 0..LINES {
             let echo = format!("echo: big{line}-");
             assert_eq!(shown.matches(&echo).count(), 1, "{echo} in {shown}");
         }
