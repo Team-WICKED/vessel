@@ -173,15 +173,35 @@ impl Home {
 struct Member {
     temp: TempDir,
     local: Arc<Local>,
+    links: Arc<super::Links>,
     stop: CancellationToken,
 }
 
 impl Member {
-    fn new() -> Self {
+    async fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let codex = temp.path().join("codex");
         std::fs::create_dir_all(&codex).unwrap();
-        let files = FleetFiles::new(&DataDir::new(temp.path().join("data")));
+        let data = DataDir::new(temp.path().join("data"));
+        data.prepare().unwrap();
+        let store = vessel_store::Store::open(&data, vessel_store::StoreConfig::default())
+            .await
+            .unwrap()
+            .store;
+        let node = vessel_proto::NodeId::random();
+        let devices = Arc::new(crate::devices::Devices::new(
+            store,
+            node,
+            *vessel_secure::NodeKeypair::generate().unwrap().public(),
+            crate::devices::Routes::default(),
+        ));
+        let files = FleetFiles::new(&data);
+        let links = Arc::new(super::Links::new(
+            node,
+            "member".to_owned(),
+            files.clone(),
+            devices,
+        ));
         let state = Arc::new(StateFile::open(&files));
         let local = Arc::new(Local::new(
             files,
@@ -192,6 +212,7 @@ impl Member {
         Self {
             temp,
             local,
+            links,
             stop: CancellationToken::new(),
         }
     }
@@ -208,9 +229,20 @@ impl Member {
                 max: Duration::from_millis(200),
             },
         };
+        // No grant: these tests are about the bundle (protocol 5's part).
+        let membership = member::Membership {
+            home: vessel_proto::NodeId::random(),
+            key: *vessel_secure::NodeKeypair::generate().unwrap().public(),
+            relays: Vec::new(),
+            direct: Vec::new(),
+            joined_at: chrono::Utc::now(),
+            grant: Vec::new(),
+        };
         drop(tokio::spawn(member::run(
             connector,
+            membership,
             Arc::clone(&self.local),
+            Arc::clone(&self.links),
             pacing,
             self.stop.clone(),
         )));
@@ -235,7 +267,7 @@ async fn a_member_follows_its_home_and_reports_what_it_kept() {
     assert_eq!(read(&home.path("claude/CLAUDE.md")), "instructions v1\n");
 
     // A member, paired with the `sync` scope only.
-    let member = Member::new();
+    let member = Member::new().await;
     let credential = home.pair(Some(vec![Scope::Sync])).await;
     let device = credential.device;
     member.follow(home.connector(credential));
@@ -335,7 +367,7 @@ async fn a_restored_file_comes_back_and_a_deleted_one_stays_away() {
         home.path("claude/CLAUDE.md").is_file()
     })
     .await;
-    let member = Member::new();
+    let member = Member::new().await;
     let credential = home.pair(Some(vec![Scope::Sync])).await;
     member.follow(home.connector(credential));
     let skill = member.codex("skills/review/SKILL.md");

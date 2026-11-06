@@ -9,9 +9,9 @@ an entry here. Additive, optional fields do not need a bump.
 Nodes speak 2..=6; version 6 only adds. Milestone 4's F3, F4 and Track X
 implement it (`docs/plans/backend-m4.md`, "Protocol 6 (accepted)"); until
 each lands, its methods answer `unsupported` ("not built on this node yet",
-naming the track), after the scope check like every method, and
-`session.read` with `wait` is refused the same way rather than answered at
-once.
+naming the track), after the scope check like every method. Track X's are
+built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
+`session.read` with `wait`.
 
 - Scope `relay`: passing calls on to other fleet nodes. Independent of
   `sync`, and a member gets it only when the home's owner asks (`vessel
@@ -34,7 +34,10 @@ once.
   (`Method::forwardable`). A call needs protocol 6 on the connection it is
   sent on; the inner call's version is checked where it is delivered.
 - Fleet: `fleet.grant { link }` (sync) hands the home a pairing link made
-  on the member, so the home holds a credential there; `fleet.peers`
+  on the member, so the home holds a credential there (a member's node
+  sends it when it connects, with the scopes chosen at join, `read` and
+  `operate` by default; the device the home's redemption creates is the
+  only one the member takes `fleet.deliver` from, and leaving revokes it); `fleet.peers`
   (sync) and `fleet.nodes` (read) return `FleetNode[]` (`node`, `name`,
   `protocol`, `reachable`), the home included.
 - Transfers (F4): `session.export { session, force? }` (operate,

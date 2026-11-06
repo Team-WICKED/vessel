@@ -35,19 +35,18 @@ pub(super) async fn run(init: &mut Init) -> Result<(), CliError> {
     }
     let yes = matches!(init.options.consent, Consent::Yes | Consent::YesAndInstall);
     let lines = init.answers.lines()?;
-    let offer =
-        match pair::offer_from_lines(lines, yes, "vessel fleet invite", "join this node's fleet?")
-            .await
-        {
-            Ok(offer) => offer,
-            Err(CliError::NotPaired) => {
-                init.report(Outcome::Skipped, "fleet", "not joined (you said no)")
-                    .await?;
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        };
-    let joined = fleet::join(&files, &offer, &crate::fleet::node_name()).await?;
+    let grant = fleet::DEFAULT_GRANT.to_vec();
+    let question = crate::fleet::join_question(&grant);
+    let offer = match pair::offer_from_lines(lines, yes, "vessel fleet invite", &question).await {
+        Ok(offer) => offer,
+        Err(CliError::NotPaired) => {
+            init.report(Outcome::Skipped, "fleet", "not joined (you said no)")
+                .await?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let joined = fleet::join(&files, &offer, &crate::fleet::node_name(), grant).await?;
     let detail = format!(
         "joined the fleet of {} ({}) via {}",
         joined.home.name, joined.home.id, joined.route

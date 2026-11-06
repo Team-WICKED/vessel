@@ -4,8 +4,9 @@
 //! [Decision Log]
 //! - Purpose: the protocol 6 contract (`docs/plans/backend-m4.md`,
 //!   "Protocol 6 (accepted)") lands before the tracks that implement it
-//!   (F3 secrets, F4 transfers, X the envelope), so each track builds on
-//!   reviewed types and the node keeps compiling in between.
+//!   (F3 secrets, F4 transfers, X the envelope, built in `envelope`), so
+//!   each track builds on reviewed types and the node keeps compiling in
+//!   between.
 //! - Alternatives: land each row with its implementation (three tracks
 //!   would edit the method table at once, and none could build on the
 //!   others' types); answer with a generic error from the guard (a call
@@ -19,9 +20,8 @@
 //!   is `unsupported`, what a client gets for any method a node lacks.
 
 use vessel_proto::{
-    Ack, BlobChunk, CloseTransfer, CopySecret, DeleteSecret, Deliver, ErrorCode, ExportMemory,
-    ExportSession, FleetNode, Forward, Forwarded, GrantHome, ImportMemory, ImportSession,
-    ListNodes, ListPeers, ListSecrets, MemoryImported, Method, ReadTransfer, RelayCall,
+    Ack, BlobChunk, CloseTransfer, CopySecret, DeleteSecret, ErrorCode, ExportMemory,
+    ExportSession, ImportMemory, ImportSession, ListSecrets, MemoryImported, Method, ReadTransfer,
     Request as _, SecretName, SessionImported, SetSecret, TransferManifest, WireError,
 };
 
@@ -55,12 +55,6 @@ macro_rules! unbuilt {
 }
 
 unbuilt! {
-    forward: Forward => Forwarded, "Track X";
-    relay: RelayCall => Forwarded, "Track X";
-    deliver: Deliver => Forwarded, "Track X";
-    grant_home: GrantHome => Ack, "Track X";
-    list_peers: ListPeers => Vec<FleetNode>, "Track X";
-    list_nodes: ListNodes => Vec<FleetNode>, "Track X";
     export_session: ExportSession => TransferManifest, "F4";
     import_session: ImportSession => SessionImported, "F4";
     export_memory: ExportMemory => TransferManifest, "F4";

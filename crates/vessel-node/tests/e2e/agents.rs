@@ -20,18 +20,18 @@ use crate::support::{
 };
 
 /// What `vessel mcp` would be run as; never run here.
-fn vessel_mcp(fixture: &Fixture) -> VesselMcp {
+pub(crate) fn vessel_mcp(fixture: &Fixture) -> VesselMcp {
     VesselMcp::vessel(fixture.cwd().join("vessel"))
 }
 
 /// A running structured session and its event stream.
-struct Running {
-    id: SessionId,
+pub(crate) struct Running {
+    pub(crate) id: SessionId,
     stream: SessionStream,
     seen: Vec<EventRecord>,
 }
 
-async fn structured(creator: &NodeClient, fixture: &Fixture) -> Running {
+pub(crate) async fn structured(creator: &NodeClient, fixture: &Fixture) -> Running {
     let id = creator
         .create_session(structured_spec(fixture, None))
         .await
@@ -48,7 +48,10 @@ async fn structured(creator: &NodeClient, fixture: &Fixture) -> Running {
 
 /// The session's `vessel` server as its agent got it: the program, the
 /// node's endpoint, and the credential.
-async fn credential(owner: &NodeClient, session: &mut Running) -> (PathBuf, PathBuf, AgentAuth) {
+pub(crate) async fn credential(
+    owner: &NodeClient,
+    session: &mut Running,
+) -> (PathBuf, PathBuf, AgentAuth) {
     let mcp = ask(
         owner,
         &mut session.stream,
@@ -88,13 +91,13 @@ async fn credential(owner: &NodeClient, session: &mut Running) -> (PathBuf, Path
     )
 }
 
-async fn as_agent(socket: &std::path::Path, auth: &AgentAuth) -> NodeClient {
+pub(crate) async fn as_agent(socket: &std::path::Path, auth: &AgentAuth) -> NodeClient {
     NodeClient::connect_local(socket, &LocalCredential::Agent(auth.clone()), client())
         .await
         .unwrap()
 }
 
-fn code<T: std::fmt::Debug>(result: Result<T, CallError>) -> ErrorCode {
+pub(crate) fn code<T: std::fmt::Debug>(result: Result<T, CallError>) -> ErrorCode {
     match result {
         Err(CallError::Remote(error)) => error.code,
         other => panic!("expected a refusal, got {other:?}"),

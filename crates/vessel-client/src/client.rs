@@ -2,13 +2,14 @@
 
 use vessel_proto::{
     BlobChunk, BlobHash, BundlePath, ClientInfo, CreateSession, DeviceId, DeviceInfo, EventPage,
-    EventSeq, FleetMember, Generation, GetManifest, GetNode, GetSession, Harness, HarnessKind,
-    Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles,
-    ListSessions, Manifest, MoveProfile, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion,
-    ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice, Scope, SendInput, SessionId,
-    SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen, Subscribe, WatchFleet,
+    EventSeq, FleetMember, Forward, Generation, GetManifest, GetNode, GetSession, Harness,
+    HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers,
+    ListProfiles, ListSessions, Manifest, MoveProfile, NodeId, NodeInfo, ProfileInfo, ProfileName,
+    ProtocolVersion, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice, Scope,
+    SendInput, SessionId, SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen, Subscribe,
+    WatchFleet,
 };
-use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
+use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription, Unary};
 
 use crate::error::ConnectError;
 use crate::stream::SessionStream;
@@ -89,6 +90,37 @@ impl NodeClient {
     /// Resolves once the connection has closed.
     pub async fn closed(&self) {
         self.connection.closed().await;
+    }
+
+    /// Any one-reply call, for callers that hold a request already (the
+    /// node passing a call on, a tool forwarding one).
+    ///
+    /// # Errors
+    /// See [`CallError`].
+    pub async fn call<R: Unary>(&self, request: R) -> Result<R::Response, CallError> {
+        self.connection.call(request).await
+    }
+
+    /// Run `request` on fleet node `node` through this node
+    /// (`fleet.forward`, protocol 6), and return its typed reply. `node`
+    /// equal to this node runs it here.
+    ///
+    /// # Errors
+    /// See [`CallError`]: the hop's errors and the target's alike, the
+    /// target's as [`CallError::Remote`].
+    pub async fn call_on<R: Unary>(
+        &self,
+        node: NodeId,
+        request: R,
+    ) -> Result<R::Response, CallError> {
+        let forwarded = self
+            .connection
+            .call(Forward {
+                node,
+                call: Box::new(request.into_call()),
+            })
+            .await?;
+        R::response_from(*forwarded.reply).map_err(CallError::UnexpectedReply)
     }
 
     /// `node.info`.

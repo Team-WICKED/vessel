@@ -299,6 +299,51 @@ impl Sessions {
             Found::Stored(_) => Ok(self.store.read_events(id, from, limit).await?),
         }
     }
+
+    /// [`read`](Self::read), but with nothing at `from` yet in a live
+    /// session, first wait up to `wait` for a record there or for the
+    /// session to end (`session.read` with `wait`, protocol 6).
+    ///
+    /// [Decision Log]
+    /// - Purpose: an agent waits for another node's session to finish a
+    ///   turn without a subscription across hops (ADR 0013: a long poll,
+    ///   as `fleet.watch`).
+    /// - Choice: wait on the session's info, whose `next_seq` moves with
+    ///   every record and whose status says when it ended; then read as
+    ///   usual, so the page is the same as without waiting. An ended or
+    ///   stored session answers at once.
+    /// - Bound: the caller caps `wait` ([`ReadEvents::MAX_WAIT`]), so a
+    ///   waiting call holds one of the connection's call slots for at most
+    ///   a minute.
+    ///
+    /// [`ReadEvents::MAX_WAIT`]: vessel_proto::ReadEvents::MAX_WAIT
+    pub(crate) async fn read_waiting(
+        &self,
+        id: SessionId,
+        from: EventSeq,
+        limit: u32,
+        wait: std::time::Duration,
+    ) -> Result<EventPage, ServiceError> {
+        if let Found::Live { handle, .. } = self.find(id).await? {
+            let mut info = handle.watch_info();
+            let waited = tokio::time::timeout(wait, async {
+                loop {
+                    let (next, live) = {
+                        let current = info.borrow_and_update();
+                        (current.next_seq, current.status.is_live())
+                    };
+                    if next > from || !live || info.changed().await.is_err() {
+                        return;
+                    }
+                }
+            })
+            .await;
+            if waited.is_err() {
+                tracing::trace!(session = %id, "a waiting read found nothing new");
+            }
+        }
+        self.read(id, from, limit).await
+    }
 }
 
 /// `page`, read from the store for a live session, unless retention pruned

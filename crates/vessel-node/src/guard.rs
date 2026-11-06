@@ -50,7 +50,14 @@ use crate::service::{Connection, NodeService};
 pub(crate) struct Guarded(pub(crate) NodeService);
 
 macro_rules! guarded {
-    ($( $handler:ident : $request:ty => $response:ty; )*) => {
+    (
+        $( $handler:ident : $request:ty => $response:ty; )*
+        // The envelope's rows: their handlers run a call here through this
+        // guard, so they are handed it (protocol 6, `envelope`).
+        @through_the_guard {
+            $( $through:ident : $through_request:ty => $through_response:ty; )*
+        }
+    ) => {
         impl Handler for Guarded {
             type Context = Connection;
 
@@ -65,6 +72,20 @@ macro_rules! guarded {
                         self.0.check_owner(connection.principal(), session).await?;
                     }
                     self.0.$handler(connection, request).await
+                }
+            )*
+
+            $(
+                async fn $through(
+                    &self,
+                    connection: &Connection,
+                    request: $through_request,
+                ) -> Result<$through_response, WireError> {
+                    connection.principal().permit(<$through_request as Request>::METHOD)?;
+                    if let Some(session) = Target::target(&request) {
+                        self.0.check_owner(connection.principal(), session).await?;
+                    }
+                    self.0.$through(connection, request, self).await
                 }
             )*
         }
@@ -168,9 +189,6 @@ guarded! {
     watch_fleet: WatchFleet => Generation;
     report_applied: ReportApplied => Ack;
     list_members: ListMembers => Vec<FleetMember>;
-    forward: Forward => Forwarded;
-    relay: RelayCall => Forwarded;
-    deliver: Deliver => Forwarded;
     grant_home: GrantHome => Ack;
     list_peers: ListPeers => Vec<FleetNode>;
     list_nodes: ListNodes => Vec<FleetNode>;
@@ -184,6 +202,11 @@ guarded! {
     list_secrets: ListSecrets => Vec<SecretName>;
     delete_secret: DeleteSecret => Ack;
     copy_secret: CopySecret => Ack;
+    @through_the_guard {
+        forward: Forward => Forwarded;
+        relay: RelayCall => Forwarded;
+        deliver: Deliver => Forwarded;
+    }
 }
 
 #[cfg(test)]

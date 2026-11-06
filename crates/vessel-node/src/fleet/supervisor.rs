@@ -15,6 +15,7 @@ use super::FleetConfig;
 use super::config::read_sources;
 use super::files::{self, FleetFiles};
 use super::home::{Home, Published, Stamp};
+use super::links::Links;
 use super::local::Local;
 use super::member::{self, Membership, Pacing};
 use super::secrets::{self, Secrets, SecretsError};
@@ -26,6 +27,7 @@ const REBUNDLE_EVERY: Duration = Duration::from_secs(10 * 60);
 struct Supervisor {
     local: Arc<Local>,
     home: Arc<Home>,
+    links: Arc<Links>,
     config: FleetConfig,
     user_home: Option<PathBuf>,
     tasks: TaskTracker,
@@ -49,6 +51,7 @@ struct Supervisor {
 pub(crate) async fn run(
     local: Arc<Local>,
     home: Arc<Home>,
+    links: Arc<Links>,
     config: FleetConfig,
     user_home: Option<PathBuf>,
     tasks: TaskTracker,
@@ -57,6 +60,7 @@ pub(crate) async fn run(
     let mut supervisor = Supervisor {
         local,
         home,
+        links,
         config,
         user_home,
         tasks,
@@ -106,6 +110,9 @@ impl Supervisor {
             return;
         };
         self.use_secrets(secrets).await;
+        // A grant to a home this node no longer follows is revoked.
+        let following = membership.as_ref().ok().and_then(Option::as_ref);
+        self.links.reconcile(following).await;
         let in_fleet = matches!(sources, Ok(Some(_))) || matches!(membership, Ok(Some(_)));
         if !self.started {
             self.started = true;
@@ -236,7 +243,9 @@ impl Supervisor {
         };
         drop(self.tasks.spawn(member::run(
             connector,
+            membership.clone(),
             Arc::clone(&self.local),
+            Arc::clone(&self.links),
             pacing,
             member_stop.clone(),
         )));

@@ -19,7 +19,7 @@ use vessel_proto::{EventSeq, SessionStatus};
 use crate::secure::{Relay, relayed_with};
 use crate::support::{Fixture, ask, read_until, status_of, structured_spec, within};
 
-fn write(path: &Path, text: &str) {
+pub(crate) fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
@@ -29,7 +29,7 @@ fn read(path: &Path) -> String {
 }
 
 /// Quick polls, and only `home` (a temporary directory) written to.
-fn fleet_config(harness: HarnessKind, home: PathBuf) -> FleetConfig {
+pub(crate) fn fleet_config(harness: HarnessKind, home: PathBuf) -> FleetConfig {
     std::fs::create_dir_all(&home).unwrap();
     FleetConfig {
         targets: FleetTargets::Only(vec![(harness, home)]),
@@ -39,7 +39,7 @@ fn fleet_config(harness: HarnessKind, home: PathBuf) -> FleetConfig {
     }
 }
 
-async fn until(what: &str, mut ready: impl FnMut() -> bool) {
+pub(crate) async fn until(what: &str, mut ready: impl FnMut() -> bool) {
     for _ in 0..800 {
         if ready() {
             return;
@@ -99,14 +99,18 @@ async fn a_member_joins_through_a_relay_and_follows_its_home() {
             .unwrap();
         assert!(offer.direct.is_empty(), "reached through the relay only");
         let member_files = FleetFiles::new(&member_fixture.data_dir());
-        let joined = fleet::join(&member_files, &offer, "laptop").await.unwrap();
+        let joined = fleet::join(&member_files, &offer, "laptop", Vec::new())
+            .await
+            .unwrap();
         assert_eq!(joined.home.id, home.info().id);
         assert!(matches!(
             fleet::status(&member_files).unwrap().role,
             Role::Member { home, .. } if home == joined.home.id
         ));
         assert!(
-            fleet::join(&member_files, &offer, "again").await.is_err(),
+            fleet::join(&member_files, &offer, "again", Vec::new())
+                .await
+                .is_err(),
             "a member does not join twice"
         );
 

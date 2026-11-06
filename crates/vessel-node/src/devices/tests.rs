@@ -11,10 +11,11 @@ use vessel_client::pairing::{self, PreambleError};
 use vessel_client::secure;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, GetNode, HarnessKind,
-    InviteDevice, ListDevices, ListSessions, NodeClose, NodeId, NodePublicKey, Origin, OriginBy,
-    PairingOffer, Preamble, PreambleReply, ReadEvents, RefusalReason, RelayCall, Request,
-    RevokeDevice, Scope, SessionId, SessionInput, SessionMode, SessionSpec, TerminalSize,
+    ClientInfo, CloseTransfer, CreateSession, Deliver, DeviceId, DeviceInfo, DeviceSecret,
+    ErrorCode, GetNode, HarnessKind, InviteDevice, ListDevices, ListSessions, NodeClose, NodeId,
+    NodePublicKey, Origin, OriginBy, PairingOffer, Preamble, PreambleReply, RefusalReason,
+    RelayCall, Request, RevokeDevice, Scope, SessionId, SessionInput, SessionMode, SessionSpec,
+    TerminalSize, TransferId,
 };
 use vessel_relay::NodeCarrier;
 use vessel_rpc::memory::{self, MemoryTransport};
@@ -444,7 +445,8 @@ async fn a_device_without_a_scope_is_forbidden_that_method() {
 }
 
 /// Protocol 6: passing calls on needs `relay`, which `sync` does not
-/// include; past the check, a method not built yet says so.
+/// include; past the check, the home's handler answers (this node is no
+/// home), and a method not built yet says so.
 #[tokio::test]
 async fn relaying_needs_its_own_scope_and_unbuilt_methods_say_so() {
     let (_temp, node) = node().await;
@@ -482,22 +484,121 @@ async fn relaying_needs_its_own_scope_and_unbuilt_methods_say_so() {
     let refused = members[0].call(relay()).await.unwrap_err();
     assert_eq!(refused.code(), Some(ErrorCode::Forbidden));
     assert!(refused.to_string().contains("`relay`"), "{refused}");
-    let unbuilt = members[1].call(relay()).await.unwrap_err();
-    assert_eq!(unbuilt.code(), Some(ErrorCode::Unsupported));
-    assert!(unbuilt.to_string().contains("fleet.relay"), "{unbuilt}");
+    let no_home = members[1].call(relay()).await.unwrap_err();
+    assert_eq!(no_home.code(), Some(ErrorCode::Unavailable), "{no_home}");
 
-    // `wait` is refused rather than answered at once, which would look like
-    // a wait that ended empty.
-    let waiting = members[1]
-        .call(ReadEvents {
-            session: SessionId::random(),
-            from: vessel_proto::EventSeq::ZERO,
-            limit: 10,
-            wait: Some(5),
+    let unbuilt = members[1]
+        .call(CloseTransfer {
+            transfer: TransferId::random(),
         })
         .await
         .unwrap_err();
-    assert_eq!(waiting.code(), Some(ErrorCode::Unsupported));
+    assert_eq!(unbuilt.code(), Some(ErrorCode::Unsupported));
+    assert!(unbuilt.to_string().contains("transfer.close"), "{unbuilt}");
+    node.stop().await.unwrap();
+}
+
+/// Protocol 6: a member runs a delivered call only from its home's device
+/// (the one its grant made), as that device cut down to the origin.
+#[tokio::test]
+async fn a_member_takes_delivered_calls_from_its_home_device_only() {
+    let (temp, node) = node().await;
+    let mut devices = Vec::new();
+    for label in ["fleet home", "phone"] {
+        let device = DeviceInfo {
+            id: DeviceId::random(),
+            label: label.to_owned(),
+            created_at: Utc::now(),
+            last_seen: None,
+            scopes: vec![Scope::Read, Scope::Operate],
+            revoked_at: None,
+        };
+        let secret = DeviceSecret::from_bytes([5; 32]);
+        node.secure
+            .devices
+            .store
+            .add_device(device.clone(), CredentialHash::of(&secret))
+            .await
+            .unwrap();
+        devices.push((device.id, secret));
+    }
+    // A member of a home it granted the first device to, as `links` and
+    // `vessel fleet join` would have left it.
+    let home = NodeId::random();
+    let fleet = temp.path().join("data").join("fleet");
+    std::fs::create_dir_all(&fleet).unwrap();
+    let key = *NodeKeypair::generate().unwrap().public();
+    std::fs::write(
+        fleet.join("member.json"),
+        serde_json::json!({
+            "home": home,
+            "key": key,
+            "joined_at": Utc::now(),
+            "grant": ["read", "operate"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        fleet.join("granted.json"),
+        serde_json::json!({
+            "home": home,
+            "device": devices[0].0,
+            "scopes": ["read", "operate"],
+            "since": Utc::now(),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let home_device = authenticate(&node, devices[0].0, &devices[0].1)
+        .await
+        .unwrap();
+    let phone = authenticate(&node, devices[1].0, &devices[1].1)
+        .await
+        .unwrap();
+    let deliver = |call: vessel_proto::Call, scopes: Vec<Scope>| Deliver {
+        call: Box::new(call),
+        origin: Origin {
+            node: NodeId::random(),
+            by: OriginBy::Owner,
+            scopes,
+        },
+    };
+
+    let refused = phone
+        .call(deliver(Request::into_call(GetNode), vec![Scope::Read]))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(ErrorCode::Forbidden));
+    let ran = home_device
+        .call(deliver(Request::into_call(GetNode), vec![Scope::Read]))
+        .await
+        .unwrap();
+    assert!(matches!(*ran.reply, vessel_proto::Reply::NodeInfo(_)));
+    // The origin lacks `operate`, so the home's device does too, here.
+    let create = CreateSession {
+        spec: SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Terminal {
+                args: Vec::new(),
+                size: TerminalSize::default(),
+            },
+        ),
+    };
+    let cut_down = home_device
+        .call(deliver(Request::into_call(create), vec![Scope::Read]))
+        .await
+        .unwrap_err();
+    assert_eq!(cut_down.code(), Some(ErrorCode::Forbidden));
+    // Administration does not travel.
+    let admin = home_device
+        .call(deliver(
+            Request::into_call(ListDevices),
+            Scope::ALL.to_vec(),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(admin.code(), Some(ErrorCode::InvalidRequest));
     node.stop().await.unwrap();
 }
 

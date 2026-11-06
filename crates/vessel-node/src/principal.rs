@@ -10,8 +10,15 @@
 //!   device does not edit principals: it closes the device's connections
 //!   (`devices::Connected`), which is simpler to get right than revoking
 //!   authority mid-connection.
+//! - A call delivered from another node of the fleet (protocol 6, ADR 0013)
+//!   runs as a [`Principal::Delegated`]: the device that delivered it, with
+//!   its scopes cut down to the origin's, so a target never grants more
+//!   than its owner granted the home, and an agent never more than its own.
+//!   Ownership and the agent limits apply to the origin (`origin_agent`).
 
-use vessel_proto::{DeviceId, ErrorCode, Method, NodeId, Scope, SessionId, WireError};
+use vessel_proto::{
+    DeviceId, ErrorCode, Method, NodeId, Origin, OriginBy, Scope, SessionId, WireError,
+};
 
 /// The caller behind one connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +46,19 @@ pub(crate) enum Principal {
         /// What it may do.
         scopes: Vec<Scope>,
     },
+    /// A call another node of the fleet asked for, delivered by `device`:
+    /// the home's device on a member, or a relaying member's device on the
+    /// home.
+    Delegated {
+        /// The delivering device.
+        device: DeviceId,
+        /// Its scopes here, intersected with `origin.scopes`.
+        scopes: Vec<Scope>,
+        /// Who the call speaks for.
+        origin: Origin,
+        /// The home it came through.
+        via: NodeId,
+    },
 }
 
 impl Principal {
@@ -49,6 +69,7 @@ impl Principal {
             Self::Owner => return Ok(()),
             Self::Device { scopes, .. } => ("device", scopes),
             Self::Agent { scopes, .. } => ("agent", scopes),
+            Self::Delegated { scopes, .. } => ("call from another node", scopes),
         };
         if scopes.contains(&needed) {
             return Ok(());
@@ -61,6 +82,48 @@ impl Principal {
                 needed.as_str()
             ),
         ))
+    }
+}
+
+impl Principal {
+    /// A call delivered by `device` (holding `granted` here) for `origin`,
+    /// which came through the home `via`.
+    pub(crate) fn delegated(
+        device: DeviceId,
+        granted: &[Scope],
+        origin: Origin,
+        via: NodeId,
+    ) -> Self {
+        let scopes = granted
+            .iter()
+            .copied()
+            .filter(|scope| origin.scopes.contains(scope))
+            .collect();
+        Self::Delegated {
+            device,
+            scopes,
+            origin,
+            via,
+        }
+    }
+
+    /// The agent this principal acts for, as `(its node, its session)`, so
+    /// ownership and the agent limits apply to it: a local agent, or an
+    /// agent of another node whose call was delivered here.
+    pub(crate) const fn agent(&self) -> Option<(NodeId, SessionId)> {
+        match self {
+            Self::Agent { node, session, .. }
+            | Self::Delegated {
+                origin:
+                    Origin {
+                        node,
+                        by: OriginBy::Agent { session, .. },
+                        ..
+                    },
+                ..
+            } => Some((*node, *session)),
+            Self::Owner | Self::Device { .. } | Self::Delegated { .. } => None,
+        }
     }
 }
 
@@ -82,6 +145,41 @@ mod tests {
         for method in Method::ALL {
             assert!(Principal::Owner.permit(*method).is_ok());
         }
+    }
+
+    /// A delivered call holds what both the delivering device and the
+    /// origin hold, and acts for the origin's agent.
+    #[test]
+    fn a_delivered_call_holds_the_intersection() {
+        let session = SessionId::random();
+        let origin = Origin {
+            node: NodeId::random(),
+            by: OriginBy::Agent { session, depth: 1 },
+            scopes: vec![Scope::Read, Scope::Operate],
+        };
+        let home = Principal::delegated(
+            DeviceId::random(),
+            &[Scope::Read, Scope::Admin],
+            origin.clone(),
+            NodeId::random(),
+        );
+        assert!(home.permit(Method::ListSessions).is_ok());
+        // The home may not operate here, and the origin may not administer.
+        for refused in [Method::CreateSession, Method::ListDevices] {
+            let refused = home.permit(refused).unwrap_err();
+            assert_eq!(refused.code, ErrorCode::Forbidden);
+        }
+        assert_eq!(home.agent(), Some((origin.node, session)));
+        let owner = Principal::delegated(
+            DeviceId::random(),
+            &[Scope::Read],
+            Origin {
+                by: OriginBy::Owner,
+                ..origin
+            },
+            NodeId::random(),
+        );
+        assert_eq!(owner.agent(), None);
     }
 
     #[test]

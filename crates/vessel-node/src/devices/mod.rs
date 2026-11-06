@@ -18,6 +18,7 @@ pub(crate) mod preamble;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{TimeDelta, Utc};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     DeviceId, DeviceInfo, DeviceSecret, Invitation, InvitationSecret, InviteDevice, NodeId,
@@ -28,7 +29,7 @@ use vessel_store::{CredentialHash, Store};
 use crate::error::ServiceError;
 use connected::Connected;
 pub(crate) use connected::Registration;
-use invitations::{Full, Grant, Invitations};
+use invitations::{Full, Grant, Invitations, Redeemed};
 
 /// Longest an invitation may be valid (ADR 0010).
 pub(crate) const MAX_INVITATION_TTL: TimeDelta = TimeDelta::hours(24);
@@ -71,6 +72,27 @@ impl Devices {
     /// `device.invite`: a single-use pairing link valid for `ttl_secs`
     /// (capped at a day).
     pub(crate) fn invite(&self, request: &InviteDevice) -> Result<Invitation, ServiceError> {
+        self.make_invitation(request, None)
+    }
+
+    /// An invitation like [`invite`](Self::invite)'s whose redemption is
+    /// reported: the receiver gets the id of the device it created. A fleet
+    /// member grants its home a credential this way and must know which of
+    /// its devices is the home's (it accepts `fleet.deliver` from that one
+    /// only).
+    pub(crate) fn invite_tracked(
+        &self,
+        request: &InviteDevice,
+    ) -> Result<(Invitation, oneshot::Receiver<DeviceId>), ServiceError> {
+        let (paired, redeemed) = oneshot::channel();
+        Ok((self.make_invitation(request, Some(paired))?, redeemed))
+    }
+
+    fn make_invitation(
+        &self,
+        request: &InviteDevice,
+        paired: Option<oneshot::Sender<DeviceId>>,
+    ) -> Result<Invitation, ServiceError> {
         let key = self.key;
         if request.ttl_secs == 0 {
             return Err(ServiceError::InvalidTtl);
@@ -97,9 +119,13 @@ impl Devices {
             label: request.label.as_deref().map(label),
             scopes: scopes(request.scopes.as_deref())?,
         };
-        self.invitations()
-            .add(&invite, grant, expires, now)
-            .map_err(|Full| ServiceError::TooManyInvitations)?;
+        let added = match paired {
+            Some(paired) => self
+                .invitations()
+                .add_tracked(&invite, grant, expires, now, paired),
+            None => self.invitations().add(&invite, grant, expires, now),
+        };
+        added.map_err(|Full| ServiceError::TooManyInvitations)?;
         tracing::info!(%expires, "made a pairing invitation");
         Ok(Invitation { link, expires })
     }
@@ -166,7 +192,10 @@ impl Devices {
         device_name: &str,
     ) -> Result<(DeviceSecret, Vec<Scope>), RefusalReason> {
         let now = Utc::now();
-        let redeemed = self
+        let Redeemed {
+            grant: redeemed,
+            paired,
+        } = self
             .invitations()
             .redeem(invite, now)
             .ok_or(RefusalReason::InvalidInvitation)?;
@@ -196,7 +225,17 @@ impl Devices {
                 RefusalReason::Unavailable
             })?;
         tracing::info!(device = %id, "paired a device");
+        if let Some(paired) = paired
+            && paired.send(id).is_err()
+        {
+            tracing::debug!(device = %id, "nobody waits to hear of this pairing any more");
+        }
         Ok((secret, scopes))
+    }
+
+    /// Whether `device` has a connection open to this node now.
+    pub(crate) fn is_connected(&self, device: DeviceId) -> bool {
+        self.connected.is_open(device)
     }
 
     /// Register a connection of `device` (see `connected`).

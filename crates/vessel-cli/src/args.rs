@@ -7,7 +7,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use vessel_client::book::NodeName;
 use vessel_client::{BearerToken, RemotePath};
 use vessel_node::fleet::SkipGlob;
-use vessel_proto::{EventSeq, HarnessKind, ProfileName, SecretName};
+use vessel_proto::{EventSeq, HarnessKind, ProfileName, Scope, SecretName};
 
 use crate::selector::SessionSelector;
 
@@ -238,6 +238,10 @@ pub(crate) enum FleetCommand {
         /// How long the link works: `90s`, `10m`, `2h` (at most `24h`).
         #[arg(long, default_value = "10m", value_parser = ttl_secs)]
         ttl: u32,
+        /// Also let the member pass calls through this home to the fleet's
+        /// other nodes (the `relay` scope), for its agents and devices.
+        #[arg(long)]
+        relay: bool,
     },
     /// Join the fleet whose home made the link: paste it at the prompt, or
     /// pipe it in with `--yes` (never on the command line).
@@ -245,6 +249,10 @@ pub(crate) enum FleetCommand {
         /// Join without asking, after checking the key's fingerprint.
         #[arg(long)]
         yes: bool,
+        /// What the home may do on this node, for calls from the fleet's
+        /// other nodes: scopes separated by commas, or `none`.
+        #[arg(long, default_value = "read,operate", value_parser = grant_scopes)]
+        grant: GrantScopes,
     },
     /// Stop following the home. The files it wrote stay as they are.
     Leave,
@@ -265,6 +273,29 @@ pub(crate) enum FleetCommand {
         #[command(subcommand)]
         command: SecretCommand,
     },
+}
+
+/// What a member grants its home (`vessel fleet join --grant`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GrantScopes(pub(crate) Vec<Scope>);
+
+fn grant_scopes(text: &str) -> Result<GrantScopes, String> {
+    if text.trim() == "none" {
+        return Ok(GrantScopes(Vec::new()));
+    }
+    let mut scopes = Vec::new();
+    for name in text.split(',').map(str::trim) {
+        let scope = Scope::ALL
+            .into_iter()
+            .find(|scope| scope.as_str() == name)
+            .ok_or_else(|| {
+                format!("`{name}` is not a scope (read, operate, admin, sync, relay, or `none`)")
+            })?;
+        if !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    Ok(GrantScopes(scopes))
 }
 
 /// `vessel fleet secret ...`.

@@ -358,8 +358,8 @@ member vesseld                         home vesseld
 - **F2 (done):** the node's `fleet` module (home publishing and serving
   `fleet.*`, members joining, pulling, applying, reporting), the client's
   fleet calls, `vessel fleet init|invite|join|leave|status|members|
-  restore`. Not built: the mutual grant and `fleet.push` (Track X,
-  protocol 6). Tests: in process over in-memory channels through the real
+  restore`. Not built then: the mutual grant (built in Track X) and
+  `fleet.push` (dropped in protocol 6). Tests: in process over in-memory channels through the real
   gateway (follow, kept edits, reports, scopes, delete and restore),
   between two nodes through an in-process relay (join while running,
   follow an edit, leave), and the CLI through a relay.
@@ -436,6 +436,37 @@ member vesseld                         home vesseld
   on the target, the `vessel` MCP tools taking a node. Tests: an agent on
   one node creates, drives and reads a session on another through the home;
   the target's grant to the home caps it; depth counts across nodes.
+
+Progress (2026-11-06):
+
+- **The envelope (built):** `fleet.forward`, `fleet.relay` and
+  `fleet.deliver` (`vessel-node/src/envelope.rs`), with
+  `Principal::Delegated` (the delivering device's scopes intersected with
+  the origin's) and ownership and the agent limits applied to the origin's
+  agent across nodes (`check_owner` follows the creator chain through this
+  node's sessions to `(origin node, session)`; `Agents` counts and deepens
+  per `(node, session)`). A member accepts a delivery only from its home's
+  device; the home relays only a member's own node's calls. A delivered
+  creation records `created_by` as the origin's agent or else the
+  delivering device, `via` the home, and `origin: remote` for an owner or
+  device origin.
+- **The mutual grant (built, `fleet/links.rs`):** a member grants its home
+  the scopes chosen at join (`vessel fleet join --grant`, default `read`,
+  `operate`; `vessel init --join` uses the default) when it connects, with
+  a tracked invitation, so it learns which device is the home's
+  (`fleet/granted.json`); the home keeps the credential under
+  `fleet/grants/`. Leaving revokes that device once the node notices.
+  `vessel fleet invite --relay` adds the `relay` scope.
+- **`fleet.peers`, `fleet.nodes` and `session.read` with `wait` (built).**
+- **Tests:** an e2e fleet of a home and two members on an in-process relay
+  (calls from the home to a member and from member to member through the
+  home; the home refusing a member without `relay`; members holding
+  nothing on the home but `sync`/`relay`; a long poll across two hops; an
+  agent on one member creating and killing its own session on another and
+  refused another's); a member taking deliveries from its home's device
+  only, cut down to the origin.
+- **Next:** `vessel mcp` taking `node`, `list_nodes`, and `wait_turn` as a
+  long poll.
 
 ## Protocol 6 (accepted)
 
