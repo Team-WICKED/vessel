@@ -136,8 +136,17 @@ impl SessionRuntime {
     pub async fn create(&self, spec: SessionSpec) -> Result<Created, SessionError>;
     pub fn get(&self, id: SessionId) -> Option<SessionHandle>;
     pub fn list(&self) -> Vec<SessionInfo>;            // live and ended, this run
+    /// Forget an ended session (its ring and state are freed once other
+    /// holders drop their handles); returns its final info. Refused with
+    /// `Running` while it can still publish records.
+    pub fn remove(&self, id: SessionId) -> Result<SessionInfo, RemoveError>;
     /// Kill everything and wait until every session published its final status.
     pub async fn shutdown(&self);
+}
+
+pub enum RemoveError {
+    NotFound(SessionId),   // unknown, or already removed
+    Running(SessionId),    // has not ended; nothing removed
 }
 
 pub struct Created {
@@ -156,6 +165,9 @@ impl SessionHandle {
     pub fn watch_info(&self) -> tokio::sync::watch::Receiver<SessionInfo>;
     pub async fn send(&self, input: SessionInput) -> Result<(), SessionError>;
     pub fn kill(&self);
+    /// Resolves with the final info once the session has ended (at once if
+    /// it already has); `remove` accepts it from then on.
+    pub async fn ended(&self) -> SessionInfo;
     /// Live records from `from`. Fails with `Gap { oldest_cached }` when
     /// `from` is older than the in-memory ring (the node then reads
     /// `from..oldest_cached` from the store and calls `follow` again), and
@@ -185,6 +197,17 @@ impl SessionError { pub fn code(&self) -> vessel_proto::ErrorCode; }
   `EventSeq`, appends to the ring, sends to `durable`, then broadcasts.
 - `SessionInput` that does not match the mode returns `Unsupported`.
 - On node shutdown: kill all, publish final statuses, close `durable`.
+- Removing ended sessions (added 2026-11-06 after Track R's review of the
+  node: the runtime kept every session of a run, ring included, up to
+  about 16 MiB each for terminal output, until restart). The node calls
+  `remove` once its persistence task has drained `durable` to the end,
+  which implies the session ended; if persistence stopped early (store
+  failure) it waits for `handle.ended()` first. After that `get` returns
+  `None`, and the node serves the session from the store. Handles and
+  followers held across the removal keep working (final info, `send` fails
+  `Ended`, `follow` replays the ring, live receivers close after the final
+  status). The runtime never evicts on its own: only the node knows when
+  the store has everything.
 
 ### R7. Track R done when
 - Gate passes; every crate has module docs with the Why; fixtures for the

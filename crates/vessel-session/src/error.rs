@@ -4,7 +4,7 @@ use std::fmt;
 
 use vessel_agent::InputError;
 use vessel_harness::HarnessError;
-use vessel_proto::{ErrorCode, SessionInput};
+use vessel_proto::{ErrorCode, SessionId, SessionInput};
 
 /// Why a session operation failed.
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +45,20 @@ pub enum SessionError {
     /// A runtime task failed unexpectedly.
     #[error("internal session runtime failure")]
     Internal(#[source] tokio::task::JoinError),
+}
+
+/// Why [`SessionRuntime::remove`](crate::SessionRuntime::remove) refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RemoveError {
+    /// The runtime has no session with this id (never created, or already
+    /// removed).
+    #[error("no session {0} in the runtime")]
+    NotFound(SessionId),
+    /// The session can still publish records; it stays. Wait for
+    /// [`SessionHandle::ended`](crate::SessionHandle::ended) (after `kill`,
+    /// if it should stop).
+    #[error("session {0} has not ended")]
+    Running(SessionId),
 }
 
 impl SessionError {

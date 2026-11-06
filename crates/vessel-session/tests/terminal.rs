@@ -10,7 +10,9 @@ use vessel_proto::{
     ErrorCode, EventSeq, HarnessKind, ModelId, SessionEvent, SessionInput, SessionMode,
     SessionSpec, SessionStatus, TerminalInput, TerminalSize,
 };
-use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, FollowError, SessionError};
+use vessel_session::{
+    DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, FollowError, RemoveError, SessionError,
+};
 
 use support::{Fixture, Follower, collect, count, keys, killed, seqs, within};
 
@@ -479,6 +481,66 @@ async fn launch_problems_are_typed_errors() {
         let error = fixture.runtime.create(structured).await.unwrap_err();
         assert_eq!(error.code(), ErrorCode::Unsupported);
         assert!(fixture.runtime.list().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_ended_session_can_be_removed_and_its_holders_carry_on() {
+    within(async {
+        let fixture = Fixture::new(DEFAULT_RING_CAPACITY, DEFAULT_DURABLE_CAPACITY);
+        let created = fixture
+            .runtime
+            .create(support::terminal(HarnessKind::ClaudeCode))
+            .await
+            .unwrap();
+        let stored = collect(created.durable);
+        let handle = created.handle;
+        let id = handle.id();
+        let mut follower = Follower::new(&handle, EventSeq::ZERO);
+        follower.until_text("ready").await;
+
+        // While it can still publish, it stays.
+        assert_eq!(
+            fixture.runtime.remove(id).unwrap_err(),
+            RemoveError::Running(id)
+        );
+        assert!(fixture.runtime.get(id).is_some());
+
+        handle.send(keys("exit 4\r")).await.unwrap();
+        let ended = handle.ended().await;
+        assert_eq!(ended.status, SessionStatus::Exited { code: Some(4) });
+        assert_eq!(fixture.runtime.remove(id).unwrap(), ended);
+        assert!(fixture.runtime.get(id).is_none());
+        assert!(fixture.runtime.list().iter().all(|info| info.id != id));
+        assert_eq!(
+            fixture.runtime.remove(id).unwrap_err(),
+            RemoveError::NotFound(id)
+        );
+
+        // A follower from before the removal gets every record, then the end.
+        assert_eq!(
+            follower.until_end().await,
+            SessionStatus::Exited { code: Some(4) }
+        );
+        let stored = stored.await.unwrap();
+        assert_eq!(stored, follower.records);
+
+        // A handle held across the removal still answers, and can still
+        // replay the ring.
+        assert_eq!(handle.info(), ended);
+        assert_eq!(handle.ended().await, ended);
+        assert_eq!(
+            handle.send(keys("late\r")).await.unwrap_err().code(),
+            ErrorCode::Conflict
+        );
+        handle.kill();
+        let mut late = Follower::new(&handle, EventSeq::ZERO);
+        assert_eq!(
+            late.until_end().await,
+            SessionStatus::Exited { code: Some(4) }
+        );
+        assert_eq!(late.records, stored);
     })
     .await;
 }
