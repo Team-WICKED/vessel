@@ -1,6 +1,7 @@
 //! [`RuntimeConfig`]: how the runtime finds harnesses and sizes its buffers.
 
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 /// Suggested [`RuntimeConfig::ring_capacity`]: enough recent records for a
 /// reconnecting client to catch up without touching the store. The cost is
@@ -26,6 +27,12 @@ pub struct RuntimeConfig {
     /// Bound of each session's durable channel. When it is full the session
     /// pauses instead of dropping records.
     pub durable_capacity: NonZeroUsize,
+    /// Longest a structured session's ACP handshake (`initialize`, the
+    /// session, then the model) may take before the session fails.
+    /// [`DEFAULT_HANDSHAKE_TIMEOUT`](crate::DEFAULT_HANDSHAKE_TIMEOUT) is
+    /// suggested; a node raises it for adapters that start slowly (an `npx`
+    /// adapter may download its package on first use).
+    pub agent_handshake_timeout: Duration,
 }
 
 /// `value` as a `NonZeroUsize` in a constant; a zero would fall back to 1,

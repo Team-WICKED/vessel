@@ -37,7 +37,9 @@ mod support {
         EventRecord, EventSeq, HarnessKind, SessionEvent, SessionInput, SessionMode, SessionSpec,
         SessionStatus, TerminalBytes, TerminalInput, TerminalSize,
     };
-    use vessel_session::{Follow, RuntimeConfig, SessionHandle, SessionRuntime};
+    use vessel_session::{
+        DEFAULT_HANDSHAKE_TIMEOUT, Follow, RuntimeConfig, SessionHandle, SessionRuntime,
+    };
     use vessel_testkit::Fake;
 
     const SAFETY_NET: Duration = Duration::from_secs(30);
@@ -72,6 +74,7 @@ mod support {
                     harness_lookup: Lookup::new([bin.clone()]),
                     ring_capacity,
                     durable_capacity,
+                    agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
                 },
                 shutdown.clone(),
             );

@@ -2,11 +2,12 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use vessel_harness::Lookup;
 use vessel_proto::DEFAULT_PORT;
 use vessel_rpc::ServerConfig;
-use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY};
+use vessel_session::{DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY};
 use vessel_store::{DataDir, StoreConfig};
 
 /// Everything a node needs to start. Build with [`Config::new`] and
@@ -31,6 +32,10 @@ pub struct Config {
     /// Records a session may hand over before persistence catches up (the
     /// session pauses its output while this is full).
     pub durable_capacity: NonZeroUsize,
+    /// Longest a structured session's agent may take to start (the ACP
+    /// handshake) before the session fails. 60 s by default; raise it
+    /// where adapters start slowly (`vesseld --agent-handshake-timeout`).
+    pub agent_handshake_timeout: Duration,
     /// Per-connection RPC limits.
     pub rpc: ServerConfig,
 }
@@ -47,6 +52,7 @@ impl Config {
             store: StoreConfig::default(),
             ring_capacity: DEFAULT_RING_CAPACITY,
             durable_capacity: DEFAULT_DURABLE_CAPACITY,
+            agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             rpc: ServerConfig::default(),
         }
     }

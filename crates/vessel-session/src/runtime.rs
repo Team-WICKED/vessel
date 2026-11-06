@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::Instrument as _;
-use vessel_agent::{AgentProcess, AgentSetup, DEFAULT_HANDSHAKE_TIMEOUT};
+use vessel_agent::{AgentProcess, AgentSetup};
 use vessel_proto::{
     EventRecord, EventSeq, HarnessSessionId, ModelId, SessionId, SessionInfo, SessionMode,
     SessionSpec, SessionStatus, TerminalSize,
@@ -172,7 +172,7 @@ impl SessionRuntime {
                 cwd,
                 model,
                 resume,
-                handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
+                handshake_timeout: self.config.agent_handshake_timeout,
             },
         )
         .map_err(SessionError::StartAgent)?;

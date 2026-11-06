@@ -71,6 +71,7 @@ impl Node {
                 harness_lookup: config.harness_lookup.clone(),
                 ring_capacity: config.ring_capacity,
                 durable_capacity: config.durable_capacity,
+                agent_handshake_timeout: config.agent_handshake_timeout,
             },
             CancellationToken::new(),
         ));

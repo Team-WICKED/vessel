@@ -43,12 +43,45 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new() -> Self {
+        Self::with_adapter(|bin, acp| {
+            drop(install(bin, HarnessKind::ClaudeCode, Role::Structured, acp).unwrap());
+        })
+    }
+
+    /// Claude's ACP adapter never answers `initialize`: fake-acp with
+    /// `FAKE_ACP_HANG`, behind a wrapper that sets it. (Written instead of
+    /// the usual install, which on Unix is a symlink to the shared fake.)
+    pub(crate) fn with_stuck_adapter() -> Self {
+        Self::with_adapter(|bin, acp| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let wrapper = bin.join("claude-agent-acp");
+                let script = format!(
+                    "#!/bin/sh\nFAKE_ACP_HANG=initialize exec '{}' \"$@\"\n",
+                    acp.display()
+                );
+                std::fs::write(&wrapper, script).unwrap();
+                std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            #[cfg(windows)]
+            std::fs::write(
+                bin.join("claude-agent-acp.cmd"),
+                format!(
+                    "@echo off\r\nset FAKE_ACP_HANG=initialize\r\n\"{}\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+                    acp.display()
+                ),
+            )
+            .unwrap();
+        })
+    }
+
+    fn with_adapter(adapter: impl FnOnce(&std::path::Path, &std::path::Path)) -> Self {
         let data = tempfile::tempdir().unwrap();
         let bin = tempfile::tempdir().unwrap();
         let tui = Fake::Tui.path().unwrap();
         drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
-        let acp = Fake::Acp.path().unwrap();
-        drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Structured, &acp).unwrap());
+        adapter(bin.path(), &Fake::Acp.path().unwrap());
         Self { data, bin }
     }
 

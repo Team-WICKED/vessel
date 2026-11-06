@@ -13,6 +13,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use vessel_node::{Config, DataDir, Node};
@@ -45,6 +46,17 @@ struct Run {
     /// Node name shown to clients (defaults to the hostname).
     #[arg(long, env = "VESSEL_NAME")]
     name: Option<String>,
+    /// Seconds a structured session's agent may take to start (the ACP
+    /// handshake) before the session fails. Raise it where adapters start
+    /// slowly, for example an `npx` adapter downloading on first use.
+    #[arg(
+        long,
+        env = "VESSEL_AGENT_HANDSHAKE_TIMEOUT",
+        value_name = "SECONDS",
+        default_value_t = vessel_session::DEFAULT_HANDSHAKE_TIMEOUT.as_secs(),
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    agent_handshake_timeout: u64,
     /// Started in the background by `vesseld attach`: announce readiness
     /// on stdout and keep running when the SSH session hangs up.
     #[arg(long, hide = true)]
@@ -118,6 +130,7 @@ async fn run(dir: DataDir, args: Run) -> ExitCode {
         Bind::None => None,
     };
     config.name = args.name;
+    config.agent_handshake_timeout = Duration::from_secs(args.agent_handshake_timeout);
 
     // Before the node starts, so a hang-up during start-up cannot kill it.
     #[cfg(unix)]

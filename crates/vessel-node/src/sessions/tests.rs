@@ -12,7 +12,8 @@ use vessel_proto::{
     HarnessKind, SessionId, SessionInput, SessionMode, SessionSpec, SessionStatus, TerminalSize,
 };
 use vessel_session::{
-    DEFAULT_DURABLE_CAPACITY, DEFAULT_RING_CAPACITY, RuntimeConfig, SessionRuntime,
+    DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY, RuntimeConfig,
+    SessionRuntime,
 };
 use vessel_store::{DataDir, Store, StoreConfig};
 use vessel_testkit::Fake;
@@ -41,6 +42,7 @@ impl Fixture {
                 harness_lookup: Lookup::new([bin.path().to_path_buf()]),
                 ring_capacity: DEFAULT_RING_CAPACITY,
                 durable_capacity: DEFAULT_DURABLE_CAPACITY,
+                agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             },
             CancellationToken::new(),
         ));

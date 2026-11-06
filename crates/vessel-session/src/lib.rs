@@ -75,3 +75,5 @@ pub use error::{InputKind, ModeKind, RemoveError, SessionError};
 pub use handle::SessionHandle;
 pub use ring::{Follow, FollowError};
 pub use runtime::{Created, SessionRuntime};
+/// Suggested [`RuntimeConfig::agent_handshake_timeout`].
+pub use vessel_agent::DEFAULT_HANDSHAKE_TIMEOUT;
