@@ -75,9 +75,21 @@ ALTER TABLE sessions ADD COLUMN profile TEXT;
 ALTER TABLE sessions ADD COLUMN created_by TEXT;
 ";
 
+/// Version 4 (milestone 4, protocol 6): where a session came from when
+/// another node of the fleet had a hand in it.
+///
+/// - `via` is the home a creating call came through, a `NodeId` as text.
+/// - `origin` is a `SessionOrigin` as JSON (`remote` or `imported`).
+/// - Both `NULL` for a session of this node's own, and for every session
+///   stored before this version, which read as `None`.
+const V4: &str = "
+ALTER TABLE sessions ADD COLUMN via TEXT;
+ALTER TABLE sessions ADD COLUMN origin TEXT;
+";
+
 /// Every migration, oldest first. Index `n` takes the schema from version
 /// `n` to `n + 1`.
-const MIGRATIONS: &[&str] = &[V1, V2, V3];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// Bring the database to the newest schema.
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {

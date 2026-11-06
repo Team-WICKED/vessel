@@ -169,7 +169,7 @@ merged and the session structs (which Track P also touches) change once.
 | `vessel-fleet` (new) | Bundle manifests (content addressed), the materialiser (copies with recorded hashes, local edits kept, conflicts listed), secret references | **new crate: `-> proto, harness`** |
 | `vessel-mcp` (new) | `vessel mcp`: the MCP server (stdio) attached to every session; each tool is one call through the agent's principal | **new crate: `-> proto, client`** |
 | `vessel-agent` | MCP servers in `session/new` and `session/load` | none |
-| `vessel-store` | Schema 3: `profile` and `created_by` on sessions; fleet membership and bundle state | none |
+| `vessel-store` | Schema 3: `profile` and `created_by` on sessions; fleet membership and bundle state; schema 4 (protocol 6): `via` and `origin` on sessions | none |
 | `vessel-node` | `profiles.toml`, agent credentials and the ownership rule, `move_profile`, fleet home and member roles, `fleet.forward`, session export and import, `secrets.toml` | **`-> fleet, client`** (calls to the home and to members) |
 | `vessel-client` | Profile, fleet and session-move calls | none |
 | `vessel-cli` | `vessel init`, `vessel profiles`, `--profile`, `session move-profile`, `session move/copy`, `vessel fleet …`, `vessel mcp` | **`-> mcp`** |
@@ -499,7 +499,7 @@ Envelope (Track X):
 `owner`, `device { id }` or `agent { session, depth }`. `scopes` is what the
 origin principal holds on its own node; `depth` is its session's agent
 depth. `call` is boxed (`Box<Call>`), and must be forwardable
-(`Method::forwardable`): not a subscription, not an envelope row.
+(`Method::forwardable`, deny by default: an exhaustive match, so a new row is decided before it compiles; the set is pinned by a test).
 `Forwarded { reply: Box<Reply> }`; an inner call that fails fails the
 envelope with its error.
 
@@ -668,6 +668,18 @@ tools. F4's cross-node pull depends on X's envelope; within one node
   automatically). The home's sources are ordinary files the person edits
   there, or with their usual tools over SSH. If it is wanted later, it is
   `transfer` in the other direction, on the same shapes.
+
+### Where a session came from (as built, 2026-11-06)
+
+`vessel_session::LaunchOptions` has `origin: Option<SessionOrigin>` and
+`via: Option<NodeId>`; the runtime puts both on the `SessionInfo` it
+builds, and store schema 4 keeps them (`sessions.via`, a node id as text;
+`sessions.origin`, JSON), sessions from older schemas reading as `None`.
+A call delivered from another node (Track X) sets `origin: remote { node,
+by }` for an owner or device origin and `via`; an import (F4) sets
+`origin: imported { node, session }`. `created_by` keeps the accepted
+rule: `agent { node, session }` for an agent origin, otherwise the
+delivering device.
 
 ### Decisions (review, 2026-11-06)
 
