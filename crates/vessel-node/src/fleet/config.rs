@@ -273,35 +273,45 @@ mod tests {
         parse(Path::new("fleet.toml"), text, Some(Path::new("/home/u")))
     }
 
+    /// An absolute path on this OS (`/srv` is not one on Windows), as a
+    /// TOML literal string.
+    fn absolute(name: &str) -> (PathBuf, String) {
+        let path = std::env::current_dir().unwrap().join(name);
+        let text = format!("'{}'", path.display());
+        (path, text)
+    }
+
     #[test]
     fn the_adr_example_reads_with_the_type_key() {
-        let sources = parsed(
+        let (skills, skills_text) = absolute("skills");
+        let sources = parsed(&format!(
             r#"
 instructions = "~/.codex/AGENTS.md"
-skills = "/srv/skills"
+skills = {skills_text}
 skip = [".system", "paseo*"]
 
 [mcp.servers.docs]
 type = "stdio"
 command = "npx"
 args = ["-y", "@example/docs-mcp"]
-env = { DOCS_TOKEN = { secret = "DOCS_TOKEN" }, MODE = "plain" }
-"#,
-        )
+env = {{ DOCS_TOKEN = {{ secret = "DOCS_TOKEN" }}, MODE = "plain" }}
+"#
+        ))
         .unwrap();
         assert_eq!(
             sources.instructions,
             Some(Path::new("/home/u").join(".codex/AGENTS.md"))
         );
-        assert_eq!(sources.skills, Some(PathBuf::from("/srv/skills")));
+        assert_eq!(sources.skills, Some(skills));
         assert_eq!(sources.skip.len(), 2);
         assert_eq!(sources.mcp.len(), 1);
     }
 
     #[test]
     fn mistakes_are_errors_not_guesses() {
+        let (_x, x) = absolute("x");
         assert!(matches!(
-            parsed("skils = \"/x\""),
+            parsed(&format!("skils = {x}")),
             Err(SourcesError::Parse { .. })
         ));
         assert!(matches!(
@@ -310,7 +320,7 @@ env = { DOCS_TOKEN = { secret = "DOCS_TOKEN" }, MODE = "plain" }
         ));
         assert!(matches!(parsed(""), Err(SourcesError::Empty { .. })));
         assert!(matches!(
-            parsed("skills = \"/x\"\nskip = [\"a/b\"]"),
+            parsed(&format!("skills = {x}\nskip = [\"a/b\"]")),
             Err(SourcesError::Skip { .. })
         ));
         assert!(matches!(

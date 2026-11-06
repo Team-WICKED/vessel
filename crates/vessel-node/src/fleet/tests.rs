@@ -209,18 +209,18 @@ impl Member {
 async fn a_member_follows_its_home_and_reports_what_it_kept() {
     let home = Home::start().await;
     let files = home.files();
+    // The files are written before the state that records them: wait for
+    // the state.
     until("the home publishes and applies to itself", || {
-        read(&home.path("claude/CLAUDE.md")) == "instructions v1\n"
-    })
-    .await;
-    assert_eq!(
         super::status(&files)
             .unwrap()
             .state
             .generation
-            .map(vessel_proto::Generation::get),
-        Some(1)
-    );
+            .map(vessel_proto::Generation::get)
+            == Some(1)
+    })
+    .await;
+    assert_eq!(read(&home.path("claude/CLAUDE.md")), "instructions v1\n");
 
     // A member, paired with the `sync` scope only.
     let member = Member::new();
@@ -246,13 +246,22 @@ async fn a_member_follows_its_home_and_reports_what_it_kept() {
         &home.path("codex/AGENTS.md"),
         "instructions v3, longer still\n",
     );
-    until("the incoming version lands beside the edit", || {
-        read(&member.codex("AGENTS.md.vessel-incoming")) == "instructions v3, longer still\n"
+    until("the member applies generation 3", || {
+        member
+            .local
+            .state
+            .get()
+            .generation
+            .map(vessel_proto::Generation::get)
+            == Some(3)
     })
     .await;
+    assert_eq!(
+        read(&member.codex("AGENTS.md.vessel-incoming")),
+        "instructions v3, longer still\n"
+    );
     assert_eq!(read(&member.codex("AGENTS.md")), "my own\n");
     let state = member.local.state.get();
-    assert_eq!(state.generation.map(vessel_proto::Generation::get), Some(3));
     assert_eq!(state.conflicts.len(), 1, "{:?}", state.conflicts);
     assert_eq!(state.conflicts[0].kind, ConflictWhy::Edited);
 
