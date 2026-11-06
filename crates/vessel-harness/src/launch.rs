@@ -2,7 +2,6 @@
 //! command that runs the session.
 
 use std::ffi::OsString;
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 use vessel_proc::CommandSpec;
@@ -15,6 +14,8 @@ use crate::mcp::{McpError, McpFile, TerminalMcp};
 use crate::profile::Profile;
 
 /// What [`launch`] decided: the command, and what it needs around it.
+/// `Debug` shows no value: `CommandSpec` and `McpFile` hide them.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct Launch {
     /// The command. Its environment may hold secrets (the profile's values,
@@ -28,21 +29,6 @@ pub struct Launch {
     /// has no launch-time form for them. Structured sessions get every
     /// server over ACP, so this is empty for them.
     pub unattached: Vec<McpServerName>,
-}
-
-/// The program and arguments only: the environment may hold secrets.
-impl fmt::Debug for Launch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let variables: Vec<_> = self.command.env.iter().map(|(name, _)| name).collect();
-        f.debug_struct("Launch")
-            .field("program", &self.command.program)
-            .field("args", &self.command.args)
-            .field("env_names", &variables)
-            .field("cwd", &self.command.cwd)
-            .field("mcp_file", &self.mcp_file)
-            .field("unattached", &self.unattached)
-            .finish()
-    }
 }
 
 /// The command that runs `spec` under `profile`, with `mcp` servers.

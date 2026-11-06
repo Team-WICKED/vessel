@@ -66,6 +66,15 @@ pub enum SpawnError {
 #[error("cannot signal process group")]
 pub struct SignalError(#[from] std::io::Error);
 
+impl SignalError {
+    /// The OS refused (`EPERM`): a member runs as another user, or (macOS)
+    /// every member has exited and is waiting to be reaped.
+    #[cfg(unix)]
+    pub(crate) fn is_refused(&self) -> bool {
+        self.0.kind() == std::io::ErrorKind::PermissionDenied
+    }
+}
+
 /// Waiting for a child failed.
 #[derive(Debug, thiserror::Error)]
 #[error("cannot wait for child process")]
