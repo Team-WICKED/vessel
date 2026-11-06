@@ -40,7 +40,10 @@ session as created by the owner, and never emit `profile_changed`.
   each member writes under its harness's own name (`CLAUDE.md`,
   `AGENTS.md`, `GEMINI.md`); `skills/<name>/...` is a skill, `<name>` being
   the `name` in its `SKILL.md` (not its directory name). Other top-level
-  paths are reserved; a member ignores what it does not know.
+  paths are reserved; a member ignores what it does not know. A path
+  segment may not be a Windows device name (`CON`, `COM0`-`COM9`,
+  `CONIN$`, ...) or a short-name alias (`NAME~1`). There is no mode beyond
+  `executable`: members write fleet files owner-only.
 - Scopes: `sync` is new. `device.invite` takes `scopes?`; without it a
   device gets `read`, `operate` and `admin`, as in version 4.
 - Agents (ADR 0013): on the local socket, an agent's `vessel mcp` sends
