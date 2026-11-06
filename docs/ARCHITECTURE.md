@@ -265,7 +265,8 @@ they started.
     which is created on start) through `vessel_relay::respond`, which
     closes with 4401 when it fails, then runs the device preamble
     (`devices::preamble`) and the protocol; at most 64 channels may be in
-    their handshake or preamble at once. `NodeInfo.public_key` carries the
+    their handshake or preamble at once, and their frames are limited to
+    64 KiB until the preamble is answered. `NodeInfo.public_key` carries the
     public key. Carriers arrive from `/secure` on the node's listener (an
     `AxumCarrier`, messages capped at one record) and from one `NodeLink`
     per `--relay` (registering with `--relay-token-file`'s token, TLS for

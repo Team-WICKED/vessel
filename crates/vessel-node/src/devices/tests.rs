@@ -13,7 +13,8 @@ use vessel_harness::Lookup;
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, HarnessKind,
     InviteDevice, ListDevices, ListSessions, NodeClose, NodePublicKey, PairingOffer, Preamble,
-    PreambleReply, RefusalReason, RevokeDevice, Scope, SessionMode, SessionSpec, TerminalSize,
+    PreambleReply, RefusalReason, RevokeDevice, Scope, SessionId, SessionInput, SessionMode,
+    SessionSpec, TerminalSize,
 };
 use vessel_relay::NodeCarrier;
 use vessel_rpc::memory::{self, MemoryTransport};
@@ -504,4 +505,51 @@ fn labels_lose_control_and_invisible_formatting_characters() {
     assert_eq!(label("\u{FEFF}work\u{00AD}\u{E0041}\tlaptop"), "worklaptop");
     assert_eq!(label("\u{200D}\u{2060} \n"), "device");
     assert_eq!(label("Pixel 9 (José)"), "Pixel 9 (José)");
+}
+
+/// Until the preamble is answered a frame may be 64 KiB at most: a
+/// stranger's larger first frame closes the channel unanswered. Once
+/// admitted, a device may send the usual large frames.
+#[tokio::test]
+async fn frames_are_small_until_the_device_is_admitted() {
+    let (_temp, node) = node().await;
+    let key = node.info().public_key.unwrap();
+    let big = "x".repeat(100 * 1024);
+
+    // A valid pairing request, made large by its device name: without the
+    // limit the node would pair it.
+    let offer = invite(&node, None);
+    let oversized = serde_json::to_string(&Preamble::PairRequest {
+        invite: offer.invite.clone(),
+        device_name: big.clone(),
+    })
+    .unwrap();
+    let (client_end, _closed) = carrier(&node);
+    let mut stranger = vessel_secure::initiate(client_end, &key).await.unwrap();
+    stranger.send(oversized).await.unwrap();
+    assert!(
+        !matches!(stranger.next().await, Some(Ok(_))),
+        "the node read an oversized first frame"
+    );
+
+    // The invitation was never read, so it still pairs.
+    let (client_end, _closed) = carrier(&node);
+    let (_paired, connection) = secure::pair(
+        client_end,
+        &offer,
+        "laptop",
+        client(),
+        &ClientConfig::default(),
+    )
+    .await
+    .unwrap();
+    let input = SessionInput::Prompt {
+        content: vec![vessel_proto::ContentBlock::Text { text: big }],
+    };
+    let answered = connection.send(SessionId::random(), input).await;
+    assert!(
+        !matches!(answered, Err(CallError::Disconnected)),
+        "an admitted device's large frame was refused: {answered:?}"
+    );
+    node.stop().await.unwrap();
 }

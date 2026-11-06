@@ -29,6 +29,12 @@
 //!   connections are not counted: they belong to devices, which can be
 //!   revoked. The alternative, a cap per source address, has no address to
 //!   go by behind a relay.
+//! - Until the preamble is answered, frames are limited to
+//!   [`PREAMBLE_MAX_FRAME`] (64 KiB) both ways: a preamble is a few hundred
+//!   bytes, and a stranger must not make the node buffer 16 MiB per
+//!   channel. Admission raises the limit to the channel's configured one
+//!   (`SecureChannel::set_max_frame`); a frame the client pipelined behind
+//!   its preamble is judged when it is read, under the raised limit.
 
 use std::sync::Arc;
 
@@ -37,7 +43,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_relay::NodeCarrier;
 use vessel_rpc::{FrameTransport, Server, ServerConfig};
-use vessel_secure::{NodeKeypair, SecureError};
+use vessel_secure::{Carrier, NodeKeypair, SecureChannel, SecureError};
 
 use crate::devices::Devices;
 use crate::devices::preamble::{self, Admitted, NotAdmitted};
@@ -47,6 +53,27 @@ use crate::service::Connection;
 
 /// How many secure channels may be in their handshake or preamble at once.
 pub(crate) const MAX_UNADMITTED: usize = 64;
+
+/// The largest frame either side may send before the client is admitted.
+pub(crate) const PREAMBLE_MAX_FRAME: u32 = 64 * 1024;
+
+/// A channel whose frame limit is raised once its client is admitted.
+pub(crate) trait Admittable: FrameTransport {
+    /// Allow frames of up to `max_frame` bytes from now on.
+    fn admitted(&mut self, max_frame: u32);
+}
+
+impl<C: Carrier> Admittable for SecureChannel<C> {
+    fn admitted(&mut self, max_frame: u32) {
+        self.set_max_frame(max_frame);
+    }
+}
+
+/// The in-memory frames the device tests use have no size limit to raise.
+#[cfg(test)]
+impl Admittable for vessel_rpc::memory::MemoryTransport {
+    fn admitted(&mut self, _max_frame: u32) {}
+}
 
 /// Why a carrier was not served.
 #[derive(Debug, thiserror::Error)]
@@ -88,7 +115,9 @@ impl SecureGateway {
     /// failed (another key or version, a timeout, or the carrier).
     pub(crate) async fn accept<C: NodeCarrier>(&self, carrier: C) -> Result<(), NotServed> {
         let permit = self.permit().ok_or(NotServed::Busy)?;
-        let channel = vessel_relay::respond(carrier, &self.keypair, &self.channel).await?;
+        let mut unadmitted = self.channel;
+        unadmitted.max_frame = PREAMBLE_MAX_FRAME.min(self.channel.max_frame);
+        let channel = vessel_relay::respond(carrier, &self.keypair, &unadmitted).await?;
         self.serve_with(channel, permit).await;
         Ok(())
     }
@@ -109,7 +138,7 @@ impl SecureGateway {
     /// then the protocol as the admitted device. Dropped at once past
     /// [`MAX_UNADMITTED`].
     #[cfg(test)]
-    pub(crate) async fn serve<T: FrameTransport>(&self, channel: T) {
+    pub(crate) async fn serve<T: Admittable>(&self, channel: T) {
         if let Some(permit) = self.permit() {
             self.serve_with(channel, permit).await;
         } else {
@@ -117,7 +146,7 @@ impl SecureGateway {
         }
     }
 
-    async fn serve_with<T: FrameTransport>(&self, mut channel: T, permit: OwnedSemaphorePermit) {
+    async fn serve_with<T: Admittable>(&self, mut channel: T, permit: OwnedSemaphorePermit) {
         let _tracked = self.connections.token();
         // Shutdown does not wait out a silent client's preamble timeout.
         let admitted = tokio::select! {
@@ -140,6 +169,7 @@ impl SecureGateway {
                 return;
             }
         };
+        channel.admitted(self.channel.max_frame);
         let server = Server::new(
             Arc::clone(&self.service),
             self.lifecycle.watch_info(),
