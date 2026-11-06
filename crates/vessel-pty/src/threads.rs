@@ -4,7 +4,8 @@
 //! dedicated thread and talks to async code over a bounded channel (see the
 //! crate docs for the backpressure policy):
 //!
-//! - waiter: owns the child, reports its exit code, then sweeps the group;
+//! - waiter: owns the child; once it exits, sweeps its group, reaps it and
+//!   reports the exit code (in the order `kill` explains);
 //! - reader: copies output into [`PtyOutput`](crate::PtyOutput)'s channel;
 //! - control: owns the writer and the master, and applies [`Control`]
 //!   messages in order. The PTY closes when this thread ends.
@@ -18,7 +19,7 @@ use portable_pty::{Child, MasterPty};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::PtyError;
-use crate::kill::Killer;
+use crate::kill::Reaper;
 use crate::size::WindowSize;
 
 /// Output chunks buffered between the reader thread and the consumer. At up
@@ -57,7 +58,7 @@ pub(crate) struct Threads {
 pub(crate) fn start(
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
-    killer: &Killer,
+    waiter: Reaper,
 ) -> Result<Threads, PtyError> {
     let attach = |error: &dyn std::fmt::Display| PtyError::Attach {
         message: error.to_string(),
@@ -66,9 +67,8 @@ pub(crate) fn start(
     let writer = master.take_writer().map_err(|error| attach(&error))?;
 
     let (exit_sender, exit) = oneshot::channel();
-    let sweep = Sweep::new(killer);
     spawn("vessel-pty-wait", move || {
-        wait_for_exit(child, &sweep, exit_sender);
+        wait_for_exit(child, &waiter, exit_sender);
     })?;
     let (control, control_receiver) = mpsc::channel(CONTROL_MESSAGES);
     let (output_sender, output) = mpsc::channel(OUTPUT_CHUNKS);
@@ -96,20 +96,20 @@ fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> Result<(), PtyErro
         .map_err(PtyError::Thread)
 }
 
-/// Waiter thread: block until the program exits, sweep its group, report.
+/// Waiter thread: block until the program exits, finish it (sweep its group
+/// and reap it), report.
 fn wait_for_exit(
     mut child: Box<dyn Child + Send + Sync>,
-    sweep: &Sweep,
+    reaper: &Reaper,
     exit: oneshot::Sender<Option<i32>>,
 ) {
-    let code = match child.wait() {
+    let code = reaper.finish(|| match child.wait() {
         Ok(status) => exit_code(&status),
         Err(error) => {
             tracing::warn!(%error, "cannot wait for PTY program");
             None
         }
-    };
-    sweep.run();
+    });
     if exit.send(code).is_err() {
         tracing::debug!("pty exit status had no receiver");
     }
@@ -227,42 +227,6 @@ fn apply_control(
     }
     drop(writer);
     drop(master);
-}
-
-/// Kills what is left of the program's group after it exits (Unix), so a
-/// shell or MCP server it started cannot keep the PTY open.
-struct Sweep {
-    #[cfg(unix)]
-    group: vessel_proc::ProcessGroup,
-}
-
-impl Sweep {
-    #[cfg(unix)]
-    const fn new(killer: &Killer) -> Self {
-        Self {
-            group: killer.group(),
-        }
-    }
-
-    #[cfg(not(unix))]
-    const fn new(_killer: &Killer) -> Self {
-        Self {}
-    }
-
-    #[cfg(unix)]
-    fn run(&self) {
-        if let Err(error) = self.group.signal(vessel_proc::Signal::Kill) {
-            tracing::warn!(%error, "cannot sweep PTY process group");
-        }
-    }
-
-    /// Nothing to sweep: the pseudo console's closing ends the rest.
-    #[cfg(not(unix))]
-    #[expect(
-        clippy::unused_self,
-        reason = "same signature as the Unix version, which sweeps its group"
-    )]
-    const fn run(&self) {}
 }
 
 #[cfg(test)]

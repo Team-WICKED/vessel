@@ -2231,6 +2231,7 @@ name = "vessel-pty"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "nix 0.31.3",
  "portable-pty",
  "thiserror 2.0.21",
  "tokio",
