@@ -58,8 +58,13 @@ built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
   beside the existing ones. Limits: 256 MiB per file and 2 GiB per
   transfer (`MAX_TRANSFER_FILE`, `MAX_TRANSFER_TOTAL`); a transfer over
   either is `invalid_request`, naming the limit and the size.
-  As built (F4): all six run on one node; `from.node` naming another node
-  is `unsupported` until Track X's envelope. A `TransferId` is a UUIDv4;
+  As built (F4): an import from another fleet node sends the source's
+  `session.export` or `memory.export`, `transfer.read` and
+  `transfer.close` through the envelope as the importing caller, so the
+  source's grant to the home must cover them (`admin` for memory) and its
+  transfer belongs to that delivery; a node in no fleet answers
+  `not_found`. A profile with no harness home on the target yet is
+  `conflict`, before anything is fetched. A `TransferId` is a UUIDv4;
   the holder check, not the id, keeps a transfer to its opener (another
   caller gets `not_found`, as for an unknown id). At most 16 transfers
   are open on a node (`unavailable` beyond). `session.export` of a

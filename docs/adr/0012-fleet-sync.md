@@ -366,10 +366,10 @@ It is idempotent: running it again fills gaps and changes nothing else.
 
 ## As built (history and memory, F4, 2026-11-06)
 
-Built between profiles of one node; an import naming another node answers
-`unsupported` until Track X's envelope, which plugs into the same seam
-(the import pulls through a `Source`: this node's export, read and close
-for the caller now, `fleet.forward` later).
+Built between profiles of one node and between fleet nodes. The import
+pulls through a `Source`: this node's export, read and close for the
+caller, or the same four calls sent to another node through the envelope
+(`NodeService::pass_on`, the route `fleet.forward` takes) as the caller.
 
 - **Which files.** A session's are the files a move between profiles
   links (`SessionFiles::regular_files`: Claude Code's transcript, its
@@ -401,6 +401,20 @@ for the caller now, `fleet.forward` later).
   a session into the profile and directory it is already in on the same
   node is refused (`conflict`): a second session would append to the
   same transcript.
+- **Across nodes.** The source sees the importing caller as the origin:
+  it runs the export as the home's device cut down to that origin, so its
+  grant to the home must cover the export's scope (`operate` for a
+  session, `admin` for memory, which the default grant leaves out), and
+  an agent copies only sessions it started. The transfer belongs to that
+  delivery (`Holder::Delegated`: the delivering device and the origin),
+  so the reads and the close the import sends the same way are the only
+  ones that reach it. A member that pulls needs `relay` on the home; the
+  home pulls from a member directly. A profile home that does not exist
+  on the target is refused (`conflict`) before anything is fetched.
+  Tested with a home and two members on an in-process relay: a session
+  moved from one member to the other and resumed in the target's
+  directory, a project's memory copied, and the home refused a member's
+  memory it was not granted `admin` for.
 - **Resuming.** With `start`, the target creates the session through
   `session.create`'s own path (an agent's limits apply) with `origin:
   imported { node, session }`. An agent copies only sessions it started.

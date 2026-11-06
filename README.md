@@ -222,8 +222,9 @@ vessel fleet members
 ### Copying a conversation or a memory
 
 A structured session's conversation, or a profile's memory, is copied on
-demand (between profiles of one node now; across nodes once the fleet's
-envelope lands):
+demand, between profiles of one node or between the nodes of a fleet
+(`--to NODE`; a member pulling from another needs `relay` on the home,
+and memory needs the source to have granted the home `admin`):
 
 ```bash
 vessel session copy 3f2a --profile claude-work --cwd /srv/app --start   # resume a copy there
