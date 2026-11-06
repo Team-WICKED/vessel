@@ -143,6 +143,17 @@ impl BlobStore {
         Ok((data, total))
     }
 
+    /// Remove blob `hash` (found damaged), so it is fetched again.
+    ///
+    /// # Errors
+    /// It cannot be removed; a missing blob is no error.
+    pub fn remove(&self, hash: &BlobHash) -> io::Result<()> {
+        match fs::remove_file(self.path(hash)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            Ok(()) | Err(_) => Ok(()),
+        }
+    }
+
     /// Open blob `hash` for reading.
     ///
     /// # Errors
