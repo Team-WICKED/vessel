@@ -110,7 +110,10 @@ depend on the node, so there is no cycle).
     `lifecycle` module (stop-responsive publishing, two-step stop).
     Structured status is `Starting` until the agent's `Ready`, then
     `Running`; a session that never became ready ends `Failed`.
-  - `vessel-testkit`: `fake-tui`, `fake-acp` and the `Fake::path` locator.
+  - `vessel-testkit`: `fake-tui`, `fake-acp`, the `Fake::path` locator
+    (a nested `cargo build` once per test process; the first one of a run
+    recompiles about 30 crates under this package's own feature set), and
+    `within`, the test safety net whose clock starts after that build.
 - Spine track:
   - `vessel-rpc`: handshake, typed calls with cancellation and an in-flight
     bound (calls beyond it are refused `Unavailable`; the connection keeps

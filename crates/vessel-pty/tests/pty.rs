@@ -22,8 +22,10 @@ mod support {
 
     const SAFETY_NET: Duration = Duration::from_secs(30);
 
+    /// The safety net starts after the fakes are built: the first build of
+    /// a run can take a minute (see `vessel_testkit::within`).
     pub(super) async fn within<F: Future>(test: F) -> F::Output {
-        tokio::time::timeout(SAFETY_NET, test)
+        vessel_testkit::within(SAFETY_NET, test)
             .await
             .expect("test timed out")
     }
