@@ -58,6 +58,32 @@ async fn link(owner: &NodeClient, label: &str) -> PairingLink {
         .link
 }
 
+/// A link that claims node `id`, from a node holding another key, and that
+/// node (kept running while the link is used). On Unix it is the review's
+/// impostor, a stock node whose `node.id` holds `id`. On Windows two nodes
+/// of one id cannot run on one machine (the id names the node's pipe), so
+/// there it is another node's link rewritten to name `id`: the home
+/// refuses the claim before it dials, either way.
+async fn impostor_link(
+    relay: &Relay,
+    id: vessel_proto::NodeId,
+) -> (Fixture, vessel_node::Node, PairingLink) {
+    #[cfg(unix)]
+    {
+        let (fixture, node, owner) = stock_node(relay, "desktop-too", Some(id)).await;
+        assert_eq!(node.info().id, id);
+        let link = link(&owner, "bait").await;
+        (fixture, node, link)
+    }
+    #[cfg(not(unix))]
+    {
+        let (fixture, node, owner) = stock_node(relay, "desktop-too", None).await;
+        let mut offer = link(&owner, "bait").await.decode().unwrap();
+        offer.node = id;
+        (fixture, node, PairingLink::encode(&offer).unwrap())
+    }
+}
+
 /// A device on `home` with only `sync`, connected.
 async fn sync_device(
     relay: &Relay,
@@ -111,13 +137,8 @@ async fn a_member_device_cannot_speak_for_another_members_node() {
 
         // A stock node claiming the victim's id: refused, and the victim
         // is still the one the home lists and reaches.
-        let (_fixture, _impostor, impostor) =
-            stock_node(&relay, "desktop-too", Some(victim.id())).await;
-        let refused = someone
-            .call(GrantHome {
-                link: link(&impostor, "bait").await,
-            })
-            .await;
+        let (_fixture, _impostor, bait) = impostor_link(&relay, victim.id()).await;
+        let refused = someone.call(GrantHome { link: bait }).await;
         let (refusal, message) = code(refused);
         assert_eq!(refusal, ErrorCode::Conflict, "{message}");
         let peers = home.owner.call(ListPeers).await.unwrap();
