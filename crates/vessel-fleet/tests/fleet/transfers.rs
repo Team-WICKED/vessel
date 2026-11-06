@@ -35,6 +35,38 @@ fn incoming(store: &BlobStore, files: &[(&str, &str)]) -> Vec<Incoming> {
         .collect()
 }
 
+/// On Unix: a link to a file outside the home, a linked project directory
+/// and a FIFO, listed as if they were the session's, and an executable
+/// file; their paths (none elsewhere, where they cannot be made alike).
+#[cfg(unix)]
+fn unix_only(temp: &Path, home: &Path) -> Vec<PathBuf> {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    let outside = temp.join("outside");
+    write(&outside.join("secret"), "not for export\n");
+    symlink(outside.join("secret"), home.join("projects/-a/link.jsonl")).unwrap();
+    symlink(&outside, home.join("projects/-b")).unwrap();
+    let fifo = std::process::Command::new("mkfifo")
+        .arg(home.join("projects/-a/fifo"))
+        .status()
+        .unwrap();
+    assert!(fifo.success());
+    fs::set_permissions(
+        home.join("file-history/s/1"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    paths(&[
+        "projects/-a/link.jsonl",
+        "projects/-b/secret",
+        "projects/-a/fifo",
+    ])
+}
+
+#[cfg(not(unix))]
+fn unix_only(_temp: &Path, _home: &Path) -> Vec<PathBuf> {
+    Vec::new()
+}
+
 #[test]
 fn a_snapshot_is_fixed_when_taken_and_follows_no_link() {
     let temp = tempfile::tempdir().unwrap();
@@ -43,35 +75,16 @@ fn a_snapshot_is_fixed_when_taken_and_follows_no_link() {
     write(&home.join("projects/-a/s/sub/x.json"), "{}\n");
     write(&home.join("file-history/s/1"), "v1\n");
     let store = BlobStore::open(temp.path().join("staging")).unwrap();
-    let mut listed = paths(&[
-        "projects/-a/s.jsonl",
-        "projects/-a/s/sub/x.json",
-        "file-history/s/1",
-        "projects/-a/gone.jsonl",
-    ]);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{PermissionsExt as _, symlink};
-        let outside = temp.path().join("outside");
-        write(&outside.join("secret"), "not for export\n");
-        symlink(outside.join("secret"), home.join("projects/-a/link.jsonl")).unwrap();
-        symlink(&outside, home.join("projects/-b")).unwrap();
-        let fifo = std::process::Command::new("mkfifo")
-            .arg(home.join("projects/-a/fifo"))
-            .status()
-            .unwrap();
-        assert!(fifo.success());
-        fs::set_permissions(
-            home.join("file-history/s/1"),
-            fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
-        listed.extend(paths(&[
-            "projects/-a/link.jsonl",
-            "projects/-b/secret",
-            "projects/-a/fifo",
-        ]));
-    }
+    let listed = [
+        paths(&[
+            "projects/-a/s.jsonl",
+            "projects/-a/s/sub/x.json",
+            "file-history/s/1",
+            "projects/-a/gone.jsonl",
+        ]),
+        unix_only(temp.path(), &home),
+    ]
+    .concat();
 
     let taken = snapshot(&home, &listed, &store, Limits::PROTOCOL).unwrap();
     assert_eq!(
