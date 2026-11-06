@@ -1,9 +1,11 @@
 //! The structured-mode session actor: an ACP agent's outputs become events.
 
-use vessel_agent::{AgentOutput, AgentOutputs, AgentProcess, Disconnect};
-use vessel_proto::{AgentEvent, SessionEvent, SessionStatus};
+use tokio::sync::{mpsc, watch};
+use vessel_agent::{AgentInput, AgentOutput, AgentOutputs, AgentProcess, Disconnect};
+use vessel_proto::{AgentEvent, ProfileName, SessionEvent, SessionStatus};
 
 use crate::lifecycle::{Lifecycle, drain_deadline};
+use crate::moving::{Control, Launch};
 
 /// Owns an ACP agent process for the life of a structured session.
 ///
@@ -18,12 +20,39 @@ use crate::lifecycle::{Lifecycle, drain_deadline};
 pub(crate) struct StructuredActor {
     pub(crate) agent: AgentProcess,
     pub(crate) outputs: AgentOutputs,
+    pub(crate) outputs_open: bool,
+    /// The current agent's input, and where handles find it (`None` while
+    /// the session moves to another profile).
+    pub(crate) input: AgentInput,
+    pub(crate) route: watch::Sender<Option<AgentInput>>,
+    /// Moves to another profile, from the runtime.
+    pub(crate) control: mpsc::Receiver<Control>,
+    /// How the current agent was started.
+    pub(crate) launch: Launch,
+    /// The profile it runs with; `None` is the harness's default.
+    pub(crate) profile: Option<ProfileName>,
     pub(crate) life: Lifecycle,
     pub(crate) ready: bool,
     pub(crate) disconnect: Option<Disconnect>,
     /// The handshake or the protocol failed before anyone killed the
     /// session (a failure after a kill is the kill's doing).
     pub(crate) failed_before_kill: bool,
+    /// Where a move to another profile stands.
+    pub(crate) move_state: MoveState,
+}
+
+/// A structured session's move state (see `moving`).
+#[derive(Debug, Default)]
+pub(crate) struct MoveState {
+    /// A move is under way: the agent's end is not the session's.
+    pub(crate) active: bool,
+    /// A restarted agent replays the conversation before it is ready; the
+    /// log has it already, so it is not published again.
+    pub(crate) replaying: bool,
+    /// A turn ended (for a forced move, which waits for its cancel).
+    pub(crate) turn_over: bool,
+    /// How an agent's connection ended during the move.
+    pub(crate) disconnect: Option<Disconnect>,
 }
 
 impl StructuredActor {
@@ -33,19 +62,23 @@ impl StructuredActor {
             .status(&mut self.agent, SessionStatus::Starting)
             .await;
 
-        let mut outputs_open = true;
+        let mut control_open = true;
         let code = loop {
             tokio::select! {
                 biased;
                 step = self.life.stop.next() => self.life.apply(&mut self.agent, step),
                 code = self.agent.wait() => break code,
-                output = self.outputs.next(), if outputs_open => match output {
+                output = self.outputs.next(), if self.outputs_open => match output {
                     Some(output) => self.output(output).await,
-                    None => outputs_open = false,
+                    None => self.outputs_open = false,
+                },
+                control = self.control.recv(), if control_open => match control {
+                    Some(Control::Move(order)) => self.move_profile(order).await,
+                    None => control_open = false,
                 },
             }
         };
-        if outputs_open {
+        if self.outputs_open {
             self.drain().await;
         }
 
@@ -66,9 +99,44 @@ impl StructuredActor {
         self.life.status(&mut self.agent, status).await;
     }
 
-    async fn output(&mut self, output: AgentOutput) {
+    pub(crate) async fn output(&mut self, output: AgentOutput) {
         match output {
+            AgentOutput::Event(event) if self.move_state.replaying => {
+                // A restarted agent's replay: the log has it already. Its
+                // stderr still goes in; `Ready` ends the replay.
+                match event {
+                    AgentEvent::Ready { .. } => self.move_state.replaying = false,
+                    AgentEvent::HarnessLog { .. } => {
+                        self.life
+                            .publish(&mut self.agent, SessionEvent::Agent { event })
+                            .await;
+                    }
+                    AgentEvent::TurnStarted { .. }
+                    | AgentEvent::UserMessageChunk { .. }
+                    | AgentEvent::MessageChunk { .. }
+                    | AgentEvent::ThoughtChunk { .. }
+                    | AgentEvent::ToolCall(_)
+                    | AgentEvent::ToolCallUpdate(_)
+                    | AgentEvent::Plan { .. }
+                    | AgentEvent::PermissionRequested(_)
+                    | AgentEvent::PermissionResolved { .. }
+                    | AgentEvent::TurnEnded { .. }
+                    | AgentEvent::TurnFailed { .. } => {}
+                }
+            }
+            AgentOutput::Disconnected(disconnect) if self.move_state.active => {
+                // The old agent being stopped, or the new one failing to
+                // start: the move decides what follows, not the session.
+                tracing::debug!(%disconnect, "agent connection ended during a move");
+                self.move_state.disconnect = Some(disconnect);
+            }
             AgentOutput::Event(event) => {
+                if matches!(
+                    event,
+                    AgentEvent::TurnEnded { .. } | AgentEvent::TurnFailed { .. }
+                ) {
+                    self.move_state.turn_over = true;
+                }
                 let became_ready = !self.ready && matches!(event, AgentEvent::Ready { .. });
                 self.life
                     .publish(&mut self.agent, SessionEvent::Agent { event })

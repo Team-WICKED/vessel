@@ -23,6 +23,9 @@ pub(crate) enum Command {
         outcome: PermissionOutcome,
         reply: Reply,
     },
+    TurnRunning {
+        reply: oneshot::Sender<bool>,
+    },
 }
 
 /// Sends prompts, cancellations and permission answers to an agent.
@@ -75,6 +78,26 @@ impl AgentInput {
     ) -> Result<(), InputError> {
         self.call(|reply| Command::Answer { id, outcome, reply })
             .await
+    }
+
+    /// Whether a turn is running, as the driver sees it once every command
+    /// sent before this one has been applied (a prompt that was already on
+    /// its way counts). For moving a session to another profile, which must
+    /// not stop the agent mid-turn.
+    ///
+    /// # Errors
+    /// [`InputError::Closed`] after the connection ended.
+    pub async fn turn_running(&self) -> Result<bool, InputError> {
+        let (reply, result) = oneshot::channel();
+        if self
+            .commands
+            .send(Command::TurnRunning { reply })
+            .await
+            .is_err()
+        {
+            return Err(InputError::Closed);
+        }
+        result.await.map_err(|_closed| InputError::Closed)
     }
 
     async fn call(&self, command: impl FnOnce(Reply) -> Command) -> Result<(), InputError> {

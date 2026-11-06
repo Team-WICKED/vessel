@@ -56,4 +56,6 @@ pub use handshake::{AgentSetup, DEFAULT_HANDSHAKE_TIMEOUT};
 pub use input::AgentInput;
 pub use output::{AgentOutput, AgentOutputs};
 pub use process::AgentProcess;
-pub use vessel_proc::Signal;
+/// The command [`AgentProcess::spawn`] runs, and the signals it takes;
+/// re-exported so callers need no edge to `vessel-proc`.
+pub use vessel_proc::{CommandSpec, Signal};

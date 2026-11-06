@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use chrono::Utc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::Instrument as _;
@@ -22,10 +22,11 @@ use crate::config::RuntimeConfig;
 use crate::error::{RemoveError, SessionError};
 use crate::handle::{Input, SessionHandle, Shared};
 use crate::lifecycle::Lifecycle;
+use crate::moving::{Control, Launch, MoveError, MoveOrder, ProfileMove};
 use crate::publish::Publisher;
 use crate::ring::Ring;
 use crate::stop::Stopper;
-use crate::structured::StructuredActor;
+use crate::structured::{MoveState, StructuredActor};
 use crate::terminal::TerminalActor;
 
 /// Runs every session of one node.
@@ -243,7 +244,7 @@ impl SessionRuntime {
             return Err(SessionError::ShuttingDown);
         }
 
-        let parts = self.parts(spec, created_by, Input::Terminal(pty.input()));
+        let parts = self.parts(spec, created_by, Input::Terminal(pty.input()), None);
         let actor = TerminalActor {
             pty,
             output,
@@ -279,39 +280,131 @@ impl SessionRuntime {
         })
         .await
         .map_err(SessionError::Internal)??;
+        let setup = AgentSetup {
+            cwd,
+            model: start.model,
+            resume: start.resume,
+            mcp_servers: start.mcp_servers,
+            handshake_timeout: self.config.agent_handshake_timeout,
+        };
         // `fork`/`exec` on this thread, as `tokio::process` does.
-        let (agent, input, outputs) = AgentProcess::spawn(
-            &command,
-            AgentSetup {
-                cwd,
-                model: start.model,
-                resume: start.resume,
-                mcp_servers: start.mcp_servers,
-                handshake_timeout: self.config.agent_handshake_timeout,
-            },
-        )
-        .map_err(SessionError::StartAgent)?;
+        let (agent, input, outputs) =
+            AgentProcess::spawn(&command, setup.clone()).map_err(SessionError::StartAgent)?;
         if self.shutdown.is_cancelled() {
             // Dropping the agent kills its process group.
             drop(agent);
             return Err(SessionError::ShuttingDown);
         }
 
-        let parts = self.parts(spec, created_by, Input::Structured(input));
+        let profile = spec.profile.clone();
+        let (route, routed) = watch::channel(Some(input.clone()));
+        // One move at a time; a second waits for the first's answer.
+        let (control, orders) = mpsc::channel(1);
+        let parts = self.parts(spec, created_by, Input::Structured(routed), Some(control));
         let actor = StructuredActor {
             agent,
             outputs,
+            outputs_open: true,
+            input,
+            route,
+            control: orders,
+            launch: Launch { command, setup },
+            profile,
             life: parts.life,
             ready: false,
             disconnect: None,
             failed_before_kill: false,
+            move_state: MoveState::default(),
         };
         Ok(self.start(parts.shared, actor.run(), parts.durable))
     }
 
+    /// Move a live structured session to another profile (ADR 0011): link
+    /// its files into the target home, restart its agent there with
+    /// `session/load`, and publish `ProfileChanged`. The session keeps its
+    /// id, its log and its subscribers. See `moving` for the order and what
+    /// a failure leaves.
+    ///
+    /// # Errors
+    /// [`SessionError::NotFound`], [`SessionError::Ended`],
+    /// [`SessionError::Launch`] (the profile is for another harness, or the
+    /// adapter is missing), and [`SessionError::Move`] for the rest.
+    pub async fn move_profile(
+        &self,
+        id: SessionId,
+        request: ProfileMove,
+    ) -> Result<SessionInfo, SessionError> {
+        let handle = self.get(id).ok_or(SessionError::NotFound(id))?;
+        let info = handle.info();
+        if !info.status.is_live() {
+            return Err(SessionError::Ended);
+        }
+        let SessionMode::Structured { model, .. } = &info.spec.mode else {
+            return Err(MoveError::Terminal.into());
+        };
+        let model = model.clone();
+        let harness_session = info.harness_session.clone().ok_or(MoveError::NotReady)?;
+        let control = handle.0.control.clone().ok_or(MoveError::Terminal)?;
+        let ProfileMove {
+            profile,
+            from_home,
+            to_home,
+            mcp_servers,
+            force,
+        } = request;
+        let to = (!profile.is_default()).then(|| profile.name().clone());
+        let spec = info.spec.with_profile(profile.name().clone());
+        let lookup = self.config.harness_lookup.clone();
+        let session = harness_session.clone();
+        let from = from_home.clone();
+        let (command, cwd, files) = tokio::task::spawn_blocking(move || {
+            let none = ResolvedMcpServers::new();
+            let command = vessel_harness::launch(&lookup, &spec, &profile, &none, None)?.command;
+            let cwd = command
+                .cwd
+                .clone()
+                .or_else(|| std::env::current_dir().ok())
+                .ok_or(SessionError::NoWorkingDirectory)?;
+            let files = vessel_harness::session_files(spec.harness, &from, &cwd, &session)
+                .map_err(MoveError::Files)?;
+            Ok::<_, SessionError>((command, cwd, files))
+        })
+        .await
+        .map_err(SessionError::Internal)??;
+        let setup = AgentSetup {
+            cwd,
+            model,
+            resume: Some(harness_session),
+            mcp_servers,
+            handshake_timeout: self.config.agent_handshake_timeout,
+        };
+        let (reply, answer) = oneshot::channel();
+        let order = MoveOrder {
+            command,
+            setup,
+            to,
+            files,
+            from_home,
+            to_home,
+            force,
+            reply,
+        };
+        if control.send(Control::Move(order)).await.is_err() {
+            return Err(SessionError::Ended);
+        }
+        answer.await.map_err(|_ended| SessionError::Ended)??;
+        Ok(handle.info())
+    }
+
     /// Everything a new session needs besides its process.
-    fn parts(&self, spec: SessionSpec, created_by: Creator, input: Input) -> Parts {
-        let (info, kill, shared) = self.shared(spec, created_by, input);
+    fn parts(
+        &self,
+        spec: SessionSpec,
+        created_by: Creator,
+        input: Input,
+        control: Option<mpsc::Sender<Control>>,
+    ) -> Parts {
+        let (info, kill, shared) = self.shared(spec, created_by, input, control);
         let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         Parts {
             life: Lifecycle {
@@ -329,6 +422,7 @@ impl SessionRuntime {
         spec: SessionSpec,
         created_by: Creator,
         input: Input,
+        control: Option<mpsc::Sender<Control>>,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
         let id = SessionId::random();
         let (info, info_receiver) =
@@ -340,6 +434,7 @@ impl SessionRuntime {
             ring: Mutex::new(Ring::new(self.config.ring_capacity)),
             input,
             kill: kill.clone(),
+            control,
         });
         (info, kill, shared)
     }

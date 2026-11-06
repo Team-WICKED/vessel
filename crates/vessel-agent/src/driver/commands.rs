@@ -29,6 +29,10 @@ impl Driver {
                 }
                 answer(reply, result);
             }
+            Command::TurnRunning { reply } => {
+                // The asker may have given up; nothing to do then.
+                let _gone = reply.send(self.turn);
+            }
         }
     }
 

@@ -2,13 +2,14 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use vessel_agent::AgentInput;
 use vessel_proto::{EventSeq, SessionId, SessionInfo, SessionInput, TerminalInput};
 use vessel_pty::{PtyInput, WindowSize};
 
 use crate::error::{InputKind, ModeKind, SessionError};
+use crate::moving::Control;
 use crate::ring::{Follow, FollowError, Ring};
 
 /// State shared between a session's actor and its handles.
@@ -28,6 +29,8 @@ pub(crate) struct Shared {
     /// Cancelled to stop the session (a child of the runtime's shutdown
     /// token).
     pub(crate) kill: CancellationToken,
+    /// Orders for the actor (structured sessions: moves).
+    pub(crate) control: Option<mpsc::Sender<Control>>,
 }
 
 impl Shared {
@@ -48,7 +51,9 @@ impl Shared {
 #[derive(Debug)]
 pub(crate) enum Input {
     Terminal(PtyInput),
-    Structured(AgentInput),
+    /// The current agent's input; `None` while the session moves to another
+    /// profile and its agent is replaced.
+    Structured(watch::Receiver<Option<AgentInput>>),
 }
 
 impl Input {
@@ -58,6 +63,11 @@ impl Input {
             Self::Structured(_) => ModeKind::Structured,
         }
     }
+}
+
+/// The agent input goes to now; refused while the session moves.
+fn current(route: &watch::Receiver<Option<AgentInput>>) -> Result<AgentInput, SessionError> {
+    route.borrow().clone().ok_or(SessionError::Moving)
 }
 
 /// A handle to one session. Cheap to clone; every clone refers to the same
@@ -118,12 +128,14 @@ impl SessionHandle {
                 };
                 sent.map_err(|vessel_pty::PtyClosed| SessionError::Ended)
             }
-            (Input::Structured(agent), SessionInput::Prompt { content }) => {
-                Ok(agent.prompt(content).await?)
+            (Input::Structured(route), SessionInput::Prompt { content }) => {
+                Ok(current(route)?.prompt(content).await?)
             }
-            (Input::Structured(agent), SessionInput::CancelTurn) => Ok(agent.cancel_turn().await?),
-            (Input::Structured(agent), SessionInput::AnswerPermission { id, outcome }) => {
-                Ok(agent.answer(id, outcome).await?)
+            (Input::Structured(route), SessionInput::CancelTurn) => {
+                Ok(current(route)?.cancel_turn().await?)
+            }
+            (Input::Structured(route), SessionInput::AnswerPermission { id, outcome }) => {
+                Ok(current(route)?.answer(id, outcome).await?)
             }
             (
                 input_path @ Input::Terminal(_),
