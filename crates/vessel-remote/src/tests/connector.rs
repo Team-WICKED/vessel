@@ -7,7 +7,6 @@ use std::time::Duration;
 use vessel_client::{Connector as _, NodeClient};
 use vessel_proto::{ClientInfo, StopWhen};
 use vessel_store::{DataDir, NodeLock};
-use vessel_testkit::Fake;
 
 use super::*;
 use crate::connector::{SshConnectError, SshConnector};
@@ -37,9 +36,7 @@ impl Machine {
     }
 
     fn ssh(&self) -> Ssh {
-        Ssh::new("gpu-box".parse().unwrap())
-            .with_program(Fake::Ssh.path().unwrap())
-            .with_env("FAKE_SSH_HOME", self.remote.home.path())
+        self.remote.ssh()
     }
 
     fn data_dir(&self) -> DataDir {
