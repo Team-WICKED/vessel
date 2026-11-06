@@ -552,6 +552,11 @@ mod tests {
         Some(Path::new("/home/u"))
     }
 
+    /// `name` under [`home`], as `~/name` expands: the system's separator.
+    fn under_home(name: &str) -> String {
+        format!("/home/u{}{name}", std::path::MAIN_SEPARATOR)
+    }
+
     fn var(name: &str) -> EnvName {
         name.parse().unwrap()
     }
@@ -604,12 +609,17 @@ mod tests {
         assert_eq!(alt.label(), Some("Claude (Alt)"));
         assert_eq!(
             alt.get(&var("CLAUDE_CONFIG_DIR")),
-            Some("/home/u/.claude-alt")
+            Some(under_home(".claude-alt").as_str())
         );
         assert!(alt.unsets(&var("ANTHROPIC_API_KEY")));
         assert_eq!(
             alt.args(),
-            ["--model", "opus", "--settings", "/home/u/s.json"]
+            [
+                "--model",
+                "opus",
+                "--settings",
+                under_home("s.json").as_str()
+            ]
         );
         assert!(!alt.is_default());
         let work = profiles.get(&"codex-work".parse().unwrap()).unwrap();
