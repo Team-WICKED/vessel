@@ -37,6 +37,18 @@ fn profiles(data: &Path) {
     std::fs::write(DataDir::new(data).profiles_path(), text).unwrap();
 }
 
+/// Where an import into `home` for directory `cwd` puts Claude Code's
+/// project: named after the directory's resolved form, as Claude Code
+/// names it (macOS's temporary directories are behind `/var` ->
+/// `/private/var`); Windows keeps the given form.
+fn project_in(home: &Path, cwd: &Path) -> PathBuf {
+    #[cfg(unix)]
+    let cwd = cwd.canonicalize().unwrap();
+    #[cfg(not(unix))]
+    let cwd = cwd.to_owned();
+    claude_project(home, &cwd).unwrap()
+}
+
 async fn owner(fixture: &Fixture) -> NodeClient {
     let token = DataDir::new(fixture.data())
         .read_token()
@@ -143,7 +155,7 @@ async fn sessions_and_memory_are_copied_and_moved_between_profiles() {
         );
         assert!(moved.stdout.contains("stopped here"), "{}", moved.stdout);
         until_status(&owner, id, |status| !status.is_live()).await;
-        let renamed = claude_project(&homes.join("work"), &other).unwrap();
+        let renamed = project_in(&homes.join("work"), &other);
         assert!(renamed.join(format!("{session}.jsonl")).is_file());
 
         // Memory: one project's, into the other profile.
