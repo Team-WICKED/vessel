@@ -11,6 +11,8 @@ use crate::support::{Home, Member, read, skill_md, write};
 #[test]
 fn a_member_gets_copies_and_a_second_run_changes_nothing() {
     let mut home = Home::new();
+    // A harness's own dot directory in the source is never bundled.
+    write(&home.codex().join("skills/.own/SKILL.md"), &skill_md("own"));
     let bundled = home.publish();
     assert_eq!(bundled.manifest.generation.get(), 1);
     assert!(bundled.problems.is_empty(), "{:?}", bundled.problems);

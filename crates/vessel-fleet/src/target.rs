@@ -6,51 +6,104 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use vessel_proto::{BlobHash, BundlePath};
+use vessel_proto::{BlobHash, BundlePath, HarnessKind};
 
 use crate::files;
 
 /// One harness home to write the bundle into: its root, and the names the
 /// harness gives the instructions file and the skills directory under it
 /// (`CLAUDE.md` and `skills` for Claude Code, `AGENTS.md` and `skills` for
-/// Codex). The names are relative paths without `..`.
+/// Codex), when it has them. The names are relative paths without `..`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     /// The harness home (`~/.claude`, a profile's `CLAUDE_CONFIG_DIR`).
     pub root: PathBuf,
     /// The instructions file, relative to the root.
-    pub instructions: PathBuf,
+    pub instructions: Option<PathBuf>,
     /// The skills directory, relative to the root.
-    pub skills: PathBuf,
+    pub skills: Option<PathBuf>,
+}
+
+/// Where a bundle file goes in a target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Place {
+    /// Here.
+    At(PathBuf),
+    /// The harness keeps no such file (Gemini CLI has no skills
+    /// directory): nothing to write, nothing to report.
+    Unused,
+    /// The target's names are not plain relative paths, or the bundle path
+    /// is neither the instructions nor a skill.
+    Invalid,
 }
 
 impl Target {
-    /// Where bundle file `path` goes: the instructions file, or a file
-    /// under the skills directory. `None` for anything else, and for a
-    /// target whose names are not plain relative paths.
+    /// The target for `harness` with its home at `root`, from the
+    /// harness's layout (`vessel_harness::layout`); `None` for a harness
+    /// that keeps neither instructions nor skills in its home.
+    ///
+    /// `OpenCode` also reads `~/.claude/CLAUDE.md` and `~/.claude/skills`
+    /// besides its own home, so on a node whose default Claude Code home
+    /// is a target too, `OpenCode` sees the fleet's files twice; the node
+    /// leaves `OpenCode` out then.
     #[must_use]
-    pub fn place(&self, path: &BundlePath) -> Option<PathBuf> {
-        if !plain(&self.instructions) || !plain(&self.skills) {
+    pub fn for_harness(harness: HarnessKind, root: PathBuf) -> Option<Self> {
+        let layout = vessel_harness::layout(harness);
+        if layout.instructions.is_none() && layout.skills.is_none() {
             return None;
         }
+        Some(Self {
+            root,
+            instructions: layout.instructions.map(PathBuf::from),
+            skills: layout.skills.map(PathBuf::from),
+        })
+    }
+
+    /// Where bundle file `path` goes: the instructions file, or a file
+    /// under the skills directory. `None` when the harness keeps no such
+    /// file, or the path or the target's names are unusable.
+    #[must_use]
+    pub fn place(&self, path: &BundlePath) -> Option<PathBuf> {
+        match self.placement(path) {
+            Place::At(place) => Some(place),
+            Place::Unused | Place::Invalid => None,
+        }
+    }
+
+    pub(crate) fn placement(&self, path: &BundlePath) -> Place {
+        let names = [&self.instructions, &self.skills];
+        if names
+            .iter()
+            .any(|name| name.as_ref().is_some_and(|name| !plain(name)))
+        {
+            return Place::Invalid;
+        }
         if path.as_str() == crate::INSTRUCTIONS {
-            return Some(self.root.join(&self.instructions));
+            return self
+                .instructions
+                .as_ref()
+                .map_or(Place::Unused, |name| Place::At(self.root.join(name)));
         }
         let mut segments = path.segments();
         if segments.next() != Some(crate::SKILLS) {
-            return None;
+            return Place::Invalid;
         }
-        let mut place = self.root.join(&self.skills);
+        let Some(skills) = &self.skills else {
+            return Place::Unused;
+        };
+        let mut place = self.root.join(skills);
         for segment in segments {
             place.push(segment);
         }
-        Some(place)
+        Place::At(place)
     }
 
     /// The directory removals may empty, never remove: the skills
-    /// directory.
+    /// directory, or the root.
     pub(crate) fn skills_dir(&self) -> PathBuf {
-        self.root.join(&self.skills)
+        self.skills
+            .as_ref()
+            .map_or_else(|| self.root.clone(), |skills| self.root.join(skills))
     }
 }
 
@@ -182,11 +235,8 @@ mod tests {
 
     #[test]
     fn bundle_paths_land_under_the_harness_names() {
-        let target = Target {
-            root: PathBuf::from("/home/u/.claude"),
-            instructions: PathBuf::from("CLAUDE.md"),
-            skills: PathBuf::from("skills"),
-        };
+        let target =
+            Target::for_harness(HarnessKind::ClaudeCode, PathBuf::from("/home/u/.claude")).unwrap();
         let path = |text: &str| BundlePath::from_str(text).unwrap();
         assert_eq!(
             target.place(&path("instructions.md")),
@@ -198,9 +248,30 @@ mod tests {
         );
         assert_eq!(target.place(&path("other/file")), None);
         let escaping = Target {
-            skills: PathBuf::from("../elsewhere"),
+            skills: Some(PathBuf::from("../elsewhere")),
             ..target
         };
-        assert_eq!(escaping.place(&path("skills/review/SKILL.md")), None);
+        assert_eq!(
+            escaping.placement(&path("skills/review/SKILL.md")),
+            Place::Invalid
+        );
+        let codex =
+            Target::for_harness(HarnessKind::Codex, PathBuf::from("/home/u/.codex")).unwrap();
+        assert_eq!(
+            codex.place(&path("instructions.md")),
+            Some(PathBuf::from("/home/u/.codex/AGENTS.md"))
+        );
+    }
+
+    #[test]
+    fn a_harness_without_skills_takes_only_the_instructions() {
+        let gemini =
+            Target::for_harness(HarnessKind::Gemini, PathBuf::from("/home/u/.gemini")).unwrap();
+        let skill: BundlePath = "skills/review/SKILL.md".parse().unwrap();
+        assert_eq!(gemini.placement(&skill), Place::Unused);
+        assert_eq!(
+            gemini.place(&"instructions.md".parse().unwrap()),
+            Some(PathBuf::from("/home/u/.gemini/GEMINI.md"))
+        );
     }
 }

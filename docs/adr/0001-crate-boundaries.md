@@ -39,7 +39,7 @@ vessel-client   -> proto, rpc, secure, relay
 vessel-remote   -> proto, rpc, client      (milestone 2)
 vessel-secure   -> proto                   (milestone 3)
 vessel-relay    -> proto, secure           (milestone 3)
-vessel-fleet    -> proto (, harness)       (milestone 4)
+vessel-fleet    -> proto, harness          (milestone 4)
 vessel-cli      -> proto, client, node, remote
 vessel-testkit  (fake harness binaries for tests; dev-dependency only)
 ```
@@ -70,10 +70,9 @@ proxy built on `tokio-tungstenite`, with no edge to Vessel crates.
 Milestone 4 (2026-11-06, Track F) adds `vessel-fleet`: fleet bundles
 (ADR 0012), the materialiser that writes them into harness homes, and MCP
 secret resolution. It moves no data between machines (the node does); its
-one edge so far is `-> proto`, for the manifest and MCP types. The plan's
-`-> harness` edge comes with the per-harness layout (instruction file and
-skill directory names), which `vessel-harness` is gaining; until then the
-node describes each target itself.
+edges are `-> proto`, for the manifest and MCP types, and `-> harness`,
+for each harness's home layout (`vessel_harness::layout`: the instruction
+file and skills directory names a target is built from).
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.
