@@ -14,6 +14,7 @@ use vessel_harness::fakes::{Role, install};
 use vessel_proto::HarnessKind;
 use vessel_testkit::Fake;
 
+use crate::fleet::{RelayedHome, init_home};
 use crate::support::within;
 
 const VESSEL: &str = env!("CARGO_BIN_EXE_vessel");
@@ -280,13 +281,37 @@ async fn nothing_is_installed_or_written_without_consent() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn join_refuses_until_fleet_sync_exists() {
+async fn join_pairs_with_the_home_once_and_then_is_already_done() {
     within(async {
+        let homes = tempfile::tempdir().unwrap();
+        let home_claude = homes.path().join("home-claude");
+        let home = RelayedHome::start(&home_claude).await;
+        init_home(&home.fixture, &homes.path().join("sources"), &home_claude).await;
+        let invited = home
+            .fixture
+            .vessel(&["fleet", "invite", "--label", "laptop"], &[])
+            .await;
+        assert!(invited.ok, "{}", invited.stderr);
+        let link = format!("{}\n", invited.stdout.trim());
+
         let machine = Machine::new();
-        let (ok, stdout, stderr) = machine.init(&["--join"], b"vessel://pair#e30\n").await;
-        assert!(!ok, "{stdout}");
-        assert!(stderr.contains("needs fleet sync"), "{stderr}");
-        assert!(!machine.data_dir().exists(), "--join changed something");
+        // Piped, the home cannot be confirmed at a terminal: --yes is needed.
+        let (ok, _, stderr) = machine.init(&["--join"], link.as_bytes()).await;
+        assert!(!ok);
+        assert!(stderr.contains("--yes"), "{stderr}");
+
+        let (ok, stdout, stderr) = machine.init(&["--join", "--yes"], link.as_bytes()).await;
+        assert!(ok, "{stdout}\n{stderr}");
+        assert_eq!(outcome(&stdout, "fleet"), "done");
+        let home_id = home.fixture.node().info().id.to_string();
+        assert!(stdout.contains(&home_id), "{stdout}");
+
+        // A member has nothing to join: no link is read.
+        let (ok, again, stderr) = machine.init(&["--join", "--yes"], b"").await;
+        assert!(ok, "{again}\n{stderr}");
+        assert_eq!(outcome(&again, "fleet"), "already done");
+        assert!(again.contains(&format!("a member of {home_id}")), "{again}");
+        home.stop().await;
     })
     .await;
 }

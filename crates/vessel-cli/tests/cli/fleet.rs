@@ -19,14 +19,14 @@ fn write(path: &Path, text: &str) {
 
 /// A node linked to an in-process relay, writing fleet files into
 /// `claude` only.
-struct RelayedHome {
-    fixture: Fixture,
+pub(crate) struct RelayedHome {
+    pub(crate) fixture: Fixture,
     shutdown: CancellationToken,
     serving: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 
 impl RelayedHome {
-    async fn start(claude: &Path) -> Self {
+    pub(crate) async fn start(claude: &Path) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let relay: RouteUrl = format!("ws://{}", listener.local_addr().unwrap())
             .parse()
@@ -63,7 +63,7 @@ impl RelayedHome {
         }
     }
 
-    async fn stop(self) {
+    pub(crate) async fn stop(self) {
         self.fixture.stop().await;
         self.shutdown.cancel();
         self.serving.await.unwrap().unwrap();
@@ -155,7 +155,7 @@ async fn a_home_invites_a_node_that_joins_from_a_piped_link() {
 
 /// `vessel fleet init` makes the running node of `fixture` the home of
 /// `sources`; `fleet status` then shows it, once it applied to `claude`.
-async fn init_home(fixture: &Fixture, sources: &Path, home_claude: &Path) {
+pub(crate) async fn init_home(fixture: &Fixture, sources: &Path, home_claude: &Path) {
     write(&sources.join("AGENTS.md"), "fleet instructions\n");
     std::fs::create_dir_all(sources.join("skills")).unwrap();
     let empty = vessel_in(fixture.data(), &["fleet", "init"], &[]).await;

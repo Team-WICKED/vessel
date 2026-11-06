@@ -347,8 +347,11 @@ It is idempotent: running it again fills gaps and changes nothing else.
 
 ## As built (`vessel init`, F5, 2026-11-06)
 
-- Steps 1 to 3 and 5 are built; step 4 (`--join`) refuses, changing
-  nothing, until fleet sync (F2).
+- All five steps are built. `--join` pairs through `vessel fleet join`'s
+  path (F2): the link from standard input, the home shown and confirmed;
+  a node that is a member or a home reads no link. Taking the fleet's
+  relay settings is left to the member's node, which reads the home's
+  routes from its membership.
 - Consent: installs run only after a yes to each (or `--install --yes`;
   `--yes` alone never installs); profiles are written after a yes (or
   `--yes`); `--service` is itself the request. Logins are only checked

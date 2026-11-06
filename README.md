@@ -78,6 +78,7 @@ Not yet: secrets for fleet MCP servers, model routing, the LSP bridge. See
 cargo build --release
 ./target/release/vessel init                # node, harnesses, profiles, logins; asks before changing anything
 ./target/release/vessel init --service      # and run the node as a per-user service (Linux, macOS)
+./target/release/vessel init --join --yes < link.txt   # and join a fleet with the link `vessel fleet invite` printed
 ./target/release/vessel node start          # or run it in the foreground (or ./target/release/vesseld)
 # in another terminal, on the same machine (the token is read from ~/.vessel):
 ./target/release/vessel status
