@@ -19,7 +19,9 @@
 //!   `memory`; no symbolic link is followed on either side, so nothing
 //!   outside the two homes is read or written; and an existing different
 //!   file in the target is a conflict found before anything is linked, so a
-//!   failed move changes nothing.
+//!   failed move changes nothing. A failure while linking (another file
+//!   system, a full disk) takes back the links and directories already
+//!   made, for the same reason.
 //! - Windows: hard links work on NTFS; telling "already linked" from "a
 //!   different file" needs a file id that `std` exposes only on Unix, so on
 //!   Windows any existing target file is reported as a conflict.
@@ -76,7 +78,7 @@ pub enum SessionFilesError {
     #[error("`{id}` is not a session id that can name a file")]
     InvalidId {
         /// The id as given.
-        id: String,
+        id: HarnessSessionId,
     },
     /// The working directory cannot be turned into the harness's project
     /// name (not absolute, or not Unicode).
@@ -91,9 +93,20 @@ pub enum SessionFilesError {
         /// Which harness.
         harness: HarnessKind,
         /// The session.
-        id: String,
+        id: HarnessSessionId,
         /// Where it was looked for.
         home: PathBuf,
+    },
+    /// More than one transcript claims the session; Vessel does not guess
+    /// which is the conversation.
+    #[error("{count} {harness} transcripts claim session {id}")]
+    Ambiguous {
+        /// Which harness.
+        harness: HarnessKind,
+        /// The session.
+        id: HarnessSessionId,
+        /// How many.
+        count: usize,
     },
     /// Reading the home failed.
     #[error("cannot read {}", path.display())]
@@ -120,13 +133,12 @@ pub fn session_files(
     let Some(find) = descriptor(harness).sessions else {
         return Err(SessionFilesError::Unsupported { harness });
     };
-    let id = id.as_str();
-    if !is_file_name(id) {
-        return Err(SessionFilesError::InvalidId { id: id.to_owned() });
+    if !is_file_name(id.as_str()) {
+        return Err(SessionFilesError::InvalidId { id: id.clone() });
     }
     find(home, cwd, id)?.ok_or_else(|| SessionFilesError::NotFound {
         harness,
-        id: id.to_owned(),
+        id: id.clone(),
         home: home.to_owned(),
     })
 }
@@ -243,15 +255,54 @@ pub fn link_session(files: &SessionFiles, from: &Path, to: &Path) -> Result<Link
             }
         }
     }
+    let mut made = Made::default();
     for relative in fresh {
-        if let Some(parent) = relative.parent() {
-            create_dirs(to, parent)?;
+        if let Err(error) = link_one(from, to, relative, &mut made) {
+            made.undo();
+            return Err(error);
         }
-        let target = to.join(relative);
-        fs::hard_link(from.join(relative), &target).map_err(io_error(&target))?;
         report.linked = report.linked.saturating_add(1);
     }
     Ok(report)
+}
+
+/// Link one file, creating its directories; records what it made.
+fn link_one(from: &Path, to: &Path, relative: &Path, made: &mut Made) -> Result<(), LinkError> {
+    if let Some(parent) = relative.parent() {
+        create_dirs(to, parent, &mut made.dirs)?;
+    }
+    let target = to.join(relative);
+    fs::hard_link(from.join(relative), &target).map_err(io_error(&target))?;
+    made.links.push(target);
+    Ok(())
+}
+
+/// What a link run has made in the target home so far, so a failure partway
+/// (another file system, a full disk, a refused directory) can take it back
+/// and leave the target as it was.
+#[derive(Default)]
+struct Made {
+    links: Vec<PathBuf>,
+    /// In the order they were made, parents first.
+    dirs: Vec<PathBuf>,
+}
+
+impl Made {
+    /// Remove the links, then the directories, newest first. Best effort:
+    /// what cannot be removed is logged, and the first error is the one
+    /// the caller reports.
+    fn undo(self) {
+        for link in self.links.iter().rev() {
+            if let Err(error) = fs::remove_file(link) {
+                tracing::warn!(path = %link.display(), %error, "could not take back a link");
+            }
+        }
+        for dir in self.dirs.iter().rev() {
+            if let Err(error) = fs::remove_dir(dir) {
+                tracing::warn!(path = %dir.display(), %error, "could not take back a directory");
+            }
+        }
+    }
 }
 
 /// A plain relative path: no root, no `..`, no `.`, and no `memory`.
@@ -264,7 +315,7 @@ fn check_relative(relative: &Path) -> Result<(), LinkError> {
     }
     for component in relative.components() {
         match component {
-            Component::Normal(name) if name != "memory" => {}
+            Component::Normal(name) if !is_memory(name) => {}
             Component::Normal(_)
             | Component::Prefix(_)
             | Component::RootDir
@@ -273,6 +324,14 @@ fn check_relative(relative: &Path) -> Result<(), LinkError> {
         }
     }
     Ok(())
+}
+
+/// Whether a path component is a `memory` directory's name, ignoring ASCII
+/// case: on a case-insensitive file system (macOS, Windows) `Memory` is the
+/// same directory, and on others nothing Vessel links is named so.
+fn is_memory(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case("memory"))
 }
 
 /// No component of `home/relative` below `home` is a symbolic link.
@@ -306,7 +365,7 @@ fn collect(
         let path = home.join(&current);
         let metadata = fs::symlink_metadata(&path).map_err(io_error(&path))?;
         let kind = metadata.file_type();
-        if kind.is_symlink() || (kind.is_dir() && current.file_name() == Some("memory".as_ref())) {
+        if kind.is_symlink() || (kind.is_dir() && current.file_name().is_some_and(is_memory)) {
             skipped.push(current);
         } else if kind.is_dir() {
             for child in fs::read_dir(&path).map_err(io_error(&path))? {
@@ -323,8 +382,8 @@ fn collect(
 }
 
 /// Create `home/relative` and its missing parents, refusing to go through
-/// a symbolic link.
-fn create_dirs(home: &Path, relative: &Path) -> Result<(), LinkError> {
+/// a symbolic link; each directory made is added to `made`.
+fn create_dirs(home: &Path, relative: &Path, made: &mut Vec<PathBuf>) -> Result<(), LinkError> {
     let mut path = home.to_owned();
     for component in relative.components() {
         path.push(component);
@@ -335,6 +394,7 @@ fn create_dirs(home: &Path, relative: &Path) -> Result<(), LinkError> {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 private_dir(&path).map_err(io_error(&path))?;
+                made.push(path.clone());
             }
             Err(source) => return Err(LinkError::Io { path, source }),
         }

@@ -63,11 +63,13 @@ mod sessions;
 pub use discover::discover;
 pub use error::HarnessError;
 pub use home::{home, login_check};
-pub use launch::{Launch, launch, launch_in};
+pub use launch::{Launch, launch};
 pub use layout::{HarnessLayout, layout};
 pub use lookup::Lookup;
-pub use mcp::{McpError, McpFile, WrittenMcpFile};
-pub use profile::{Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles};
+pub use mcp::{EncodeProblem, McpError, McpFile, WrittenMcpFile};
+pub use profile::{
+    Position, Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles, same_variable,
+};
 pub use sessions::{
     LinkError, Linked, SessionFiles, SessionFilesError, link_session, session_files,
 };

@@ -121,7 +121,15 @@ async fn a_version_1_database_gains_the_devices_table() {
     store.close().await;
     drop(store);
     let connection = rusqlite::Connection::open(dir.database_path()).unwrap();
-    connection.execute_batch("DROP TABLE devices").unwrap();
+    // Back to schema 1: without the devices table (2) and the sessions'
+    // profile and creator columns (3).
+    connection
+        .execute_batch(
+            "DROP TABLE devices;
+             ALTER TABLE sessions DROP COLUMN profile;
+             ALTER TABLE sessions DROP COLUMN created_by;",
+        )
+        .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     drop(connection);
 

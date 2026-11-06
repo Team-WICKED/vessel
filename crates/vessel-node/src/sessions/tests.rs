@@ -12,8 +12,8 @@ use vessel_proto::{
     HarnessKind, SessionId, SessionInput, SessionMode, SessionSpec, SessionStatus, TerminalSize,
 };
 use vessel_session::{
-    DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY, RuntimeConfig,
-    SessionRuntime,
+    DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY, LaunchOptions,
+    RuntimeConfig, SessionRuntime,
 };
 use vessel_store::{DataDir, Store, StoreConfig};
 use vessel_testkit::Fake;
@@ -127,7 +127,10 @@ async fn a_session_the_store_cannot_record_is_killed_and_forgotten() {
     let fixture = Fixture::new().await;
     // Writes fail from here on; reads keep working.
     fixture.store.close().await;
-    let refused = fixture.sessions.create(fixture.spec()).await;
+    let refused = fixture
+        .sessions
+        .create(fixture.spec(), LaunchOptions::default())
+        .await;
     assert!(
         matches!(refused, Err(ServiceError::Store(_))),
         "{refused:?}"
@@ -147,7 +150,12 @@ async fn a_session_the_store_cannot_record_is_killed_and_forgotten() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_finished_session_is_handed_over_to_the_store() {
     let fixture = Fixture::new().await;
-    let id = fixture.sessions.create(fixture.spec()).await.unwrap().id;
+    let id = fixture
+        .sessions
+        .create(fixture.spec(), LaunchOptions::default())
+        .await
+        .unwrap()
+        .id;
     let Found::Live { handle, .. } = fixture.sessions.find(id).await.unwrap() else {
         panic!("a new session is live");
     };

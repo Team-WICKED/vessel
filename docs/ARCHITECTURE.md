@@ -35,8 +35,8 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize. | proc |
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
-| `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`), SQLite event log, retention, restart recovery. | proto |
-| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3). | proto, rpc, harness, session, store, secure, relay |
+| `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`, `profiles.toml`, `mcp/`), SQLite event log (schema 3: sessions' current profile and creator), retention, restart recovery. | proto |
+| `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with) (milestone 4). | proto, rpc, harness, session, store, secure, relay |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
@@ -420,9 +420,9 @@ they started.
     symbolic link, conflicts found before anything is linked); `mcp`
     (`McpFile`, the owner-only per-session file, `WrittenMcpFile` removes
     it on drop). `launch(lookup, spec, profile, mcp)` returns `Launch`
-    (command, MCP file, servers the harness cannot take); `launch_in` also
-    takes the directory for the MCP file (the node's own, ADR 0012), and
-    checks the profile against `spec.profile`. `layout(harness)` says where
+    (command, MCP file, servers the harness cannot take); it takes the
+    directory for the MCP file (the node's own, ADR 0012; no shared
+    fallback) and checks the profile against `spec.profile`. `layout(harness)` says where
     shared instructions and skills live in a home (for fleet sync). Descriptors now
     carry the default profile name, home, login check, session finder and
     terminal MCP form. No MCP value is ever an argument: Claude Code reads
@@ -431,7 +431,14 @@ they started.
   - `vessel-agent`: `AgentSetup::mcp_servers`, converted to ACP in `mcp`;
     HTTP servers only when the agent advertises them.
   - `vessel-session`: `create_with(spec, LaunchOptions { profile,
-    mcp_servers, mcp_dir })`; `create` is the defaults. The terminal actor holds the
+    mcp_servers, mcp_dir, created_by })`; `create` is the defaults.
+  - `vessel-node` (H1): the `profiles` module reads `profiles.toml` at
+    start (a broken file stops the node) and on `profile.reload` (a broken
+    one leaves the set in effect); `profiles::launch` turns a spec and the
+    caller's principal into `LaunchOptions` (the profile resolved, an
+    owner-only `<data_dir>/mcp`, `created_by`), and is where fleet sync's
+    MCP servers will come in. The store's schema 3 keeps each session's
+    current profile (following `ProfileChanged`) and its creator. The terminal actor holds the
     MCP file until the session ends.
 
 ## Later

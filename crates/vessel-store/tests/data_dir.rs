@@ -183,3 +183,46 @@ fn the_node_lock_admits_one_holder_and_names_it() {
     let _again = NodeLock::acquire(&dir, &owner(43)).unwrap();
     assert_eq!(NodeLock::holder(&dir).unwrap(), Some(owner(43)));
 }
+
+#[test]
+fn profiles_are_read_as_written_and_flagged_when_shared() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = DataDir::new(temp.path());
+    dir.prepare().unwrap();
+    assert_eq!(dir.read_profiles().unwrap(), None);
+
+    let text = "[profiles.alt]\nharness = \"claude\"\n";
+    std::fs::write(dir.profiles_path(), text).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.profiles_path();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let read = dir.read_profiles().unwrap().unwrap();
+        assert_eq!(read.text, text);
+        assert!(!read.readable_by_others);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(dir.read_profiles().unwrap().unwrap().readable_by_others);
+    }
+    let read = dir.read_profiles().unwrap().unwrap();
+    assert_eq!(read.text, text);
+    assert!(!format!("{read:?}").contains("harness"));
+}
+
+#[test]
+fn the_mcp_directory_is_owner_only_and_starts_empty() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = DataDir::new(temp.path());
+    dir.prepare().unwrap();
+    let mcp = dir.prepare_mcp_dir().unwrap();
+    assert_eq!(mcp, dir.mcp_dir());
+    std::fs::write(mcp.join("vessel-mcp-stale.json"), "{}").unwrap();
+    assert_eq!(dir.prepare_mcp_dir().unwrap(), mcp);
+    assert_eq!(std::fs::read_dir(&mcp).unwrap().count(), 0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&mcp).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+}

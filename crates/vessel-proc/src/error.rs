@@ -68,9 +68,10 @@ pub struct SignalError(#[from] std::io::Error);
 
 impl SignalError {
     /// The OS refused (`EPERM`): a member runs as another user, or (macOS)
-    /// every member has exited and is waiting to be reaped.
-    #[cfg(unix)]
-    pub(crate) fn is_refused(&self) -> bool {
+    /// every member has exited and is waiting to be reaped. Callers that can
+    /// tell the second case use this to stop treating it as a failure.
+    #[must_use]
+    pub fn is_refused(&self) -> bool {
         self.0.kind() == std::io::ErrorKind::PermissionDenied
     }
 }

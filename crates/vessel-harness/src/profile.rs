@@ -107,12 +107,13 @@ impl Profile {
         self.env.iter().map(|(name, value)| (name, value.as_str()))
     }
 
-    /// The value it gives `name`, if it sets it (names compared exactly).
+    /// The value it gives `name`, if it sets it. Names compare as this
+    /// system's environment does ([`same_variable`]).
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&str> {
+    pub fn get(&self, name: &EnvName) -> Option<&str> {
         self.env
             .iter()
-            .find(|(key, _)| key.as_str() == name)
+            .find(|(key, _)| same_variable(key.as_str(), name.as_str()))
             .map(|(_, value)| value.as_str())
     }
 
@@ -121,10 +122,13 @@ impl Profile {
         self.unset.iter()
     }
 
-    /// Whether it removes `name` (names compared exactly).
+    /// Whether it removes `name`. Names compare as this system's
+    /// environment does ([`same_variable`]).
     #[must_use]
-    pub fn unsets(&self, name: &str) -> bool {
-        self.unset.iter().any(|key| key.as_str() == name)
+    pub fn unsets(&self, name: &EnvName) -> bool {
+        self.unset
+            .iter()
+            .any(|key| same_variable(key.as_str(), name.as_str()))
     }
 
     /// Arguments added before the session's own, in terminal mode only.
@@ -159,6 +163,21 @@ impl fmt::Debug for Profile {
     }
 }
 
+/// Whether two variable names are one variable on this system: ignoring
+/// ASCII case on Windows, as its environment does, and exactly elsewhere.
+/// Every lookup of a profile's variables (its home, its removals, the MCP
+/// check) goes through this, so they agree with what the harness gets.
+/// Parsing is stricter on every system (two names one case apart are
+/// refused), so a file never means different things on two systems.
+#[must_use]
+pub fn same_variable(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
+}
+
 /// The name of `harness`'s default profile.
 #[expect(
     clippy::expect_used,
@@ -172,34 +191,44 @@ fn default_name(harness: HarnessKind) -> ProfileName {
 }
 
 /// The profiles of one node: every harness's default and those defined in
-/// `profiles.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// `profiles.toml`. The defaults are built once, with the set.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profiles {
+    defaults: Vec<Profile>,
     defined: BTreeMap<ProfileName, Profile>,
 }
 
+/// The default profiles only (no `profiles.toml`).
+impl Default for Profiles {
+    fn default() -> Self {
+        Self::with(BTreeMap::new())
+    }
+}
+
 impl Profiles {
-    /// The profile named `name`: a defined one, or a harness's default.
-    #[must_use]
-    pub fn get(&self, name: &ProfileName) -> Option<Profile> {
-        if let Some(profile) = self.defined.get(name) {
-            return Some(profile.clone());
+    fn with(defined: BTreeMap<ProfileName, Profile>) -> Self {
+        Self {
+            defaults: HarnessKind::ALL
+                .into_iter()
+                .map(Profile::default_for)
+                .collect(),
+            defined,
         }
-        HarnessKind::ALL
-            .into_iter()
-            .map(Profile::default_for)
-            .find(|profile| profile.name() == name)
+    }
+
+    /// The profile named `name`: a defined one, or a harness's default
+    /// (names do not overlap: a defined one may not take a harness's name).
+    #[must_use]
+    pub fn get(&self, name: &ProfileName) -> Option<&Profile> {
+        self.defined
+            .get(name)
+            .or_else(|| self.defaults.iter().find(|profile| profile.name() == name))
     }
 
     /// Every profile: the defaults (in harness order), then the defined
     /// ones by name.
-    #[must_use]
-    pub fn all(&self) -> Vec<Profile> {
-        HarnessKind::ALL
-            .into_iter()
-            .map(Profile::default_for)
-            .chain(self.defined.values().cloned())
-            .collect()
+    pub fn all(&self) -> impl Iterator<Item = &Profile> {
+        self.defaults.iter().chain(self.defined.values())
     }
 
     /// The profiles defined in the file, by name.
@@ -239,10 +268,10 @@ pub enum ProfilesError {
     /// Not TOML, or not the shape of `profiles.toml` (an unknown key, a
     /// missing `harness`, a value of the wrong type). The message names the
     /// key and the position, and never quotes the file.
-    #[error("profiles.toml, {position}: {message}")]
+    #[error("profiles.toml, {}: {message}", position.map_or_else(|| "unknown position".to_owned(), |at| at.to_string()))]
     Toml {
-        /// Line and column, `line 3, column 7`, or `unknown position`.
-        position: String,
+        /// Where, if the TOML library said.
+        position: Option<Position>,
         /// The TOML library's message.
         message: String,
     },
@@ -331,7 +360,7 @@ pub enum ProfileProblem {
 pub fn parse_profiles(text: &str, user_home: Option<&Path>) -> Result<Profiles, ProfilesError> {
     let raw: RawFile = toml_edit::de::from_str(text).map_err(|error| ProfilesError::Toml {
         position: position(text, error.span()),
-        message: error.message().to_owned(),
+        message: without_values(error.message()),
     })?;
     let home = user_home.and_then(Path::to_str);
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
@@ -353,7 +382,7 @@ pub fn parse_profiles(text: &str, user_home: Option<&Path>) -> Result<Profiles, 
         let profile = profile(name, raw_profile, home).map_err(fail)?;
         let _new = defined.insert(profile.name.clone(), profile);
     }
-    Ok(Profiles { defined })
+    Ok(Profiles::with(defined))
 }
 
 /// One profile's checks, after its name.
@@ -449,18 +478,59 @@ fn expand(value: &str, home: Option<&str>) -> Option<String> {
     Some(format!("{home}{separator}{rest}"))
 }
 
-/// `line L, column C` of a byte offset, both from 1.
-fn position(text: &str, span: Option<std::ops::Range<usize>>) -> String {
-    let Some(before) = span.and_then(|span| text.get(..span.start)) else {
-        return "unknown position".to_owned();
-    };
+/// The TOML library's message without the value it found. Serde's type
+/// and value errors quote it (``invalid type: integer `98765`, expected a
+/// string``, `invalid type: string "--token=…", expected a sequence`),
+/// and a value in `env` or `args` may be a secret that `profile.reload`
+/// would send to a client. Only the kind found and what was expected stay.
+/// Syntax errors, unknown and missing fields name keys and positions only
+/// (checked against `toml_edit` 0.25), so they pass as they are.
+fn without_values(message: &str) -> String {
+    for prefix in ["invalid type: ", "invalid value: "] {
+        let Some(at) = message.find(prefix) else {
+            continue;
+        };
+        let (before, rest) = message.split_at(at);
+        let rest = rest.get(prefix.len()..).unwrap_or_default();
+        // What was expected is written by code, never taken from the file,
+        // so the last separator is the real one even if the value holds it.
+        return match rest.rsplit_once(", expected ") {
+            Some((found, expected)) => {
+                let kind = found.split(['`', '"']).next().unwrap_or_default().trim();
+                format!("{before}{prefix}{kind}, expected {expected}")
+            }
+            None => format!("{before}{prefix}a value of another type"),
+        };
+    }
+    message.to_owned()
+}
+
+/// A place in `profiles.toml`; both count from 1, the column in
+/// characters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    /// The line.
+    pub line: usize,
+    /// The column.
+    pub column: usize,
+}
+
+impl fmt::Display for Position {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}, column {}", self.line, self.column)
+    }
+}
+
+/// The position of a byte offset.
+fn position(text: &str, span: Option<std::ops::Range<usize>>) -> Option<Position> {
+    let before = span.and_then(|span| text.get(..span.start))?;
     let line = before.matches('\n').count().saturating_add(1);
     let column = before
         .rsplit('\n')
         .next()
         .map_or(0, |line| line.chars().count())
         .saturating_add(1);
-    format!("line {line}, column {column}")
+    Some(Position { line, column })
 }
 
 #[cfg(test)]
@@ -473,6 +543,30 @@ mod tests {
     )]
     fn home() -> Option<&'static Path> {
         Some(Path::new("/home/u"))
+    }
+
+    fn var(name: &str) -> EnvName {
+        name.parse().unwrap()
+    }
+
+    /// Review finding 5: lookups follow the system's case rule, so a
+    /// profile's `codex_home` is Codex's home on Windows, where the
+    /// environment ignores case, and another variable elsewhere.
+    #[test]
+    fn lookups_follow_the_systems_case_rule() {
+        let text = "[profiles.x]\nharness = \"codex\"\nenv = { codex_home = \"/w\" }\nunset = [\"Path\"]\n";
+        let x = parse_profiles(text, home())
+            .unwrap()
+            .get(&"x".parse().unwrap())
+            .cloned()
+            .unwrap();
+        let windows = cfg!(windows);
+        assert_eq!(x.get(&var("CODEX_HOME")).is_some(), windows);
+        assert_eq!(x.unsets(&var("PATH")), windows);
+        assert_eq!(x.get(&var("codex_home")), Some("/w"));
+        assert!(x.unsets(&var("Path")));
+        assert_eq!(same_variable("Path", "PATH"), windows);
+        assert!(same_variable("PATH", "PATH"));
     }
 
     fn problem(text: &str) -> ProfileProblem {
@@ -501,20 +595,19 @@ mod tests {
         let alt = profiles.get(&"claude-alt".parse().unwrap()).unwrap();
         assert_eq!(alt.harness(), HarnessKind::ClaudeCode);
         assert_eq!(alt.label(), Some("Claude (Alt)"));
-        assert_eq!(alt.get("CLAUDE_CONFIG_DIR"), Some("/home/u/.claude-alt"));
-        assert!(alt.unsets("ANTHROPIC_API_KEY"));
+        assert_eq!(
+            alt.get(&var("CLAUDE_CONFIG_DIR")),
+            Some("/home/u/.claude-alt")
+        );
+        assert!(alt.unsets(&var("ANTHROPIC_API_KEY")));
         assert_eq!(
             alt.args(),
             ["--model", "opus", "--settings", "/home/u/s.json"]
         );
         assert!(!alt.is_default());
         let work = profiles.get(&"codex-work".parse().unwrap()).unwrap();
-        assert_eq!(work.get("CODEX_HOME"), Some("/home/u"));
-        let names: Vec<_> = profiles
-            .all()
-            .iter()
-            .map(|p| p.name().to_string())
-            .collect();
+        assert_eq!(work.get(&var("CODEX_HOME")), Some("/home/u"));
+        let names: Vec<_> = profiles.all().map(|p| p.name().to_string()).collect();
         assert_eq!(
             names,
             [
@@ -537,7 +630,7 @@ mod tests {
             assert_eq!(default.env().count(), 0);
             assert_eq!(default.unset().count(), 0);
             assert!(default.args().is_empty());
-            assert_eq!(profiles.get(default.name()), Some(default));
+            assert_eq!(profiles.get(default.name()), Some(&default));
         }
         assert_eq!(
             Profile::default_for(HarnessKind::ClaudeCode)
@@ -591,6 +684,67 @@ mod tests {
         let typed = "[profiles.x]\nharness = \"claude\"\nunset = \"HOME\"\n";
         let shown = parse_profiles(typed, home()).unwrap_err().to_string();
         assert!(shown.contains("line 3"), "{shown}");
+    }
+
+    #[test]
+    fn toml_errors_carry_a_typed_position() {
+        let error =
+            parse_profiles("[profiles.x]\nharness = \"claude\"\nenv = 3\n", home()).unwrap_err();
+        let ProfilesError::Toml { position, .. } = error else {
+            panic!("expected a TOML error");
+        };
+        assert_eq!(position, Some(Position { line: 3, column: 7 }));
+    }
+
+    /// Review finding: serde's messages quoted the value they found, and a
+    /// value may be a secret.
+    #[test]
+    fn errors_never_quote_a_value() {
+        for (text, kind) in [
+            ("env = { PIN = 98765432123 }", "integer, expected a string"),
+            (
+                "args = \"--token=sk-SECRET\"",
+                "string, expected a sequence",
+            ),
+            ("env = \"sk-SECRET\"", "string, expected a map"),
+            ("unset = \"sk-SECRET\"", "string, expected a sequence"),
+            ("label = 1.5e300", "floating point, expected a string"),
+            ("env = { K = true }", "boolean, expected a string"),
+            (
+                "env = { K = 98765432123.5 }",
+                "floating point, expected a string",
+            ),
+        ] {
+            let text = format!("[profiles.x]\nharness = \"claude\"\n{text}\n");
+            let shown = parse_profiles(&text, home()).unwrap_err().to_string();
+            for value in ["98765432123", "sk-SECRET", "1500000", "true"] {
+                assert!(!shown.contains(value), "{value} in {shown}");
+            }
+            assert!(shown.contains(kind), "{shown}");
+            assert!(shown.contains("line 3"), "{shown}");
+        }
+        for text in [
+            "profiles = \"sk-SECRET\"\n",
+            "[profiles]\nx = \"sk-SECRET\"\n",
+            "[profiles.x]\nharness = \"claude\"\nenv = { K = sk-SECRET }\n",
+            "[profiles.x]\nharness = \"claude\"\nenv = { K = \"\\q sk-SECRET\" }\n",
+            "[profiles.x]\nharness = \"claude\"\nenv = { K = \"a\" } sk-SECRET\n",
+        ] {
+            let shown = parse_profiles(text, home()).unwrap_err().to_string();
+            assert!(!shown.contains("SECRET"), "{shown}");
+        }
+        assert_eq!(
+            without_values("invalid value: string \"a, expected b\", expected one of x"),
+            "invalid value: string, expected one of x"
+        );
+        assert_eq!(
+            without_values("invalid type: integer `5`"),
+            "invalid type: a value of another type"
+        );
+        assert_eq!(
+            without_values("missing field `harness`"),
+            "missing field `harness`"
+        );
     }
 
     #[test]
@@ -683,7 +837,7 @@ mod tests {
             "[profiles.x]\nharness = \"claude\"\nenv = { A = \"~user/x\" }\nargs = [\"a~/b\"]\n";
         let profiles = parse_profiles(plain, None).unwrap();
         let x = profiles.get(&"x".parse().unwrap()).unwrap();
-        assert_eq!(x.get("A"), Some("~user/x"));
+        assert_eq!(x.get(&var("A")), Some("~user/x"));
         assert_eq!(x.args(), ["a~/b"]);
         assert_eq!(expand("~/a", Some("/h/")), Some("/h/a".to_owned()));
         assert_eq!(expand("~", Some("/h")), Some("/h".to_owned()));

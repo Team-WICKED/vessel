@@ -1,13 +1,15 @@
 //! Errors of this crate.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use vessel_proto::{HarnessKind, ProfileName};
 
 use crate::mcp::McpError;
 
-/// A session could not be turned into a command.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// A session could not be turned into a command. Not `PartialEq`: it keeps
+/// I/O errors as their source.
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum HarnessError {
     /// The harness binary is not on the search path.
     #[error("{harness} is not installed: `{binary}` was not found")]
@@ -67,11 +69,12 @@ pub enum HarnessError {
     /// The MCP servers cannot be given to this harness's terminal session.
     #[error(transparent)]
     Mcp(#[from] McpError),
+    /// The harness reads its MCP servers from a file and no owner-only
+    /// directory was given for it (there is no shared fallback).
+    #[error("no directory for the session's MCP configuration file")]
+    NoMcpDirectory,
     /// No name could be chosen for the session's MCP configuration file
     /// (the system's random source failed).
-    #[error("cannot name an MCP configuration file: {reason}")]
-    McpFile {
-        /// Why.
-        reason: String,
-    },
+    #[error("cannot name an MCP configuration file")]
+    McpFile(#[source] Arc<std::io::Error>),
 }
