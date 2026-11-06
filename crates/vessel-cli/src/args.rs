@@ -7,7 +7,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use vessel_client::book::NodeName;
 use vessel_client::{BearerToken, RemotePath};
 use vessel_node::fleet::SkipGlob;
-use vessel_proto::{EventSeq, HarnessKind, ProfileName};
+use vessel_proto::{EventSeq, HarnessKind, ProfileName, SecretName};
 
 use crate::selector::SessionSelector;
 
@@ -258,6 +258,30 @@ pub(crate) enum FleetCommand {
     Restore {
         /// The deleted file, or a directory.
         path: PathBuf,
+    },
+    /// This node's secrets, which fill the fleet's MCP servers here
+    /// (`secrets.toml`); they never leave this node.
+    Secret {
+        #[command(subcommand)]
+        command: SecretCommand,
+    },
+}
+
+/// `vessel fleet secret ...`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum SecretCommand {
+    /// Set a secret: typed at a prompt (not shown), or piped in; never on
+    /// the command line, where other users can read it.
+    Set {
+        /// Its name, as the fleet's MCP servers refer to it.
+        name: SecretName,
+    },
+    /// List the secrets set on this node (names only).
+    List,
+    /// Delete a secret.
+    Delete {
+        /// Its name.
+        name: SecretName,
     },
 }
 

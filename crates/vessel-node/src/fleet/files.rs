@@ -8,7 +8,8 @@
 //!   fleet join`, `status`, `restore`), so each file has one writer at a
 //!   time and every write is atomic.
 //! - Layout: `<data_dir>/fleet.toml` (the home's sources, edited by
-//!   people) and `<data_dir>/fleet/` (owner-only, Vessel's): `blobs/`,
+//!   people), `<data_dir>/secrets.toml` (this node's secrets, owner-only)
+//!   and `<data_dir>/fleet/` (owner-only, Vessel's): `blobs/`,
 //!   `manifest.json`, `managed.json`, `state.json`, `members.json` (home),
 //!   `member.json` and `member.credential` (member), `apply` (a request to
 //!   apply again) and `lock`.
@@ -29,6 +30,7 @@ use vessel_store::DataDir;
 #[derive(Debug, Clone)]
 pub struct FleetFiles {
     sources: PathBuf,
+    secrets: PathBuf,
     dir: PathBuf,
 }
 
@@ -38,6 +40,7 @@ impl FleetFiles {
     pub fn new(data_dir: &DataDir) -> Self {
         Self {
             sources: data_dir.root().join("fleet.toml"),
+            secrets: data_dir.root().join("secrets.toml"),
             dir: data_dir.root().join("fleet"),
         }
     }
@@ -46,6 +49,12 @@ impl FleetFiles {
     #[must_use]
     pub fn sources(&self) -> &Path {
         &self.sources
+    }
+
+    /// `secrets.toml`: this node's secrets for the fleet's MCP servers.
+    #[must_use]
+    pub fn secrets(&self) -> &Path {
+        &self.secrets
     }
 
     /// `fleet/`: Vessel's own fleet state, owner-only.

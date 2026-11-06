@@ -167,6 +167,9 @@ pub(crate) enum CliError {
     /// `vessel fleet restore` did not restore.
     #[error(transparent)]
     FleetRestore(#[from] vessel_node::fleet::RestoreError),
+    /// `secrets.toml` could not be used (the error names no value).
+    #[error(transparent)]
+    FleetSecrets(#[from] vessel_node::fleet::SecretsError),
     /// A fleet file could not be read or written.
     #[error(transparent)]
     FleetFile(#[from] vessel_node::fleet::FileError),

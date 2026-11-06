@@ -450,6 +450,15 @@ they started.
     request the node applies. Tested in process over in-memory channels
     through the real device gateway, between two nodes through an
     in-process relay, and through the CLI.
+  - `vessel-node` `fleet` secrets and MCP (F3, 2026-11-06):
+    `<data_dir>/secrets.toml` (`NAME = "value"`, owner-only, errors
+    without values), `vessel fleet secret set|list|delete` (a prompt
+    without echo or stdin, never argv), and `FleetMcp`, the node's
+    `McpSource`: the definitions of the manifest applied here and the
+    secrets, a snapshot the fleet loop replaces, resolved per launch with
+    `vessel_fleet::resolve`. A session's agent gets every fleet server with
+    this node's values; one missing a secret is left out and named in the
+    session's log (end to end with `fake-acp`).
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

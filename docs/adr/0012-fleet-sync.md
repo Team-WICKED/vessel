@@ -338,6 +338,25 @@ It is idempotent: running it again fills gaps and changes nothing else.
   files in the member's data directory, written by `vessel fleet join`
   and noticed by a running node within seconds. `vessel fleet restore`
   forgets the records and leaves `fleet/apply`, which the node acts on.
+- **Secrets on the node (F3).** `<data_dir>/secrets.toml` is a flat
+  table, `NAME = "value"` (names by the environment variable rule),
+  owner-only. Errors never show a value: a file that does not parse is
+  reported by line only, since the TOML parser quotes the line. `vessel
+  fleet secret set NAME` takes the value from a prompt that does not echo
+  or from standard input; `list` prints names; `delete` removes one. They
+  edit the file through `toml_edit` under the fleet lock, keeping its
+  comments; the node notices a change within seconds. There is no way to
+  read a value back out, and protocol 6's `secret.set`, `secret.list` and
+  `secret.delete` (admin) will call the same functions; `secret.copy`
+  waits for protocol 6.
+- **MCP servers at launch (F3).** The node's `McpSource` is the fleet's
+  (`fleet::FleetMcp`): a snapshot of the definitions of the manifest this
+  node last applied (or published, on the home) and of `secrets.toml`,
+  replaced by the fleet loop and answered from memory. Every session gets
+  every server; one whose secret is missing is left out and named in the
+  session's log. A node that leaves the fleet stops giving its sessions
+  the fleet's servers. `vessel fleet status` lists the servers and the
+  secrets missing here.
 - **Not built in F2:** the mutual grant (a member issuing the home a
   credential on itself) and `fleet.push` need calls protocol 5 does not
   have; they come with cross-node calls (Track X) and protocol 6.

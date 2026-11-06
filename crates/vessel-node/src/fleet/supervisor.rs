@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use vessel_client::Backoff;
 use vessel_fleet::{BlobStore, Sources};
-use vessel_proto::Manifest;
+use vessel_proto::{Manifest, McpDefinitions};
 
 use super::FleetConfig;
 use super::config::read_sources;
@@ -17,6 +17,7 @@ use super::files::{self, FleetFiles};
 use super::home::{Home, Published, Stamp};
 use super::local::Local;
 use super::member::{self, Membership, Pacing};
+use super::secrets::{self, Secrets, SecretsError};
 
 /// The home publishes at least this often, whatever the stamp says.
 const REBUNDLE_EVERY: Duration = Duration::from_secs(10 * 60);
@@ -35,6 +36,13 @@ struct Supervisor {
     member: Option<(Membership, CancellationToken)>,
     /// The last error logged, so a lasting one is logged once.
     logged: Option<String>,
+    /// The SHA-256 of `secrets.toml` last used, to tell a change.
+    secrets: Option<[u8; 32]>,
+    /// Whether this node was in a fleet at the last look (its sessions get
+    /// the fleet's MCP servers only while it is).
+    in_fleet: bool,
+    /// Whether the saved manifest's MCP servers were taken up after start.
+    started: bool,
 }
 
 /// Run the fleet loop until `stop`.
@@ -56,6 +64,9 @@ pub(crate) async fn run(
         stamp: None,
         member: None,
         logged: None,
+        secrets: None,
+        in_fleet: false,
+        started: false,
     };
     loop {
         supervisor.tick().await;
@@ -73,16 +84,40 @@ impl Supervisor {
     async fn tick(&mut self) {
         let files = self.local.files.clone();
         let user_home = self.user_home.clone();
+        let started = self.started;
         let read = tokio::task::spawn_blocking(move || {
             let sources = read_sources(&files, user_home.as_deref());
             let membership = member::membership(&files);
             let requested = files.apply_request().exists();
-            (sources, membership, requested)
+            let secrets = secrets::read(&files);
+            // After a start, sessions get the servers of the manifest last
+            // applied here before the home answers (or the home bundles).
+            let saved = if started {
+                None
+            } else {
+                files::read_json::<Manifest>(&files.manifest())
+                    .ok()
+                    .flatten()
+            };
+            (sources, membership, requested, secrets, saved)
         })
         .await;
-        let Ok((sources, membership, requested)) = read else {
+        let Ok((sources, membership, requested, secrets, saved)) = read else {
             return;
         };
+        self.use_secrets(secrets).await;
+        let in_fleet = matches!(sources, Ok(Some(_))) || matches!(membership, Ok(Some(_)));
+        if !self.started {
+            self.started = true;
+            if let (true, Some(saved)) = (in_fleet, saved) {
+                self.local.mcp.set_definitions(saved.mcp);
+            }
+        }
+        if self.in_fleet && !in_fleet {
+            // Left the fleet: its MCP servers go with it.
+            self.local.mcp.set_definitions(McpDefinitions::new());
+        }
+        self.in_fleet = in_fleet;
         match sources {
             Ok(Some((text, sources))) => {
                 self.stop_member();
@@ -111,6 +146,22 @@ impl Supervisor {
             }
             Ok(None) => self.stop_member(),
             Err(error) => self.note(format!("member.json: {error}")).await,
+        }
+    }
+
+    /// Take up `secrets.toml` if its text changed.
+    async fn use_secrets(&mut self, read: Result<(Secrets, [u8; 32]), SecretsError>) {
+        match read {
+            Ok((secrets, digest)) => {
+                if self.secrets != Some(digest) {
+                    let names: Vec<String> = secrets.names().map(ToString::to_string).collect();
+                    tracing::info!(secrets = ?names, "this node's secrets");
+                    self.local.mcp.set_secrets(secrets);
+                    self.secrets = Some(digest);
+                }
+            }
+            // The secrets in use stay; the error names no value.
+            Err(error) => self.note(format!("secrets.toml: {error}")).await,
         }
     }
 
