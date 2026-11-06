@@ -161,7 +161,7 @@ they started.
   - `vessel-client`: websocket connection with the bearer token, one typed
     method per call, gap-free `SessionStream` (`follow`). `wss://` is
     refused: no TLS stack in milestone 1 (ADR 0005 amendment).
-    Milestone 2 (Track C, in progress): `Connector` (`WsConnector` here,
+    Milestone 2 (Track C): `Connector` (`WsConnector` here,
     the SSH one in `vessel-remote`), `follow_resuming`/`ResumingStream`
     (redials with 0.5–30 s jittered backoff and follows again from its
     cursor; never repeats a call), `Pinned` (refuses a node whose id is
@@ -171,7 +171,7 @@ they started.
     (`<config_dir>/vessel/nodes.toml`, a project's `.vessel/config.toml`
     that may only pick one of the user's nodes, `resolve` for `--node`;
     edited with `toml_edit`, keeping comments).
-  - `vessel-remote` (milestone 2, Track C, in progress): `ssh` (the system
+  - `vessel-remote` (milestone 2, Track C): `ssh` (the system
     client with fixed options, `ControlMaster` sharing on Unix, commands
     built from fixed words and single-quoted values, the last 64 stderr
     lines kept), `platform` (`uname -sm` through `sh -s`, four release
@@ -229,7 +229,7 @@ they started.
     record order across stdout and stderr. The local token file is sent
     only to a loopback `--node`, and a relative `--cwd` is resolved only
     for one. Tested through the binary (`tests/cli/`).
-    Milestone 2 (Track C, in progress): `--node` is resolved through the
+    Milestone 2 (Track C): `--node` is resolved through the
     node book (a name, then `ssh://`/`user@host`, then a websocket
     address; else the project's or the book's `default_node`, else this
     machine's node), and `vessel nodes add|list|show|remove|default` edits
