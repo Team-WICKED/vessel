@@ -372,7 +372,7 @@ fn remove_empty_parents(plan: &Plan, place: &Place, reached: &Reached) {
 
 /// Write blob `file.hash` as `name` in `dir`: streamed to a temporary file
 /// while hashing, checked, then renamed into place.
-fn write_blob(
+pub(crate) fn write_blob(
     dir: &Dir,
     name: &str,
     file: &BundleFile,
