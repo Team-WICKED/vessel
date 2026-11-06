@@ -27,7 +27,7 @@
 //!   - the node's `4401` means whoever answered does not hold the pinned
 //!     key: final, pair again;
 //!   - the relay's codes are as `RelayClose::is_transient` says (`4404`
-//!     while the node re-registers, `4408`, `4429` transient; `4413`
+//!     while the node re-registers, `4408`, `4429`, `4503` transient; `4413`
 //!     final);
 //!   - once the handshake succeeds the node has proved its key, so its
 //!     answer holds for every route: a refusal (`Revoked`, `UnknownDevice`

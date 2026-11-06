@@ -95,6 +95,10 @@ const fn relay_close(close: RelayClose) -> &'static str {
         RelayClose::NotAccepted => "the node did not take the connection in time",
         RelayClose::TooLarge => "a message was over the relay's size limit",
         RelayClose::RateLimited => "the relay is limiting connections from here; try again later",
+        RelayClose::Full => {
+            "the relay carries as many connections as it may, to this node or in all; try again \
+             later"
+        }
     }
 }
 

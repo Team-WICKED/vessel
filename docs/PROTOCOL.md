@@ -147,6 +147,30 @@ every method.)
   of this node's own, so older clients see nothing new; `created_by` uses
   only the variants protocol 5 has.
 
+- Relay registration and limits (the relay's own wire, not negotiated;
+  2026-11-06):
+  - `register` may carry `ticket {key, expires_at, mac}` instead of
+    `token` (exactly one of the two, else `rejected {reason: "token"}`):
+    HMAC-SHA256 under the relay's token over `"vessel relay ticket
+    v1\0"`, the key's 32 bytes and `expires_at` (seconds since the Unix
+    epoch, 8 bytes big-endian). A fleet's home mints one for a member's
+    key (`fleet.callback`). The relay takes it only for the key that then
+    proves possession, unexpired and expiring at most 48 h ahead
+    (`rejected {reason: "ticket"}` otherwise), and closes a registration
+    made with it when it expires; the node registers again with a newer
+    one.
+  - A relay holding its most nodes answers a registration `rejected
+    {reason: "full"}` (after the token or ticket and the proof); a node
+    registered with a ticket holds a place like any other and frees it
+    when the ticket expires. It closes a client or a still-registering
+    control connection past its connection limits with `4503` (full,
+    transient).
+  - A node that does not know `full` or `ticket` reads the message as
+    malformed and retries; a client that does not know `4503` sees a
+    plain close; a relay from before tickets refuses a ticket as
+    malformed. The limits themselves are the relay's configuration
+    (`vesseld relay --max-*`, README).
+
 ## Version 5 (2026-11-06)
 
 Nodes speak 2..=5; version 5 only adds, and older connections keep working
@@ -262,15 +286,8 @@ pairing) implements it; until then nodes answer `device.*` with
 - Relay control connection (`vessel_proto::relay`): node sends `register
   {routing_id, key, token}`, relay sends `prove {message}`, node answers
   `proof {message}`, relay sends `registered` or `rejected {reason}`, then
-  `incoming {conn}` per waiting client. Since protocol 6, `register` may
-  carry `ticket {key, expires_at, mac}` instead of `token` (exactly one of
-  the two, else `rejected {token}`): HMAC-SHA256 under the relay's token
-  over `"vessel relay ticket v1\0"`, the key's 32 bytes and `expires_at`
-  (seconds since the Unix epoch, 8 bytes big-endian). The relay takes it
-  only for the key that then proves possession, unexpired, and expiring at
-  most 48 h ahead (`rejected {ticket}` otherwise), and closes a
-  registration made with it when it expires; the node registers again with
-  a newer one. Routing ids and connection ids are
+  `incoming {conn}` per waiting client (tickets and the `full` refusal
+  came with version 6: "Relay registration" there). Routing ids and connection ids are
   32 lowercase hex characters. Relay close codes: `4404` no such node,
   `4408` not accepted in time, `4413` too large, `4429` rate limited.
 - Node close code on a secure-channel websocket: `4401` the handshake failed

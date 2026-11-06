@@ -8,6 +8,8 @@
 //! under test are shortened through `Limits`, never slept on.
 
 #[cfg(test)]
+mod caps;
+#[cfg(test)]
 mod direct;
 #[cfg(test)]
 mod keepalive;

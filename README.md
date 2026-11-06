@@ -126,8 +126,35 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   every request goes through that proxy and the proxy overwrites the
   header; otherwise clients could pick their own address.
 - The relay pings every connection every 10 s, so a proxy's idle timeout
-  of 60 s (nginx's default) is enough.
+  of 60 s (nginx's default) is enough. A connection silent for 30 s, its
+  pings unanswered, is dropped.
 - `GET /health` answers `ok`.
+- Limits, each a flag with a `VESSEL_RELAY_*` variable of the same name
+  (table below). The defaults leave a fleet of tens of nodes plenty of
+  room:
+
+  | Flag | Limits | Default |
+  | --- | --- | --- |
+  | `--max-nodes` | nodes registered at once | 128 |
+  | `--max-registering` | nodes still registering at once | 64 |
+  | `--max-clients` | relayed connections at once, in all | 384 |
+  | `--max-clients-per-node` | relayed connections to one node at once | 128 |
+  | `--max-bytes-per-second` | bytes a second each way through one connection, after a one-second burst (0: no limit; at least 64 KiB) | 16 MiB |
+
+  A node past `--max-nodes` is told the relay is full and tries again
+  every 30 s; a client past a connection limit is closed with code `4503`
+  and may try again. The relay logs each kind of refusal at info, at most
+  once every 10 s with the count in between, and new connections from one
+  address are limited too (30 at once, then one a second).
+- A fleet's home that registers with the relay gives its members, those
+  started without `--relay` of their own, tickets for their own keys
+  (`fleet.callback`), never the token: a ticket registers that one node,
+  for a day while the member renews it, and holds a place among
+  `--max-nodes` like any node until it leaves or its ticket expires.
+- Each relayed connection holds two sockets on the relay, each node one:
+  keep `max-nodes + 2 × max-clients` under the relay's open-file limit
+  (`ulimit -n`, or `LimitNOFILE` in a systemd unit), which the defaults
+  do for the common 1024, and raise both together.
 
 ### A node behind NAT: pairing a device
 
@@ -337,6 +364,7 @@ start a session on another machine and read its answer.
 | `VESSEL_RELAY_BIND` | `vesseld relay --bind` | `127.0.0.1:7078` |
 | `VESSEL_RELAY_TOKEN_FILE` | `vesseld relay --token-file`, the registration token nodes present | required |
 | `VESSEL_RELAY_CLIENT_ADDRESS_HEADER` | `vesseld relay --client-address-header` | unset: the peer's address |
+| `VESSEL_RELAY_MAX_NODES`, `VESSEL_RELAY_MAX_REGISTERING`, `VESSEL_RELAY_MAX_CLIENTS`, `VESSEL_RELAY_MAX_CLIENTS_PER_NODE`, `VESSEL_RELAY_MAX_BYTES_PER_SECOND` | the `vesseld relay` limits of the same names ("Running a relay") | 128, 64, 384, 128, 16 MiB |
 | `VESSEL_NODE_SOCKET`, `VESSEL_AGENT_SESSION`, `VESSEL_AGENT_SECRET` | `vessel mcp` only: set by the node in each session's `vessel` MCP server | set by the node |
 
 ## Layout
