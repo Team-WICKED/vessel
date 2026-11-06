@@ -197,3 +197,20 @@ cargo test --workspace
 CI runs exactly those three on Linux, Windows and macOS. Lints are strict
 (no `unwrap`, no panics, no indexing, no raw arithmetic); see the workspace
 `Cargo.toml`.
+
+## License
+
+Vessel is **source-available, not open source.** It is licensed under the
+[PolyForm Strict License 1.0.0](LICENSE.md):
+
+- You may read the code and use the software for noncommercial purposes
+  (personal use, and noncommercial organisations as the license defines
+  them).
+- You may not distribute it, make changes to it or works based on it, or
+  use it for any commercial purpose.
+- Anything else, commercial use included, needs a separate license from
+  Team-WICKED.
+
+Contributions from outside Team-WICKED are not accepted.
+
+Copyright 2026 Team-WICKED.

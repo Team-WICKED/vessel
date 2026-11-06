@@ -2,31 +2,22 @@ name: CI
 
 # [Decision Log] (2026-11-06)
 # - Purpose: check the gate (AGENTS.md section 1) on Linux, Windows and macOS.
-# - Constraint: the repository is private, so hosted minutes count against
-#   the organisation's 2,000 a month, at 1x for Linux, 2x for Windows and 10x
-#   for macOS. Running all three on every push to `backend/**` (milestones
-#   1-3) used the whole month's minutes in two days (Linux 215, Windows 408,
-#   macOS 107 minutes).
-# - Alternatives: keep push triggers but Linux only (still a hosted run per
-#   push, and agents push often); a self-hosted Linux runner on ingwdev1
-#   (free, needs a dedicated unprivileged user; pending the operator's go);
-#   no CI (Windows and macOS regressions only found at release).
-# - Choice: nothing runs on push. Pull requests to `main` run Linux. Windows
-#   and macOS run only when started by hand (`gh workflow run CI -r <branch>
-#   -f platforms=all`), at milestone merges. Agents run the gate locally,
-#   plus the cross-target clippy where it works.
-# - Trade-off: a Windows- or macOS-only break is found at the milestone
-#   merge instead of on the track branch.
+# - History: while the repository was private, hosted minutes counted against
+#   the organisation's 2,000 a month (Windows 2x, macOS 10x), and three OSes
+#   on every push used the month in two days. Runs were then manual only.
+# - Now: the repository is public, and standard GitHub-hosted runners are
+#   free for public repositories, so every push to `main` and `backend/**`
+#   (track branches get Windows and macOS results without a pull request;
+#   agents cannot run those platforms locally) and every pull request runs
+#   all three again. A run can also be started by hand.
+# - Guard rails kept from the private period: a newer run on the same ref
+#   cancels the older one, and each job times out at 45 minutes. If the
+#   repository ever goes private again, return to manual runs first.
 on:
-  workflow_dispatch:
-    inputs:
-      platforms:
-        description: "Platforms to run"
-        type: choice
-        options: [linux, linux-windows, all]
-        default: linux
+  push:
+    branches: [main, "backend/**"]
   pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 # A newer run on the same ref replaces an older one instead of queueing
 # behind it.
@@ -45,9 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One line: the expression parser is not documented to accept the
-        # line breaks a folded block keeps for more-indented lines.
-        os: ${{ fromJSON(inputs.platforms == 'all' && '["ubuntu-latest","windows-latest","macos-latest"]' || inputs.platforms == 'linux-windows' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
