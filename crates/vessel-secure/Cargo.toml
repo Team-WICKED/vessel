@@ -1,0 +1,31 @@
+[package]
+name = "vessel-secure"
+description = "Vessel's end-to-end secure channel (Noise NK): one channel for relayed and direct connections"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proto.workspace = true
+
+bytes.workspace = true
+curve25519-dalek.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+getrandom.workspace = true
+sha2.workspace = true
+snow.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync", "time"] }
+tokio-util = { workspace = true, features = ["codec"] }
+tracing.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+vessel-rpc.workspace = true
+
+[lints]
+workspace = true

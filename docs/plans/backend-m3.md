@@ -120,7 +120,7 @@ Roadmap Phase 1, the relay:
 
 | Crate | Change | New edges |
 | --- | --- | --- |
-| `vessel-secure` (new) | Noise NK through `snow` (ADR 0009). Keys (`NodeKeypair`, `NodePublicKey`, `RoutingId`, fingerprints). The record layer (chunking, size checks). `SecureChannel<C>`, which turns any binary-message carrier into a `FrameTransport` | **new crate, no edges** (it knows nothing of the protocol: it moves byte strings) |
+| `vessel-secure` (new) | Noise NK through `snow` (ADR 0009). Keys (`NodeKeypair`, `NodePublicKey`, `RoutingId`, fingerprints). The record layer (chunking, size checks). `SecureChannel<C>`, which turns any binary-message carrier into a `FrameTransport` | **new crate: `-> proto`**, for the key types (see "Contract as built"); it knows nothing of the protocol's frames: it moves UTF-8 strings |
 | `vessel-relay` (new) | The relay server (`serve`), the node's link to a relay (registration, possession proof, data connections), and the client's dial | **new crate: `-> proto, secure`** |
 | `vessel-store` | `node.key` (32 random bytes, 0600, created on first start). The `devices` table (migration). Credential hashes | none (a key is 32 random bytes; deriving its public half is `vessel-secure`'s job) |
 | `vessel-node` | `/secure` on the existing listener; the device preamble; scope checks; `device.*`; one relay link per configured relay; `vesseld relay` subcommand; `NodeInfo.public_key` | **`-> secure, relay`** |
@@ -135,46 +135,86 @@ the crates.
 
 ### `vessel-secure`
 
+As built (Track S, 2026-11-06; `crates/vessel-secure`, the source of
+truth):
+
 ```rust
 pub const SUITE: &str = "Noise_NK_25519_ChaChaPoly_SHA256";
 pub const PROLOGUE: &[u8] = b"vessel/secure/1";
+pub const PROOF_PROLOGUE: &[u8] = b"vessel/relay-proof/1";
+pub const MAX_RECORD: usize = 65_535;
+pub const DEFAULT_MAX_FRAME: u32 = 16 * 1024 * 1024;
 
 pub struct NodeKeypair { /* secret: Zeroizing<[u8; 32]>, public: NodePublicKey */ }
-impl NodeKeypair { pub fn from_secret(bytes: [u8; 32]) -> Self; pub fn public(&self) -> &NodePublicKey; }
-pub struct NodePublicKey([u8; 32]);          // base64url text form; Display, FromStr
-impl NodePublicKey {
-    pub fn routing_id(&self) -> RoutingId;   // base32 of SHA-256(key)[..16]
-    pub fn fingerprint(&self) -> String;     // "3fa9 c2d1 e4b5 a6f7" for people
+impl NodeKeypair {
+    pub fn from_secret(secret: [u8; 32]) -> Self;   // the 32 bytes of `node.key`
+    pub fn generate() -> Result<Self, getrandom::Error>;
+    pub fn public(&self) -> &NodePublicKey;
 }
+// NodePublicKey and RoutingId are vessel_proto's (see "Contract as built").
+pub fn routing_id(key: &NodePublicKey) -> RoutingId;   // SHA-256(key)[..16]
+pub fn fingerprint(key: &NodePublicKey) -> String;     // "300c 9c96 … bf92 4011"
 
-/// Any carrier of whole binary messages (a websocket's binary frames, or a
-/// byte stream with a `u16` length prefix): the channel needs nothing else.
+/// Any carrier of whole binary messages, in order and reliably.
 pub trait Carrier: Stream<Item = io::Result<Bytes>> + Sink<Bytes, Error = io::Error> + Unpin + Send + 'static {}
+pub fn memory_pair(capacity: NonZeroUsize) -> (MemoryCarrier, MemoryCarrier);
+pub struct LengthPrefixed<R, W>;                       // u16 big-endian length, then the message
 
-/// Client side: run the handshake to `node` over `carrier`.
 pub async fn initiate<C: Carrier>(carrier: C, node: &NodePublicKey) -> Result<SecureChannel<C>, SecureError>;
-/// Node side: answer a handshake with `keypair`.
 pub async fn respond<C: Carrier>(carrier: C, keypair: &NodeKeypair) -> Result<SecureChannel<C>, SecureError>;
+// initiate_with / respond_with take a Config { max_frame, handshake_timeout }.
 
-/// After the handshake: a `FrameTransport` (Stream<Item = Result<String, SecureError>>
-/// + Sink<String>), one protocol frame per message, chunked into records.
-pub struct SecureChannel<C> { /* snow TransportState, carrier, reassembly */ }
+/// Stream<Item = Result<String, SecureError>> + Sink<String, Error = SecureError>:
+/// a FrameTransport.
+pub struct SecureChannel<C>;
 
-pub enum SecureError { Handshake, Tampered, TooLarge { len: u64 }, Closed, Carrier(io::Error) }
+pub enum SecureError {
+    Handshake(snow::Error), HandshakeMessage { len }, Timeout(Duration),
+    Tampered(Tamper), TooLarge { len: u64, max: u32 }, NotUtf8, Exhausted,
+    Closed, NotReady, Carrier(io::Error), Noise(snow::Error),
+}
+impl SecureError { pub fn is_transient(&self) -> bool; }  // Carrier, Timeout
+
+// The relay's possession proof (S4).
+pub fn proof_challenge(key: &NodePublicKey) -> Result<(ProofChallenge, HandshakeMessage), SecureError>;
+impl ProofChallenge { pub fn verify(self, answer: &HandshakeMessage) -> bool; }
+pub fn answer_proof(keypair: &NodeKeypair, challenge: &HandshakeMessage) -> Result<HandshakeMessage, SecureError>;
 ```
 
+- Handshake: both messages exactly 48 bytes (an ephemeral key and an empty
+  payload's tag); anything else is `HandshakeMessage`. One deadline, 10 s
+  by default, covers the whole handshake.
+  - A client with the wrong key gets no answer to read: NK lets only the
+    node notice, and the node closes. The client sees the carrier end
+    (`Carrier(UnexpectedEof)`, transient). An impostor's answer fails at
+    the client with `Handshake`.
 - Record and chunk format (ADR 0009):
-  - one carrier message is one record of at most 65,535 bytes;
-  - a chunk's plaintext is `flags: u8` (`FIRST = 1`, `FINAL = 2`), then for
-    `FIRST` the frame's length (`u32`, big-endian, at most 16 MiB), then
-    data.
+  - one carrier message is one record of at most 65,535 bytes, the
+    ChaCha20-Poly1305 ciphertext of one chunk;
+  - a chunk's plaintext is `flags: u8` (`FIRST = 1`, `FINAL = 2`, other
+    bits refused), then for `FIRST` the frame's length (`u32`,
+    big-endian, at most 16 MiB), then data: at most 65,514 data bytes in a
+    `FIRST` chunk, 65,518 in the others;
+  - chunking is canonical: every chunk but a frame's last is full, so a
+    frame has exactly one encoding and cannot be stretched into many tiny
+    records;
+  - frames are UTF-8 (`NotUtf8` otherwise).
 - Every check happens before memory is allocated: record length, announced
-  frame length, and each chunk against what is left.
-- A failed authentication tag, a reserved flag, a chunk that overruns, or a
-  missing `FINAL` closes the channel with `Tampered`.
-- Handshake deadline: 10 s for the whole handshake.
-- Handshake payloads: empty. The prologue carries the version, and nothing
-  is negotiated (ADR 0009).
+  frame length, and each chunk against what is left. The buffer grows with
+  the data, never past the announced length.
+- A failed authentication tag (corrupted, replayed, reordered or dropped
+  records), a reserved flag, a missing or misplaced `FIRST`, an overrun, an
+  early or missing `FINAL`, or a short chunk closes the channel with
+  `Tampered`, as do `TooLarge` from the peer, `NotUtf8` and `Exhausted`.
+  Then the stream ends and sends fail with `Closed`. Refusing to send an
+  oversized frame is the one error that leaves the channel open.
+- A carrier that ends between frames ends the stream; one that ends inside
+  a frame is `Carrier(UnexpectedEof)`.
+- Fingerprint: the routing id's 16 bytes in eight groups of four hex
+  digits (the sketch had 64 bits): one derived value, matching relay logs,
+  and 128 bits leave no look-alike key to search for.
+- Websocket carriers (axum's on the node, tungstenite's on the client)
+  come with `vessel-relay` (S4, S5), which needs both anyway.
 
 ### `vessel-relay`
 
@@ -196,7 +236,7 @@ GET /health
   3. node: `Proof { message }`, the response;
   4. relay: `Registered`, or `Rejected { reason }` and close;
   5. then, per waiting client, relay: `Incoming { conn }`, where `conn` is
-     128 random bits, base32.
+     128 random bits, lowercase hex.
   - The node answers each `Incoming` by opening `/v1/accept?conn=…`.
   - A second registration for the same routing id replaces the first only
     after its own proof succeeds.
