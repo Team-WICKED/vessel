@@ -147,6 +147,9 @@ ADR 0001 records why; `docs/plans/backend-m1.md` says who owns which crate.
   through an in-memory transport.
 - Tests are deterministic: no wall-clock sleeps to wait for something; wait on
   the event.
+- A test's safety-net timeout (which only turns a hang into a failure) is
+  `vessel_testkit::within`: it builds the fakes first and starts the clock
+  after. The first fake build of a run can take a minute on a cold runner.
 
 ## 9. Dependencies
 

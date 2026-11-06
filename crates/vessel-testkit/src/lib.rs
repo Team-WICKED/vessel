@@ -25,16 +25,39 @@
 //!   copying fake logic into every crate's tests (duplication).
 //! - Choice: [`Fake::path`] runs `cargo build -p vessel-testkit --bins` once
 //!   per test process (Cargo releases its build lock while tests run) and
-//!   returns the binary next to the test executable. A fresh build is a
-//!   no-op check, so the cost is a fraction of a second per test binary.
+//!   returns the binary next to the test executable.
 //! - Constraint: the nested build uses the same target directory and profile
 //!   as the test executable, derived from its own path, so it never rebuilds
 //!   the world under different settings.
+//! - Cost (measured 2026-11-06): the nested build is *not* a no-op after
+//!   `cargo test --workspace`. Cargo unifies dependency features across
+//!   every package it builds, so this package built alone resolves different
+//!   features than the workspace build did, and the first nested build of a
+//!   run recompiles about 30 crates (tokio, serde, the ACP SDK and their
+//!   dependents): 22 s on the Linux CI runner, about 60 s on the Windows
+//!   one. Later test binaries of the same run find it fresh (well under a
+//!   second); so does every run once the target directory holds both
+//!   variants.
+//! - Consequence: the first call can take a minute and blocks its thread.
+//!   It must never run inside a test's deadline. [`within`] builds first and
+//!   only then starts the clock; tests with a deadline use it. Before this,
+//!   the first two agent tests on Windows CI spent their whole 30 s safety
+//!   net (and their runtime thread) waiting for the build and timed out.
+//! - Alternatives for the cost itself: declare every feature the workspace
+//!   enables on this package's dependencies (brittle: any other crate
+//!   adding a feature reopens the gap); build into a separate target
+//!   directory (the first build there compiles everything, which is slower);
+//!   CI builds `-p vessel-testkit --bins` in a step of its own before the
+//!   tests, which keeps test timings clean and puts the cost where it shows.
 
 use std::ffi::OsString;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+use tokio::time::error::Elapsed;
 
 /// A fake harness binary built from this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,6 +83,11 @@ impl Fake {
 
     /// Path of the freshly built binary.
     ///
+    /// The first call in a process runs the nested build, which can take a
+    /// minute and blocks the calling thread (see the crate documentation).
+    /// Inside a test with a deadline, call it only after [`within`] started
+    /// the test, never before the deadline is set up in some other way.
+    ///
     /// # Errors
     /// Fails if the test executable's location cannot be determined, the
     /// nested `cargo build` fails, or the binary is still missing afterwards.
@@ -72,6 +100,45 @@ impl Fake {
             Err(LocateError::Missing { path })
         }
     }
+}
+
+/// Build the fakes now (once per process; later calls return at once).
+///
+/// Blocks the calling thread for as long as the nested build takes.
+///
+/// # Errors
+/// As [`Fake::path`].
+pub fn prepare() -> Result<(), LocateError> {
+    built_dir().map(drop)
+}
+
+/// Run `test` with a deadline of `limit`, counted from *after* the fakes are
+/// built.
+///
+/// This is the safety net integration tests put around themselves so a hang
+/// becomes a failure. The one-time nested build (up to a minute on a cold CI
+/// runner) runs first, on the calling thread, before the clock starts:
+/// charged to the deadline it made the first tests of a run time out, and
+/// since it blocks the runtime thread the deadline cannot even fire until it
+/// is over. A failed build is not reported here; the [`Fake::path`] call
+/// that needs the binary reports it.
+///
+/// # Errors
+/// [`Elapsed`] when `test` did not finish within `limit`.
+pub async fn within<F: Future>(limit: Duration, test: F) -> Result<F::Output, Elapsed> {
+    // A build error is cached; the `Fake::path` call that needs the binary
+    // returns it.
+    timed(|| drop(prepare()), limit, test).await
+}
+
+/// `setup`, then `test` under a deadline that starts once `setup` returned.
+async fn timed<F: Future>(
+    setup: impl FnOnce(),
+    limit: Duration,
+    test: F,
+) -> Result<F::Output, Elapsed> {
+    setup();
+    tokio::time::timeout(limit, test).await
 }
 
 /// Why a fake binary could not be provided.
@@ -172,5 +239,46 @@ fn build(profile_dir: &Path) -> Result<(), LocateError> {
         Err(LocateError::Build {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A setup that blocks the thread (as the nested build does), then a
+    /// test that has to wait for something afterwards (as every process
+    /// test does).
+    ///
+    /// This is the one test here that is about time, so it uses real time
+    /// with wide margins: the setup outlasts the limit by 100 ms, and the
+    /// test needs 10 ms of the limit's 200 ms.
+    const SETUP: Duration = Duration::from_millis(300);
+    const LIMIT: Duration = Duration::from_millis(200);
+
+    fn slow_setup() {
+        std::thread::sleep(SETUP);
+    }
+
+    async fn short_test() -> u8 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        7
+    }
+
+    #[tokio::test]
+    async fn the_deadline_starts_after_a_slow_setup() {
+        assert_eq!(timed(slow_setup, LIMIT, short_test()).await, Ok(7));
+    }
+
+    /// The shape that failed on Windows CI: the setup inside the deadline.
+    /// Kept to show the test above would catch a regression.
+    #[tokio::test]
+    async fn a_setup_inside_the_deadline_uses_it_up() {
+        let charged = tokio::time::timeout(LIMIT, async {
+            slow_setup();
+            short_test().await
+        })
+        .await;
+        assert!(charged.is_err(), "{charged:?}");
     }
 }

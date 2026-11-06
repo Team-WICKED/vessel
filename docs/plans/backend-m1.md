@@ -70,6 +70,11 @@ Owns: `vessel-proc`, `vessel-harness`, `vessel-pty`, `vessel-agent`,
   a message chunk, a thought, a tool call with an update, a permission
   request, and ends the turn; honours `session/cancel`.
 - Dev-dependency only; never shipped in `vesseld`.
+- `within(limit, test)`: the safety net integration tests put around
+  themselves. It builds the fakes before starting the clock, because the
+  first nested build of a run is a real build (about 30 crates; 60 s on the
+  Windows CI runner) and timed out the first tests when it was charged to
+  them.
 
 ### R3. `vessel-harness`: knowledge of each harness
 - One module per `HarnessKind` (`claude.rs`, `codex.rs`, `gemini.rs`,
