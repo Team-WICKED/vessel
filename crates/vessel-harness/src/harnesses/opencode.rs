@@ -32,6 +32,8 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     login_command: Some(&["auth", "login"]),
     account_files: &[],
     sessions: None,
+    memory: None,
+    rebase: None,
     terminal_mcp: None,
     terminal_args: true,
 };

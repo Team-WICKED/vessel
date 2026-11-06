@@ -41,6 +41,7 @@ use vessel_proto::{HarnessSessionId, McpTransport, ResolvedMcpServers};
 use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, FileForm, McpError, TerminalMcp};
+use crate::memory::{MemoryFilesError, RebaseError};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -63,6 +64,8 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     login_command: Some(&["auth", "login"]),
     account_files: &[".credentials.json", ".claude.json"],
     sessions: Some(session_files),
+    memory: Some(memory_directories),
+    rebase: Some(rebase),
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
 };
@@ -161,6 +164,68 @@ fn session_files(
         }
     }
     Ok(Some(SessionFiles::new(transcript, extras)))
+}
+
+/// `projects/<slug>/memory/` of the project in `project` (under both
+/// spellings of the directory, as for sessions), or of every project.
+fn memory_directories(
+    home: &Path,
+    project: Option<&Path>,
+) -> Result<Vec<PathBuf>, MemoryFilesError> {
+    if let Some(cwd) = project {
+        return directories(cwd)
+            .iter()
+            .map(|directory| {
+                slug(directory)
+                    .map(|slug| Path::new("projects").join(slug).join("memory"))
+                    .ok_or_else(|| MemoryFilesError::InvalidDirectory {
+                        cwd: cwd.to_owned(),
+                    })
+            })
+            .collect();
+    }
+    let projects = home.join("projects");
+    let entries = match std::fs::read_dir(&projects) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(MemoryFilesError::Io {
+                path: projects,
+                source,
+            });
+        }
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| MemoryFilesError::Io {
+            path: projects.clone(),
+            source,
+        })?;
+        // Real directories only: a linked project is not walked into.
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            found.push(Path::new("projects").join(entry.file_name()).join("memory"));
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// A path under `projects/<slug of from>/` moved under the slug of `to`
+/// (its resolved form, which Claude Code names projects after); any other
+/// path as it is.
+fn rebase(path: &Path, from: &Path, to: &Path) -> Result<PathBuf, RebaseError> {
+    let invalid = |cwd: &Path| RebaseError {
+        cwd: cwd.to_owned(),
+    };
+    let resolved = directories(to).pop().unwrap_or_else(|| to.to_owned());
+    let target = slug(&resolved).ok_or_else(|| invalid(to))?;
+    for directory in directories(from) {
+        let source = slug(&directory).ok_or_else(|| invalid(from))?;
+        if let Ok(rest) = path.strip_prefix(Path::new("projects").join(&source)) {
+            return Ok(Path::new("projects").join(&target).join(rest));
+        }
+    }
+    Ok(path.to_owned())
 }
 
 /// `--mcp-config`'s file: `{"mcpServers": {"<name>": {...}}}`.
