@@ -12,10 +12,23 @@
 //!   `SecureError::Carrier` with [`relay_close`] and [`node_close`]. Any
 //!   other close ends the stream. A text message is an error: these
 //!   connections carry records only.
-//! - Idle: a relay pings every 10 s, so a carrier through one fails after
-//!   30 s of silence (`TimedOut`) and a half-open connection cannot hang a
-//!   reader. Direct connections have no pinger, so no idle limit unless
-//!   their owner sets one.
+//! - Keepalive ([`Keepalive`], one set of numbers): one end pings every
+//!   10 s and both ends fail a connection after 30 s of silence
+//!   (`TimedOut`), pings and pongs included, so a half-open connection (a
+//!   laptop that slept, a NAT mapping that expired) cannot hang a reader.
+//!   Through a relay, the relay pings both sides; on a direct route the
+//!   node pings its `/secure` connections ([`AxumCarrier`] with a
+//!   keepalive). Either way the client's carrier has the same silence
+//!   limit, so a client treats a direct route and a relayed one alike, and
+//!   the reconnecting stream takes over when it fires.
+//! - Pings from inside a carrier: the channel owns the carrier, and the RPC
+//!   layer splits it into a reading and a writing task, so a ping is sent
+//!   from whichever side is polled: the reading side when nothing is being
+//!   written (a quiet connection, the case that needs pings), the writing
+//!   side before its next record otherwise. The reading side never touches
+//!   the socket's write half while a write is in flight: the websocket
+//!   keeps one waker per direction, and taking it would leave the writing
+//!   task asleep.
 //! - The node's handshake: with NK only the node notices a client that
 //!   pinned the wrong key, so [`respond`] closes with `4401` when the
 //!   handshake fails (`vessel_proto::NodeClose`), and relays forward it.
@@ -32,6 +45,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use futures_util::Sink;
 use tokio::time::{Instant, Sleep};
 use vessel_proto::{NodeClose, RelayClose};
 use vessel_secure::{
@@ -106,6 +120,133 @@ fn text_message() -> io::Error {
         io::ErrorKind::InvalidData,
         "a text message on a secure-channel connection",
     )
+}
+
+/// How a connection is kept alive: one end pings every `ping`, and either
+/// end gives up after `silence` without a message. The same numbers for a
+/// relay's connections, a node's `/secure` and every client carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Keepalive {
+    /// How often the pinging end pings.
+    pub ping: Duration,
+    /// Silence after which either end drops the connection: three pings
+    /// missed.
+    pub silence: Duration,
+}
+
+impl Keepalive {
+    /// Ping every 10 s, give up after 30 s of silence.
+    pub const DEFAULT: Self = Self {
+        ping: Duration::from_secs(10),
+        silence: Duration::from_secs(30),
+    };
+}
+
+impl Default for Keepalive {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// When this end owes its peer a ping (a node's `/secure` connections,
+/// which nobody else pings).
+struct Pinger {
+    every: Duration,
+    next: Pin<Box<Sleep>>,
+    /// A ping is owed and not yet handed to the socket.
+    owed: bool,
+    /// A ping was handed to the socket and not yet flushed.
+    unflushed: bool,
+}
+
+impl Pinger {
+    fn new(every: Option<Duration>) -> Option<Self> {
+        every.map(|every| Self {
+            every,
+            next: Box::pin(tokio::time::sleep(every)),
+            owed: false,
+            unflushed: false,
+        })
+    }
+
+    /// Whether a ping is owed now; otherwise the next one wakes `cx`.
+    fn poll_owed(&mut self, cx: &mut Context<'_>) -> bool {
+        if !self.owed && self.next.as_mut().poll(cx).is_ready() {
+            self.owed = true;
+            let now = Instant::now();
+            self.next
+                .as_mut()
+                .reset(now.checked_add(self.every).unwrap_or(now));
+            // Registers `cx` for the one after.
+            let _pending = self.next.as_mut().poll(cx);
+        }
+        self.owed
+    }
+}
+
+/// Hand an owed ping to `socket`, from the reading side: only when no
+/// write is in flight (`writing`), and without waiting; a flush that cannot
+/// finish now is finished on a later call or by the next write.
+fn poll_ping<S, M>(
+    pinger: &mut Option<Pinger>,
+    mut socket: Pin<&mut S>,
+    ping: impl FnOnce() -> M,
+    writing: bool,
+    cx: &mut Context<'_>,
+) -> Result<(), S::Error>
+where
+    S: Sink<M>,
+{
+    let Some(pinger) = pinger else {
+        return Ok(());
+    };
+    if writing {
+        return Ok(());
+    }
+    if pinger.unflushed {
+        match socket.as_mut().poll_flush(cx) {
+            Poll::Ready(Ok(())) => pinger.unflushed = false,
+            Poll::Ready(Err(error)) => return Err(error),
+            Poll::Pending => return Ok(()),
+        }
+    }
+    if !pinger.poll_owed(cx) {
+        return Ok(());
+    }
+    match socket.as_mut().poll_ready(cx) {
+        Poll::Ready(Ok(())) => {}
+        Poll::Ready(Err(error)) => return Err(error),
+        Poll::Pending => return Ok(()),
+    }
+    socket.as_mut().start_send(ping())?;
+    pinger.owed = false;
+    match socket.poll_flush(cx) {
+        Poll::Ready(Ok(())) => {}
+        Poll::Ready(Err(error)) => return Err(error),
+        Poll::Pending => pinger.unflushed = true,
+    }
+    Ok(())
+}
+
+/// Hand an owed ping to `socket` from the writing side, before its next
+/// record; `socket` is ready (its `poll_ready` returned `Ready(Ok)`).
+fn ping_before_write<S, M>(
+    pinger: &mut Option<Pinger>,
+    socket: Pin<&mut S>,
+    ping: impl FnOnce() -> M,
+) -> Result<bool, S::Error>
+where
+    S: Sink<M>,
+{
+    match pinger {
+        Some(pinger) if pinger.owed => {
+            socket.start_send(ping())?;
+            pinger.owed = false;
+            pinger.unflushed = true;
+            Ok(true)
+        }
+        Some(_) | None => Ok(false),
+    }
 }
 
 /// An optional limit on silence: reset by every message, fires only while
