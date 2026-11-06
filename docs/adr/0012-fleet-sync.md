@@ -347,8 +347,13 @@ It is idempotent: running it again fills gaps and changes nothing else.
   edit the file through `toml_edit` under the fleet lock, keeping its
   comments; the node notices a change within seconds. There is no way to
   read a value back out. Protocol 6's `secret.set`, `secret.list` and
-  `secret.delete` (admin) call the same functions; `secret.copy` waits
-  for Track X's envelope.
+  `secret.delete` (admin) call the same functions. `secret.copy` (`vessel
+  fleet secret copy NAME --to NODE_ID`, a whole node id: never a name
+  or a prefix, which could match a node it was not meant for) reads the value here and sends it as `secret.set` through the
+  envelope as the caller, so it lands only where the target granted the
+  home `admin`, which the default grant leaves out; the refusal says to
+  join again with `--grant read,operate,admin`. The home grants its
+  members only `sync` and `relay`, so a secret is set there directly.
 - **MCP servers at launch (F3).** The node's `McpSource` is the fleet's
   (`fleet::FleetMcp`): a snapshot of the definitions of the manifest this
   node last applied (or published, on the home) and of `secrets.toml`,

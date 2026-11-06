@@ -456,9 +456,9 @@ async fn a_device_without_a_scope_is_forbidden_that_method() {
 
 /// Protocol 6: passing calls on needs `relay`, which `sync` does not
 /// include; past the check, the home's handler answers (this node is no
-/// home), and a method not built yet says so.
+/// home), and a secret this node does not have is not copied anywhere.
 #[tokio::test]
-async fn relaying_needs_its_own_scope_and_unbuilt_methods_say_so() {
+async fn relaying_needs_its_own_scope_and_a_missing_secret_is_not_copied() {
     let (_temp, node) = node().await;
     let mut members = Vec::new();
     for scopes in [
@@ -497,15 +497,15 @@ async fn relaying_needs_its_own_scope_and_unbuilt_methods_say_so() {
     let no_home = members[1].call(relay()).await.unwrap_err();
     assert_eq!(no_home.code(), Some(ErrorCode::Unavailable), "{no_home}");
 
-    let unbuilt = members[1]
+    let missing = members[1]
         .call(CopySecret {
             name: "DOCS_TOKEN".parse().unwrap(),
             to: NodeId::random(),
         })
         .await
         .unwrap_err();
-    assert_eq!(unbuilt.code(), Some(ErrorCode::Unsupported));
-    assert!(unbuilt.to_string().contains("secret.copy"), "{unbuilt}");
+    assert_eq!(missing.code(), Some(ErrorCode::NotFound), "{missing}");
+    assert!(missing.to_string().contains("DOCS_TOKEN"), "{missing}");
     node.stop().await.unwrap();
 }
 

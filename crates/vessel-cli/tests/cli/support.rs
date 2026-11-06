@@ -108,6 +108,22 @@ impl Fixture {
         self.vessel_at(&node, self.data.path(), args, stdin).await
     }
 
+    /// As [`vessel`](Self::vessel), logging at debug level on stderr
+    /// (`RUST_LOG`), so everything the command could print is captured.
+    pub(super) async fn vessel_debug(&self, args: &[&str], stdin: &[u8]) -> Ran {
+        let node = self.node.address().unwrap().to_string();
+        let mut child = command(&node, self.data.path(), self.data.path(), args)
+            .env("RUST_LOG", "debug")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = child.stdin.take().unwrap();
+        feed(input, stdin).await;
+        child.wait_with_output().await.unwrap().into()
+    }
+
     /// Run `vessel --node <node> <args>` in the directory `dir`.
     pub(super) async fn vessel_at(
         &self,
