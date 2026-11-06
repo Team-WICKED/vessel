@@ -69,7 +69,8 @@ with `--service` the node as a per-user service.
 Fleet sync is built: one node, the home, shares its instructions and
 skills, and every member node follows it into every profile (below).
 
-Not yet: secrets for fleet MCP servers, model routing, the LSP bridge. See
+Not yet: copying secrets between nodes, moving session history between
+machines, model routing, the LSP bridge. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Try it
@@ -207,6 +208,9 @@ vessel fleet members
   `vessel fleet restore <path>`. Files Vessel did not write are never
   touched.
 - `vessel fleet leave` stops following; the files stay.
+- MCP servers defined in the home's `fleet.toml` reach every session; a
+  secret they need is set on each node with `vessel fleet secret set
+  NAME` (typed, not shown, or piped) and never leaves it.
 
 ### Environment
 

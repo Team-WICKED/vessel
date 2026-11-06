@@ -29,6 +29,10 @@
 //! - A node is the home or a member, never both: `init` refuses a member,
 //!   `join` refuses a home, and if both files appear anyway the home wins
 //!   and the member loop stops.
+//! - Sessions' MCP servers (F3): `mcp::FleetMcp` is the node's
+//!   `McpSource`, answering from a snapshot of the applied manifest's
+//!   definitions and `secrets.toml` (`secrets`), which this loop keeps
+//!   current.
 //! - Targets come from the node's profiles (`local`); tests replace them
 //!   with fixed homes (`FleetTargets::Only`) so nothing is ever written
 //!   into the real harness homes of the machine they run on.
@@ -41,7 +45,9 @@ mod config;
 mod files;
 mod home;
 mod local;
+mod mcp;
 mod member;
+mod secrets;
 mod state;
 mod supervisor;
 #[cfg(test)]
@@ -59,7 +65,9 @@ pub use config::{FleetInit, InitError, SourcesError, init};
 pub use files::{FileError, FleetFiles};
 pub(crate) use home::Home;
 pub use local::{RestoreError, restore};
+pub(crate) use mcp::FleetMcp;
 pub use member::{JoinError, Joined, join, leave};
+pub use secrets::{SecretsError, delete_secret, secret_names, set_secret};
 pub use state::{ConflictEntry, ConflictWhy, FailureEntry, FleetState, FleetStatus, Role, status};
 /// A `skip` pattern of `fleet.toml` (`vessel fleet init --skip`).
 pub use vessel_fleet::SkipGlob;
@@ -110,6 +118,7 @@ pub(crate) fn start(
     files: FleetFiles,
     config: &FleetConfig,
     profiles: &Arc<NodeProfiles>,
+    mcp: Arc<FleetMcp>,
     tasks: &TaskTracker,
     stop: &CancellationToken,
 ) -> Arc<Home> {
@@ -119,6 +128,7 @@ pub(crate) fn start(
         files,
         local::TargetSource::new(&config.targets, profiles),
         state,
+        mcp,
     ));
     drop(tasks.spawn(supervisor::run(
         local,

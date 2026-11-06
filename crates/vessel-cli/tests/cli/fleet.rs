@@ -203,3 +203,68 @@ pub(crate) async fn init_home(fixture: &Fixture, sources: &Path, home_claude: &P
     );
     assert!(status.stdout.contains("generation 1"), "{}", status.stdout);
 }
+
+/// Plan F3: a secret is piped in (never an argument), listed by name, and
+/// never printed.
+#[tokio::test]
+async fn secrets_come_from_stdin_and_are_never_shown() {
+    within(async {
+        let data = tempfile::tempdir().unwrap();
+        let value = "hunter2-value";
+        let set = vessel_in(
+            data.path(),
+            &["fleet", "secret", "set", "DOCS_TOKEN"],
+            format!("{value}\n").as_bytes(),
+        )
+        .await;
+        assert!(set.ok, "{}", set.stderr);
+        assert!(set.stderr.contains("set DOCS_TOKEN"), "{}", set.stderr);
+        let file = std::fs::read_to_string(data.path().join("secrets.toml")).unwrap();
+        assert!(
+            file.contains(&format!("DOCS_TOKEN = \"{value}\"")),
+            "{file}"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(data.path().join("secrets.toml"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        let listed = vessel_in(data.path(), &["fleet", "secret", "list"], &[]).await;
+        assert!(listed.ok, "{}", listed.stderr);
+        assert_eq!(listed.stdout, "DOCS_TOKEN\n");
+
+        // A value on the command line is not taken; nor an empty one.
+        let argv = vessel_in(
+            data.path(),
+            &["fleet", "secret", "set", "OTHER", "on-the-command-line"],
+            &[],
+        )
+        .await;
+        assert!(!argv.ok);
+        let empty = vessel_in(data.path(), &["fleet", "secret", "set", "OTHER"], b"\n").await;
+        assert!(!empty.ok);
+        assert!(empty.stderr.contains("empty"), "{}", empty.stderr);
+        let bad = vessel_in(data.path(), &["fleet", "secret", "set", "not a name"], b"x").await;
+        assert!(!bad.ok);
+
+        let deleted = vessel_in(
+            data.path(),
+            &["fleet", "secret", "delete", "DOCS_TOKEN"],
+            &[],
+        )
+        .await;
+        assert!(deleted.ok, "{}", deleted.stderr);
+        let listed = vessel_in(data.path(), &["fleet", "secret", "list"], &[]).await;
+        assert!(listed.stderr.contains("no secrets"), "{}", listed.stderr);
+
+        for ran in [&set, &listed, &argv, &empty, &bad, &deleted] {
+            assert!(!ran.stdout.contains(value) && !ran.stderr.contains(value));
+        }
+    })
+    .await;
+}

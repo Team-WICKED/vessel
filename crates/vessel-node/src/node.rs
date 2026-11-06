@@ -22,13 +22,13 @@ use crate::agents::Agents;
 use crate::config::Config;
 use crate::devices::{Devices, Routes};
 use crate::error::NodeError;
-use crate::fleet::{self, FleetFiles};
+use crate::fleet::{self, FleetFiles, FleetMcp};
 use crate::guard::Guarded;
 use crate::identity;
 use crate::ipc::{self, AgentGateway, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
 use crate::profiles::NodeProfiles;
-use crate::profiles::launch::{AgentTools, Launcher, NoMcpServers};
+use crate::profiles::launch::{AgentTools, Launcher, McpSource};
 use crate::secure::{MAX_UNADMITTED, SecureGateway};
 use crate::server::{self, Gateway};
 use crate::service::{NodeService, Parts};
@@ -261,6 +261,9 @@ struct Core {
 struct SessionSetup {
     profiles: Arc<NodeProfiles>,
     launcher: Launcher,
+    /// The fleet's MCP servers, which the fleet loop keeps current and the
+    /// launcher asks for.
+    fleet_mcp: Arc<FleetMcp>,
 }
 
 impl SessionSetup {
@@ -270,10 +273,12 @@ impl SessionSetup {
             args: mcp.args,
             socket: Endpoint::of(&config.data_dir, id).path().to_owned(),
         });
+        let fleet_mcp = Arc::new(FleetMcp::default());
+        let source: Arc<dyn McpSource> = Arc::<FleetMcp>::clone(&fleet_mcp);
         Self {
             profiles: Arc::new(profiles),
-            // Fleet sync's source replaces `NoMcpServers` (ADR 0012).
-            launcher: Launcher::new(mcp_dir, Arc::new(NoMcpServers), tools),
+            launcher: Launcher::new(mcp_dir, source, tools),
+            fleet_mcp,
         }
     }
 }
@@ -325,6 +330,7 @@ fn core(
         FleetFiles::new(&config.data_dir),
         &config.fleet,
         &setup.profiles,
+        setup.fleet_mcp,
         &tasks,
         &stop,
     );
