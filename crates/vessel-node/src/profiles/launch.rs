@@ -23,12 +23,27 @@
 //!   so in its log.
 //! - Cost: the source is called on the async runtime, so it must not
 //!   block: it answers from memory.
+//!
+//! [Decision Log: the `vessel` server] (H4, ADR 0013)
+//! - Every session's agent gets one more stdio server, `vessel`: the
+//!   node's `vessel mcp` command (`Config::vessel_mcp`), with the node's
+//!   local endpoint, the session's id and its credential in that server's
+//!   own environment. So the secret reaches only `vessel mcp`: through
+//!   ACP for a structured session, the owner-only MCP file for Claude
+//!   Code's terminal, and Codex's environment for a Codex terminal, where
+//!   its name (`..._SECRET`) keeps Codex from passing it to the commands
+//!   the agent runs (ADR 0012, as built). It replaces a fleet server of the
+//!   same name.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use vessel_proto::{Creator, ResolvedMcpServers, SecretName, SessionSpec};
+use vessel_proto::{
+    AgentSecret, Creator, McpServerName, McpTransport, NodeId, ResolvedMcpServers, ResolvedValue,
+    SecretName, SessionId, SessionSpec,
+};
 use vessel_session::LaunchOptions;
 
 use super::NodeProfiles;
@@ -62,6 +77,26 @@ impl McpSource for NoMcpServers {
     }
 }
 
+/// The `vessel` server's variables. `vessel-mcp` reads the same names;
+/// its end-to-end test fails if they drift apart.
+const SOCKET_VARIABLE: &str = "VESSEL_NODE_SOCKET";
+const SESSION_VARIABLE: &str = "VESSEL_AGENT_SESSION";
+const SECRET_VARIABLE: &str = "VESSEL_AGENT_SECRET";
+
+/// The `vessel` server's name in every session.
+const VESSEL_SERVER: &str = "vessel";
+
+/// How sessions' agents reach this node: `vessel mcp` (ADR 0013).
+#[derive(Debug, Clone)]
+pub(crate) struct AgentTools {
+    /// `vessel` (or what runs `vessel mcp`).
+    pub(crate) program: PathBuf,
+    /// `["mcp"]`.
+    pub(crate) args: Vec<String>,
+    /// The node's local socket or pipe name.
+    pub(crate) socket: PathBuf,
+}
+
 /// Everything `session.create` adds to the spec.
 #[derive(Debug)]
 pub(crate) struct Launcher {
@@ -69,12 +104,70 @@ pub(crate) struct Launcher {
     mcp_dir: PathBuf,
     /// The fleet's MCP servers.
     mcp: Arc<dyn McpSource>,
+    /// The `vessel` server, when the node knows how to run it.
+    tools: Option<AgentTools>,
 }
 
 impl Launcher {
-    /// A launcher writing MCP files in `mcp_dir`, with `mcp`'s servers.
-    pub(crate) fn new(mcp_dir: PathBuf, mcp: Arc<dyn McpSource>) -> Self {
-        Self { mcp_dir, mcp }
+    /// A launcher writing MCP files in `mcp_dir`, with `mcp`'s servers,
+    /// and `tools` as every session's `vessel` server.
+    pub(crate) fn new(
+        mcp_dir: PathBuf,
+        mcp: Arc<dyn McpSource>,
+        tools: Option<AgentTools>,
+    ) -> Self {
+        Self {
+            mcp_dir,
+            mcp,
+            tools,
+        }
+    }
+
+    /// Whether sessions get the `vessel` server (and so a credential).
+    pub(crate) const fn has_tools(&self) -> bool {
+        self.tools.is_some()
+    }
+
+    /// Add the `vessel` server for session `session`, holding `secret`.
+    pub(crate) fn attach_tools(
+        &self,
+        servers: &mut ResolvedMcpServers,
+        session: SessionId,
+        secret: &AgentSecret,
+    ) -> Result<(), ServiceError> {
+        let Some(tools) = &self.tools else {
+            return Ok(());
+        };
+        let name = |text: &str| text.parse().map_err(ServiceError::AgentTools);
+        let socket = tools
+            .socket
+            .to_str()
+            .ok_or(ServiceError::AgentToolsPath)?
+            .to_owned();
+        let env = BTreeMap::from([
+            (name(SOCKET_VARIABLE)?, ResolvedValue::new(socket)),
+            (
+                name(SESSION_VARIABLE)?,
+                ResolvedValue::new(session.to_string()),
+            ),
+            (
+                name(SECRET_VARIABLE)?,
+                ResolvedValue::new(secret.to_string()),
+            ),
+        ]);
+        let server: McpServerName = VESSEL_SERVER.parse().map_err(ServiceError::AgentTools)?;
+        let replaced = servers.insert(
+            server,
+            McpTransport::Stdio {
+                command: tools.program.clone(),
+                args: tools.args.clone(),
+                env,
+            },
+        );
+        if replaced.is_some() {
+            tracing::warn!("a fleet MCP server named `vessel` is replaced by the node's own");
+        }
+        Ok(())
     }
 
     /// The options for `spec`, created by `principal`.
@@ -111,6 +204,7 @@ impl Launcher {
             mcp_dir: Some(self.mcp_dir.clone()),
             created_by: creator(principal),
             notices,
+            id: None,
         })
     }
 
@@ -136,12 +230,26 @@ fn missing_secret(name: &SecretName) -> String {
     )
 }
 
-/// Who a caller is, as a session records it (ADR 0013). Agents (H4) get
-/// their own principal later.
+/// Who a caller is, as a session records it (ADR 0013).
 fn creator(principal: &Principal) -> Creator {
     match principal {
         Principal::Owner => Creator::Owner,
         Principal::Device { id, .. } => Creator::Device { id: *id },
+        Principal::Agent { node, session, .. } => Creator::Agent {
+            node: *node,
+            session: *session,
+        },
+    }
+}
+
+/// Whether `creator` is an agent session of `node`: the session, if so.
+pub(crate) fn agent_session(creator: &Creator, node: NodeId) -> Option<SessionId> {
+    match creator {
+        Creator::Agent {
+            node: agent_node,
+            session,
+        } if *agent_node == node => Some(*session),
+        Creator::Agent { .. } | Creator::Owner | Creator::Device { .. } => None,
     }
 }
 
@@ -186,7 +294,7 @@ mod tests {
             Some(dir.path().to_owned()),
         )
         .unwrap();
-        let launcher = Launcher::new(dir.path().join("mcp"), Arc::new(OneServer));
+        let launcher = Launcher::new(dir.path().join("mcp"), Arc::new(OneServer), None);
         let spec = SessionSpec::new(
             HarnessKind::ClaudeCode,
             SessionMode::Terminal {
@@ -208,7 +316,7 @@ mod tests {
         assert!(notice.starts_with("vessel: secret WEB_TOKEN "), "{notice}");
         assert!(!notice.contains("value-never-logged"), "{notice}");
 
-        let none = Launcher::new(dir.path().join("mcp"), Arc::new(NoMcpServers))
+        let none = Launcher::new(dir.path().join("mcp"), Arc::new(NoMcpServers), None)
             .options(&profiles, &spec, &Principal::Owner)
             .unwrap();
         assert!(none.mcp_servers.is_empty() && none.notices.is_empty());

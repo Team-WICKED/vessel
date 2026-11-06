@@ -88,10 +88,15 @@ pub struct LaunchOptions {
     /// starting with `vessel:` by convention: for example MCP servers left
     /// out because a secret is missing (ADR 0012).
     pub notices: Vec<String>,
+    /// The session's id, when the caller needs it before the session starts
+    /// (an agent credential is bound to it, ADR 0013); a fresh random one
+    /// otherwise. An id the runtime already has is refused.
+    pub id: Option<SessionId>,
 }
 
 /// What a session records about its start besides its spec.
 struct Record {
+    id: SessionId,
     created_by: Creator,
     notices: Vec<String>,
 }
@@ -184,8 +189,14 @@ impl SessionRuntime {
             mcp_dir,
             created_by,
             notices,
+            id,
         } = options;
+        let id = id.unwrap_or_else(SessionId::random);
+        if self.get(id).is_some() {
+            return Err(SessionError::DuplicateId(id));
+        }
         let record = Record {
+            id,
             created_by,
             notices,
         };
@@ -421,10 +432,11 @@ impl SessionRuntime {
         control: Option<mpsc::Sender<Control>>,
     ) -> Parts {
         let Record {
+            id,
             created_by,
             notices,
         } = record;
-        let (info, kill, shared) = self.shared(spec, created_by, input, control);
+        let (info, kill, shared) = self.shared(id, spec, created_by, input, control);
         let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         Parts {
             life: Lifecycle {
@@ -440,12 +452,12 @@ impl SessionRuntime {
     /// Initial info and the state shared by the actor and its handles.
     fn shared(
         &self,
+        id: SessionId,
         spec: SessionSpec,
         created_by: Creator,
         input: Input,
         control: Option<mpsc::Sender<Control>>,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
-        let id = SessionId::random();
         let (info, info_receiver) =
             watch::channel(SessionInfo::new(id, spec, Utc::now()).with_creator(created_by));
         let kill = self.shutdown.child_token();

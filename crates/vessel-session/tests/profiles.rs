@@ -9,8 +9,8 @@
 
 use vessel_harness::{HarnessError, Profile, SessionFilesError, home};
 use vessel_proto::{
-    ContentBlock, Creator, DeviceId, ErrorCode, HarnessKind, HarnessSessionId, SessionInput,
-    SessionStatus, StopReason,
+    ContentBlock, Creator, DeviceId, ErrorCode, HarnessKind, HarnessSessionId, SessionId,
+    SessionInput, SessionStatus, StopReason,
 };
 use vessel_session::{LaunchOptions, MoveError, ProfileMove, SessionError};
 
@@ -675,14 +675,22 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
             mcp_dir: None,
             created_by: device.clone(),
             notices: vec!["vessel: a notice".to_owned()],
+            id: Some(SessionId::random()),
         };
         let created = fixture
             .create(structured(None), options.clone())
             .await
             .unwrap();
         drop(created.durable);
-        // Recorded as asked: the profile and who created it.
+        // Recorded as asked: the id, the profile and who created it.
         let info = created.handle.info();
+        assert_eq!(Some(info.id), options.id);
+        // The id is taken while the runtime has the session.
+        let error = fixture
+            .create(structured(None), options.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SessionError::DuplicateId(_)), "{error:?}");
         assert_eq!(info.created_by, device);
         assert_eq!(info.profile.as_ref(), Some(alt.name()));
         let mut reader = Reader::new(created.handle);
@@ -714,7 +722,13 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
 
         // Resumed: the same servers again, and the id that was loaded.
         let created = fixture
-            .create(structured(Some("fake-session-3")), options)
+            .create(
+                structured(Some("fake-session-3")),
+                LaunchOptions {
+                    id: None,
+                    ..options
+                },
+            )
             .await
             .unwrap();
         drop(created.durable);

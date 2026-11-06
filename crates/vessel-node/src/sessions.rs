@@ -35,6 +35,7 @@ use vessel_session::{
 };
 use vessel_store::Store;
 
+use crate::agents::Agents;
 use crate::error::ServiceError;
 use crate::persist::{self, Durability, Persisted};
 
@@ -62,15 +63,23 @@ pub(crate) struct Sessions {
     durability: RwLock<HashMap<SessionId, watch::Receiver<Durability>>>,
     /// Session creations and persist tasks; shutdown waits for both.
     tasks: TaskTracker,
+    /// Sessions' agents: a session's credential is retired when it ends.
+    agents: Arc<Agents>,
 }
 
 impl Sessions {
-    pub(crate) fn new(runtime: Arc<SessionRuntime>, store: Store, tasks: TaskTracker) -> Self {
+    pub(crate) fn new(
+        runtime: Arc<SessionRuntime>,
+        store: Store,
+        tasks: TaskTracker,
+        agents: Arc<Agents>,
+    ) -> Self {
         Self {
             runtime,
             store,
             durability: RwLock::new(HashMap::new()),
             tasks,
+            agents,
         }
     }
 
@@ -102,6 +111,13 @@ impl Sessions {
     ) -> Result<SessionInfo, ServiceError> {
         let Created { handle, durable } = self.runtime.create_with(spec, options).await?;
         let id = handle.id();
+        // The agent's credential dies with the session (ADR 0013).
+        let ending = handle.clone();
+        let agents = Arc::clone(&self.agents);
+        drop(self.tasks.spawn(async move {
+            let _final = ending.ended().await;
+            agents.retire(id);
+        }));
         // Visible from here on (see the module docs). Readers that need the
         // log wait on the watch until persistence starts below.
         let (durability, watching) = watch::channel(Durability::Through(EventSeq::ZERO));

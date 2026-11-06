@@ -55,6 +55,7 @@ impl Fixture {
             Arc::clone(&runtime),
             store.clone(),
             tasks.clone(),
+            Arc::new(crate::agents::Agents::new(vessel_proto::NodeId::random())),
         ));
         Self {
             data,

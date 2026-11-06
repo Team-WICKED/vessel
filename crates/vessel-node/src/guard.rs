@@ -20,13 +20,23 @@
 //!   service cannot be handed to a `Server` without this wrapper.
 //! - Cost: the rows repeat the protocol table's handler names and types;
 //!   the compiler keeps them in step.
+//!
+//! [Decision Log: ownership] (protocol 5, ADR 0013)
+//! - Agents may `operate` only on sessions their own session started (or
+//!   that those started). Every request type declares which session it
+//!   operates on ([`Target`]); the generated method checks ownership right
+//!   after the scope, so, as with scopes, a new method does not compile
+//!   until it says. Reads (`session.get`, `session.read`,
+//!   `session.subscribe`) name a session too but are not ownership-checked:
+//!   an agent sees the fleet's sessions, as ADR 0013 grants.
 
 use vessel_proto::{
     Ack, BlobChunk, CreateSession, DeviceInfo, EventPage, FleetMember, Generation, GetManifest,
     GetNode, GetSession, Handler, Harness, Invitation, InviteDevice, KillSession, ListDevices,
     ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile, NodeInfo,
     ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, Request, RevokeDevice,
-    SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet, WireError,
+    SendInput, SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet,
+    WireError,
 };
 
 use crate::service::{Connection, NodeService};
@@ -48,12 +58,70 @@ macro_rules! guarded {
                     request: $request,
                 ) -> Result<$response, WireError> {
                     connection.principal().permit(<$request as Request>::METHOD)?;
+                    if let Some(session) = Target::target(&request) {
+                        self.0.check_owner(connection.principal(), session).await?;
+                    }
                     self.0.$handler(connection, request).await
                 }
             )*
         }
     };
 }
+
+/// The session an `operate` call acts on, for the ownership rule.
+trait Target {
+    fn target(&self) -> Option<SessionId>;
+}
+
+macro_rules! targets {
+    ($( $request:ty ),* $(,)?) => {
+        $(
+            impl Target for $request {
+                fn target(&self) -> Option<SessionId> {
+                    Some(self.session)
+                }
+            }
+        )*
+    };
+}
+
+macro_rules! untargeted {
+    ($( $request:ty ),* $(,)?) => {
+        $(
+            impl Target for $request {
+                fn target(&self) -> Option<SessionId> {
+                    None
+                }
+            }
+        )*
+    };
+}
+
+targets!(SendInput, KillSession, MoveProfile);
+
+// `session.create` is limited by `agents` instead (count and depth); the
+// reads are open to every agent; the rest are not `operate` calls.
+untargeted!(
+    GetNode,
+    ListHarnesses,
+    ListSessions,
+    GetSession,
+    CreateSession,
+    ReadEvents,
+    Subscribe,
+    Unsubscribe,
+    StopNode,
+    InviteDevice,
+    ListDevices,
+    RevokeDevice,
+    ListProfiles,
+    ReloadProfiles,
+    GetManifest,
+    ReadBlob,
+    WatchFleet,
+    ReportApplied,
+    ListMembers,
+);
 
 guarded! {
     node_info: GetNode => NodeInfo;

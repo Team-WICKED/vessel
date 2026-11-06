@@ -11,15 +11,17 @@ use vessel_proto::{
     GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession, ListDevices,
     ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile, NodeInfo,
     ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, Request, RevokeDevice,
-    SendInput, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet, WireError,
+    SendInput, SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet,
+    WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
+use crate::agents::{Agents, MAX_DEPTH};
 use crate::devices::Devices;
 use crate::error::ServiceError;
 use crate::lifecycle::Lifecycle;
 use crate::principal::Principal;
-use crate::profiles::launch::Launcher;
+use crate::profiles::launch::{Launcher, agent_session};
 use crate::profiles::{NodeProfiles, moving};
 use crate::sessions::Sessions;
 use crate::subscribe;
@@ -38,6 +40,8 @@ pub(crate) struct NodeService {
     profiles: Arc<NodeProfiles>,
     /// What `session.create` adds to the spec.
     launcher: Launcher,
+    /// Sessions' agents (ADR 0013): credentials, grants, limits.
+    agents: Arc<Agents>,
 }
 
 /// The parts a [`NodeService`] serves.
@@ -49,6 +53,7 @@ pub(crate) struct Parts {
     pub(crate) forwarders: TaskTracker,
     pub(crate) profiles: Arc<NodeProfiles>,
     pub(crate) launcher: Launcher,
+    pub(crate) agents: Arc<Agents>,
 }
 
 impl NodeService {
@@ -61,6 +66,7 @@ impl NodeService {
             forwarders,
             profiles,
             launcher,
+            agents,
         } = parts;
         Self {
             lifecycle,
@@ -70,6 +76,7 @@ impl NodeService {
             forwarders,
             profiles,
             launcher,
+            agents,
         }
     }
 }
@@ -155,7 +162,8 @@ impl NodeService {
     }
 
     /// `session.create`: the spec's profile resolved, the caller recorded
-    /// as its creator (ADRs 0011, 0013).
+    /// as its creator, and the session's agent given its credential within
+    /// the caller's grant and the agent limits (ADRs 0011, 0013).
     pub(crate) async fn create_session(
         &self,
         connection: &Connection,
@@ -164,14 +172,29 @@ impl NodeService {
         if self.lifecycle.is_draining() {
             return Err(wire(&ServiceError::Draining));
         }
-        let options = self
+        let mut options = self
             .launcher
             .options(&self.profiles, &request.spec, &connection.principal)
             .map_err(|error| wire(&error))?;
-        self.sessions
-            .create(request.spec, options)
-            .await
-            .map_err(|error| wire(&error))
+        let id = SessionId::random();
+        let secret = self
+            .agents
+            .reserve(id, &connection.principal, self.launcher.has_tools())
+            .map_err(|error| wire(&error))?;
+        options.id = Some(id);
+        if let Some(secret) = &secret
+            && let Err(error) = self
+                .launcher
+                .attach_tools(&mut options.mcp_servers, id, secret)
+        {
+            self.agents.forget(id);
+            return Err(wire(&error));
+        }
+        let created = self.sessions.create(request.spec, options).await;
+        if created.is_err() {
+            self.agents.forget(id);
+        }
+        created.map_err(|error| wire(&error))
     }
 
     pub(crate) async fn send_input(
@@ -328,15 +351,58 @@ impl NodeService {
         _: &Connection,
         request: MoveProfile,
     ) -> Result<SessionInfo, WireError> {
+        let id = request.session;
         let profiles = &self.profiles;
         let launcher = &self.launcher;
         let lookup = &self.lookup;
-        self.sessions
-            .move_profile(request.session, async |info: &SessionInfo| {
-                moving::plan(profiles, launcher, lookup, info, &request).await
+        let agents = &self.agents;
+        let moved = self
+            .sessions
+            .move_profile(id, async |info: &SessionInfo| {
+                let mut plan = moving::plan(profiles, launcher, lookup, info, &request).await?;
+                // The restarted agent's `vessel mcp` gets a credential of
+                // its own (`agents`, Decision Log).
+                if let Some(secret) = agents.begin_move(id)? {
+                    launcher.attach_tools(&mut plan.mcp_servers, id, &secret)?;
+                }
+                Ok(plan)
             })
-            .await
-            .map_err(|error| wire(&error))
+            .await;
+        self.agents.end_move(id, moved.is_ok());
+        moved.map_err(|error| wire(&error))
+    }
+
+    /// For an agent, an `operate` call on `session` needs the session to
+    /// have been started by the agent's session or a session it started,
+    /// and so on (ADR 0013); anyone else passes.
+    pub(crate) async fn check_owner(
+        &self,
+        principal: &Principal,
+        session: SessionId,
+    ) -> Result<(), WireError> {
+        let Principal::Agent {
+            node,
+            session: agent,
+            ..
+        } = principal
+        else {
+            return Ok(());
+        };
+        let mut current = session;
+        // A chain longer than the depth limit cannot lead to the agent.
+        for _step in 0..=MAX_DEPTH {
+            let info = self
+                .sessions
+                .get(current)
+                .await
+                .map_err(|error| wire(&error))?;
+            match agent_session(&info.created_by, *node) {
+                Some(parent) if parent == *agent => return Ok(()),
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        Err(wire(&ServiceError::NotOwned(session)))
     }
 }
 

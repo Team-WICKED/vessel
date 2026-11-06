@@ -22,6 +22,16 @@
 //! - The answer to a bad token is the protocol's own `rejected` frame, so
 //!   both the proxy (to exit with `ProxyExit::Refused`) and the client
 //!   behind it (as a refused handshake) understand it.
+//!
+//! [Decision Log: agents] (protocol 5, ADR 0013)
+//! - A session's `vessel mcp` presents its session's credential instead of
+//!   the token: a JSON object (`AgentAuth`), told apart by its first
+//!   character, since a token is never one. A credential that is unknown,
+//!   wrong, or of an ended session gets the same `rejected` answer as a
+//!   bad token, saying nothing about which part was wrong.
+//! - Admitted, the connection runs with its own closing token, registered
+//!   with the agent (`agents::Registration`), so it closes when its session
+//!   ends, the way a revoked device's connections close.
 
 use std::io;
 use std::path::PathBuf;
@@ -30,13 +40,16 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use vessel_proto::{ErrorCode, NodeId, ServerFrame, WireError};
-use vessel_rpc::{Framed, MAX_FRAME, Server};
+use vessel_proto::{AgentAuth, ErrorCode, NodeId, NodeInfo, ServerFrame, WireError};
+use vessel_rpc::{Framed, MAX_FRAME, Server, ServerConfig};
 use vessel_store::{DataDir, NodeToken};
 
+use crate::agents::{Agents, Registration};
 use crate::guard::Guarded;
+use crate::principal::Principal;
 use crate::service::Connection;
 
 /// How long a new local connection has to present the token.
@@ -208,6 +221,43 @@ pub(crate) struct LocalGateway {
     pub(crate) rpc: Arc<Server<Guarded>>,
     pub(crate) token: Arc<NodeToken>,
     pub(crate) connections: TaskTracker,
+    pub(crate) agents: AgentGateway,
+}
+
+/// What an agent's connection needs: its own server, closed with its
+/// session.
+#[derive(Debug, Clone)]
+pub(crate) struct AgentGateway {
+    pub(crate) agents: Arc<Agents>,
+    pub(crate) service: Arc<Guarded>,
+    pub(crate) info: watch::Receiver<NodeInfo>,
+    pub(crate) config: ServerConfig,
+    /// The node's closing; each agent connection's token is a child.
+    pub(crate) closing: CancellationToken,
+}
+
+impl AgentGateway {
+    pub(crate) fn new(
+        agents: Arc<Agents>,
+        secure: &crate::secure::SecureGateway,
+        config: ServerConfig,
+    ) -> Self {
+        Self {
+            agents,
+            service: Arc::clone(&secure.service),
+            info: secure.lifecycle.watch_info(),
+            config,
+            closing: secure.closing.clone(),
+        }
+    }
+}
+
+/// Who a local connection's first frame says it is.
+enum Admitted {
+    /// The node's token.
+    Owner,
+    /// A session's agent, closed when its session ends.
+    Agent(Principal, Registration),
 }
 
 /// Accept local connections until `stop` is cancelled.
@@ -242,7 +292,7 @@ pub(crate) async fn serve(
     }
 }
 
-/// One local connection: the token preamble, then the protocol.
+/// One local connection: the token or agent preamble, then the protocol.
 async fn connection<S>(stream: S, gateway: LocalGateway)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
@@ -250,9 +300,12 @@ where
     let (reader, writer) = tokio::io::split(stream);
     let mut framed = Framed::new(reader, writer, MAX_FRAME);
     let presented = tokio::time::timeout(PREAMBLE_TIMEOUT, framed.next()).await;
-    let accepted = matches!(&presented, Ok(Some(Ok(token))) if gateway.token.verify(token));
-    if !accepted {
-        tracing::info!("refused a local connection without the right token");
+    let admitted = match &presented {
+        Ok(Some(Ok(frame))) => admit(&gateway, frame),
+        Ok(Some(Err(_)) | None) | Err(_) => None,
+    };
+    let Some(admitted) = admitted else {
+        tracing::info!("refused a local connection without the right token or credential");
         let rejected = ServerFrame::Rejected {
             error: WireError::new(ErrorCode::Unauthorized, "missing or wrong token"),
         };
@@ -263,8 +316,39 @@ where
             tracing::debug!("refused local peer left before the answer");
         }
         return;
-    }
-    if let Err(error) = gateway.rpc.serve(framed, Connection::owner).await {
+    };
+    let served = match admitted {
+        Admitted::Owner => gateway.rpc.serve(framed, Connection::owner).await,
+        Admitted::Agent(principal, registration) => {
+            let agent = &gateway.agents;
+            let server = Server::new(
+                Arc::clone(&agent.service),
+                agent.info.clone(),
+                agent.config.clone(),
+                registration.closing().clone(),
+            );
+            let result = server
+                .serve(framed, move |peer| Connection::new(peer, principal))
+                .await;
+            drop(registration);
+            result
+        }
+    };
+    if let Err(error) = served {
         tracing::info!(error = %error, "local connection ended abnormally");
     }
+}
+
+/// The node's token, or a live session's credential (`AgentAuth`, a JSON
+/// object); `None` for anything else.
+fn admit(gateway: &LocalGateway, frame: &str) -> Option<Admitted> {
+    if frame.starts_with('{') {
+        let auth: AgentAuth = serde_json::from_str(frame).ok()?;
+        let (principal, registration) = gateway
+            .agents
+            .agents
+            .admit(&auth, &gateway.agents.closing)?;
+        return Some(Admitted::Agent(principal, registration));
+    }
+    gateway.token.verify(frame).then_some(Admitted::Owner)
 }

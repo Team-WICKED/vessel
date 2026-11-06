@@ -261,3 +261,28 @@ pub(crate) async fn read_until(
         }
     }
 }
+
+/// Prompt a structured session and return its reply text.
+pub(crate) async fn ask(
+    client: &NodeClient,
+    stream: &mut SessionStream,
+    seen: &mut Vec<EventRecord>,
+    session: SessionId,
+    text: &str,
+) -> String {
+    let start = seen.len();
+    client.send(session, prompt(text)).await.unwrap();
+    read_until(stream, seen, |record| {
+        matches!(agent_of(record), Some(AgentEvent::TurnEnded { .. }))
+    })
+    .await;
+    seen[start..]
+        .iter()
+        .filter_map(|record| match agent_of(record) {
+            Some(AgentEvent::MessageChunk {
+                content: ContentBlock::Text { text },
+            }) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
