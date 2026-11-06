@@ -111,6 +111,11 @@ impl Home {
         }
     }
 
+    /// The fleet files of this node.
+    pub(crate) const fn files(&self) -> &FleetFiles {
+        &self.files
+    }
+
     /// Serve `published` from now on.
     pub(crate) fn publish(&self, published: Option<Arc<Published>>) {
         let _previous = self.published.send_replace(published);

@@ -1,12 +1,13 @@
 //! [`NodeClient`]: one typed method per protocol call.
 
 use vessel_proto::{
-    BlobChunk, BlobHash, BundlePath, ClientInfo, CreateSession, DeviceId, DeviceInfo, EventPage,
-    EventSeq, FleetMember, Generation, GetManifest, GetNode, GetSession, Harness, HarnessKind,
-    Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles,
-    ListSessions, Manifest, MoveProfile, NodeInfo, ProfileInfo, ProfileName, ProtocolVersion,
-    ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice, Scope, SendInput, SessionId,
-    SessionInfo, SessionInput, SessionSpec, StopNode, StopWhen, Subscribe, WatchFleet,
+    BlobChunk, BlobHash, BundlePath, ClientInfo, CreateSession, DeleteSecret, DeviceId,
+    DeviceInfo, EventPage, EventSeq, FleetMember, Generation, GetManifest, GetNode, GetSession,
+    Harness, HarnessKind, Invitation, InviteDevice, KillSession, ListDevices, ListHarnesses,
+    ListMembers, ListProfiles, ListSecrets, ListSessions, Manifest, MoveProfile, NodeInfo,
+    ProfileInfo, ProfileName, ProtocolVersion, ReadBlob, ReadEvents, ReloadProfiles,
+    ReportApplied, RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId,
+    SessionInfo, SessionInput, SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, WatchFleet,
 };
 use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription};
 
@@ -329,6 +330,36 @@ impl NodeClient {
     /// [`CallError`].
     pub async fn fleet_members(&self) -> Result<Vec<FleetMember>, CallError> {
         self.connection.call(ListMembers).await
+    }
+
+    /// `secret.set` (protocol 6): store `value` as secret `name` on the
+    /// node. Needs `admin`.
+    ///
+    /// # Errors
+    /// `Conflict` when the node's `secrets.toml` cannot be used; otherwise
+    /// see [`CallError`].
+    pub async fn secret_set(&self, name: SecretName, value: SecretValue) -> Result<(), CallError> {
+        self.connection
+            .call(SetSecret { name, value })
+            .await
+            .map(drop)
+    }
+
+    /// `secret.list` (protocol 6): the names of the node's secrets, never
+    /// their values. Needs `admin`.
+    ///
+    /// # Errors
+    /// See [`CallError`].
+    pub async fn secret_list(&self) -> Result<Vec<SecretName>, CallError> {
+        self.connection.call(ListSecrets).await
+    }
+
+    /// `secret.delete` (protocol 6). Needs `admin`.
+    ///
+    /// # Errors
+    /// `NotFound` when it is not set; otherwise see [`CallError`].
+    pub async fn secret_delete(&self, name: SecretName) -> Result<(), CallError> {
+        self.connection.call(DeleteSecret { name }).await.map(drop)
     }
 
     /// `device.invite` with explicit `scopes` (protocol 5): `[sync]` makes
