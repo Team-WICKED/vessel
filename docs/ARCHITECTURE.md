@@ -124,7 +124,9 @@ depend on the node, so there is no cycle).
     being read so `Cancel` gets through), per-connection outbound queue
     with bounded flush batching, subscription ordering, release and lag on
     both ends (ADR 0006), in-memory transport for tests.
-  - `vessel-store`: data directory (`node.id`, 0600 `token`), SQLite event
+  - `vessel-store`: owner-only data directory (Unix: 0700, an existing
+    one tightened or refused if another user's; `node.id`, `token` and
+    the event log with its `-wal`/`-shm` files 0600), SQLite event
     log with a batching writer thread, paged reads, restart recovery to
     `Interrupted`, retention, `user_version` migrations.
   - `vessel-client`: websocket connection with the bearer token, one typed

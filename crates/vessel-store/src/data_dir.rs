@@ -3,9 +3,12 @@
 //! ```text
 //! <root>/            mode 0700 on Unix
 //!   node.id          the node's id (a UUID), created on first start
-//!   token            the access token, mode 0600, created on first start
+//!   token            the access token, created on first start
 //!   vessel.db        the event log (plus `SQLite`'s -wal and -shm files)
 //! ```
+//!
+//! Every file is owner-only (0600 on Unix); see `files` for why and for
+//! Windows.
 //!
 //! Both identity files are created once and never rewritten. Deleting
 //! `token` and restarting the node rotates the token (ADR 0005); deleting
@@ -17,7 +20,7 @@ use std::path::{Path, PathBuf};
 use vessel_proto::NodeId;
 
 use crate::error::StoreError;
-use crate::files::{self, Access};
+use crate::files::{self, Privacy};
 use crate::token::NodeToken;
 
 const NODE_ID_FILE: &str = "node.id";
@@ -62,12 +65,36 @@ impl DataDir {
         self.root.join(TOKEN_FILE)
     }
 
-    /// Create the directory if it does not exist (owner-only on Unix).
+    /// Create the directory if it does not exist, owner-only on Unix. An
+    /// existing directory that others can access is made owner-only (and
+    /// the change logged), or refused if it belongs to another user.
     ///
     /// # Errors
-    /// The directory cannot be created.
+    /// The directory cannot be created, or is accessible to other users and
+    /// cannot be changed ([`StoreError::NotPrivate`]).
     pub fn prepare(&self) -> Result<(), StoreError> {
-        files::create_private_dir(&self.root).map_err(StoreError::io(&self.root))
+        files::create_private_dir(&self.root).map_err(StoreError::io(&self.root))?;
+        match files::make_private(&self.root) {
+            Ok(Privacy::Private) => Ok(()),
+            Ok(Privacy::Tightened { from }) => {
+                tracing::warn!(
+                    path = %self.root.display(),
+                    mode = %format!("{from:o}"),
+                    "the data directory was accessible to other users; made it owner-only (0700)"
+                );
+                Ok(())
+            }
+            Err(source) if source.kind() == io::ErrorKind::PermissionDenied => {
+                Err(StoreError::NotPrivate {
+                    path: self.root.clone(),
+                    source,
+                })
+            }
+            Err(source) => Err(StoreError::Io {
+                path: self.root.clone(),
+                source,
+            }),
+        }
     }
 
     /// The node id, created on first use.
@@ -81,9 +108,7 @@ impl DataDir {
         }
         let fresh = NodeId::random();
         let text = format!("{fresh}\n");
-        if files::create_once(&path, text.as_bytes(), Access::Shared)
-            .map_err(StoreError::io(&path))?
-        {
+        if files::create_once(&path, text.as_bytes()).map_err(StoreError::io(&path))? {
             tracing::info!(node = %fresh, path = %path.display(), "created node id");
             return Ok(fresh);
         }
@@ -107,9 +132,7 @@ impl DataDir {
             Err(error) => return Err(error),
         }
         let fresh = NodeToken::generate().map_err(StoreError::Random)?;
-        if files::create_once(&path, fresh.expose().as_bytes(), Access::Private)
-            .map_err(StoreError::io(&path))?
-        {
+        if files::create_once(&path, fresh.expose().as_bytes()).map_err(StoreError::io(&path))? {
             tracing::info!(path = %path.display(), "created access token");
             return Ok(fresh);
         }

@@ -13,7 +13,7 @@ use crate::error::StoreError;
 use crate::log;
 use crate::reader::Reader;
 use crate::writer::{self, Done, Write, WriteOp};
-use crate::{recovery, schema};
+use crate::{files, recovery, schema};
 
 /// The session event log. Cheap to clone; every clone talks to the same
 /// writer thread and read pool.
@@ -46,6 +46,7 @@ impl Store {
         let retention = config.retention;
         let opening = path.clone();
         let (connection, interrupted) = tokio::task::spawn_blocking(move || {
+            files::private_database(&opening).map_err(StoreError::io(&opening))?;
             let mut connection = Connection::open(&opening)?;
             schema::configure_writer(&connection)?;
             schema::migrate(&mut connection)?;

@@ -40,6 +40,20 @@ pub enum StoreError {
         #[source]
         source: std::io::Error,
     },
+    /// The data directory is accessible to other users and is not ours to
+    /// change.
+    #[error(
+        "{} is accessible to other users and cannot be made owner-only (is it another \
+         user's?); fix its permissions or choose another data directory",
+        path.display()
+    )]
+    NotPrivate {
+        /// The directory.
+        path: PathBuf,
+        /// Why its mode could not be changed.
+        #[source]
+        source: std::io::Error,
+    },
     /// The operating system's random source failed.
     #[error("no randomness available for the node token")]
     Random(#[source] getrandom::Error),
@@ -135,6 +149,7 @@ impl StoreError {
             Self::SessionExists(_) | Self::OutOfOrder { .. } => ErrorCode::Conflict,
             Self::Closed => ErrorCode::Unavailable,
             Self::Io { .. }
+            | Self::NotPrivate { .. }
             | Self::Random(_)
             | Self::InvalidNodeId { .. }
             | Self::InvalidToken { .. }
