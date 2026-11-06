@@ -253,7 +253,29 @@ member vesseld                         home vesseld
   ADRs 0011 to 0013 are accepted; `ARCHITECTURE.md`, `README.md` and
   `docs/ROADMAP.md` describe profiles, the fleet and agent tools.
 
-## Open decisions
+## Decisions (coordinator, 2026-11-06)
+
+All ten proposals below are accepted as drafted. Notes on the ones that
+carry a condition:
+
+- **8, MCP implementation:** use `rmcp` (the official Rust SDK) if its
+  dependency check passes AGENTS.md section 9 (no `unsafe` of ours, no
+  duplicate async runtime, a justified feature set). If it fails the check,
+  write the small server the plan sketches. The track records the check's
+  result either way.
+- **4, memory:** one-time copies only, never continuous sync. The operator
+  keeps per-account memory separate on purpose (the account-swap plugin
+  never shares `memory/`).
+- **2 and 6, one home and calls through it:** this matches the operator's
+  single-source rule for instructions and skills (`~/.codex` as origin,
+  everything else links or copies).
+
+ADRs 0011, 0012 and 0013 are accepted with these decisions. Milestone 4
+starts on `backend/m4`, which branches from `backend/m3` and receives M3's
+remaining Track P work by merge. Protocol 5 is the coordinator's next
+contract change; tracks start after it.
+
+## Open decisions (as drafted, kept for the record)
 
 1. **Profile switch of a live session in M4** (ADR 0011). Proposed: yes,
    structured Claude Code first; it is the operator's daily need and the
