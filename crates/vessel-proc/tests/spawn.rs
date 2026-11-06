@@ -2,7 +2,9 @@
 //!
 //! `fake-tui` leaves a sleeping grandchild that shares its stdout. Reading
 //! stdout to EOF therefore proves the grandchild is gone too: the tests wait
-//! on that event instead of sleeping. Every test runs under a generous
+//! on that event instead of sleeping. `fake-tui` also exits 0 by itself
+//! when its stdin ends, so a test that expects it to be stopped must keep
+//! stdin open (binding it, not leaving it to `..`, which drops it). Every test runs under a generous
 //! timeout so a regression fails instead of hanging CI.
 //!
 //! On Windows every test runs `fake-tui` through a `.cmd` shim, as npm
@@ -149,8 +151,14 @@ async fn environment_and_working_directory_are_applied() {
 #[tokio::test]
 async fn stopping_the_child_stops_its_group() {
     within(async {
+        // `stdin` is held open for the whole test: `fake-tui` exits 0 by
+        // itself at end of input, and with stdin dropped here (as `..` would
+        // do) that exit raced the signal and sometimes won.
         let Spawned {
-            mut child, stdout, ..
+            mut child,
+            stdin: _stdin,
+            stdout,
+            ..
         } = spawn(&fake_tui()).unwrap();
         let mut lines = BufReader::new(stdout).lines();
         drop(read_until(&mut lines, "ready").await);
@@ -166,7 +174,14 @@ async fn stopping_the_child_stops_its_group() {
 #[tokio::test]
 async fn dropping_an_unwaited_child_kills_its_group() {
     within(async {
-        let Spawned { child, stdout, .. } = spawn(&fake_tui()).unwrap();
+        // Stdin stays open, so the child is still running when it is
+        // dropped (it would exit by itself at end of input).
+        let Spawned {
+            child,
+            stdin: _stdin,
+            stdout,
+            ..
+        } = spawn(&fake_tui()).unwrap();
         let mut lines = BufReader::new(stdout).lines();
         drop(read_until(&mut lines, "ready").await);
         drop(child);
