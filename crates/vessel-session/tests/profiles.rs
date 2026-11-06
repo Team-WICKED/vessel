@@ -387,9 +387,14 @@ mod support {
                 if let Some(found) = line(&self.text, one).or_else(|| line(&self.text, other)) {
                     return found;
                 }
+                // The final status says how the program ended (its code,
+                // `None` for a signal): macOS CI once saw a session end
+                // with no output at all (run 42200510198), which the text
+                // alone cannot explain.
                 assert!(
                     self.next().await.is_some(),
-                    "ended before {one:?} or {other:?}: {:?}",
+                    "ended ({:?}) before {one:?} or {other:?}: {:?}",
+                    self.handle.info().status,
                     self.text
                 );
             }
