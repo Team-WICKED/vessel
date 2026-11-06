@@ -51,7 +51,8 @@
 //!   slot.
 //! - Structured status: `Starting` until the agent's `Ready` event, then
 //!   `Running`; a session that never became ready ends `Failed` with the
-//!   reason.
+//!   reason, unless it was killed while starting: that ends `Exited`, as a
+//!   killed terminal session does.
 //! - Lifetime: an ended session stays in the runtime, ring and all, until
 //!   its owner calls `SessionRuntime::remove` (the node does once the store
 //!   has its whole log). Eviction is the owner's call because only the

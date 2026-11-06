@@ -9,8 +9,10 @@ use crate::lifecycle::{Lifecycle, drain_deadline};
 ///
 /// Status follows the handshake: `Starting` until the agent's `Ready`
 /// event, then `Running`. A session that never became ready ends `Failed`
-/// with the reason (the handshake error, or that the agent exited first);
-/// one that did ends `Exited` with the exit code. If the ACP connection
+/// with the reason (the handshake error, or that the agent exited first),
+/// unless it was killed while starting, which ends `Exited` as a killed
+/// terminal session does; one that became ready ends `Exited` with the
+/// exit code. If the ACP connection
 /// ends while the process lives on, the process is stopped: it can no
 /// longer be driven.
 pub(crate) struct StructuredActor {
@@ -19,6 +21,9 @@ pub(crate) struct StructuredActor {
     pub(crate) life: Lifecycle,
     pub(crate) ready: bool,
     pub(crate) disconnect: Option<Disconnect>,
+    /// The handshake or the protocol failed before anyone killed the
+    /// session (a failure after a kill is the kill's doing).
+    pub(crate) failed_before_kill: bool,
 }
 
 impl StructuredActor {
@@ -46,7 +51,12 @@ impl StructuredActor {
 
         let status = if self.life.stop.interrupted() {
             SessionStatus::Interrupted
-        } else if self.ready {
+        } else if self.ready || (self.life.stop.killed() && !self.failed_before_kill) {
+            // Killed while it was still starting ends as a killed terminal
+            // session does: exited, with whatever code the stop left. (The
+            // kill also fails the pending handshake; that failure is the
+            // kill's doing.) A handshake that had failed before the kill
+            // stays the more useful answer.
             SessionStatus::Exited { code }
         } else {
             SessionStatus::Failed {
@@ -72,6 +82,11 @@ impl StructuredActor {
             }
             AgentOutput::Disconnected(disconnect) => {
                 tracing::debug!(%disconnect, "agent connection ended");
+                self.failed_before_kill = !self.life.stop.killed()
+                    && matches!(
+                        disconnect,
+                        Disconnect::Handshake { .. } | Disconnect::Protocol { .. }
+                    );
                 self.disconnect = Some(disconnect);
                 self.life.begin_stop(&mut self.agent);
             }

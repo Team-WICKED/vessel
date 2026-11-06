@@ -117,7 +117,9 @@ depend on the node, so there is no cycle).
     `Arc<EventRecord>`). Terminal actor and structured actor share the
     `lifecycle` module (stop-responsive publishing, two-step stop).
     Structured status is `Starting` until the agent's `Ready`, then
-    `Running`; a session that never became ready ends `Failed`. Ended
+    `Running`; a session that never became ready ends `Failed`, unless it
+    was killed while starting (then `Exited`, as a killed terminal
+    session). Ended
     sessions stay (ring included) until the node calls
     `SessionRuntime::remove`, which it may only do once the session ended
     (`SessionHandle::ended`); the node is to call it once the store has the
