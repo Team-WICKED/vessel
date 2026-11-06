@@ -18,10 +18,31 @@
 //!   socket (`Counted`), through a websocket upgrade, until the socket
 //!   closes. Stopping: no more accepts, every connection told to finish,
 //!   `shutdown_grace` for them, then the rest are dropped.
-//! - Behind a reverse proxy (`client_address_header`) every connection
-//!   comes from the proxy, so the per-address count from `accept` is not
-//!   applied (the proxy's own limits stand in for it); the counts at the
-//!   handlers use the proxy's header.
+//! - Behind a reverse proxy every connection comes from the proxy, so a
+//!   trusted proxy's sockets (`--trusted-proxy`) are not counted per
+//!   address here (the proxy's own limits stand in); the handlers count by
+//!   its header.
+//!
+//! [Decision Log] (the security review, round 8)
+//! - Problem: `max_connections` was one pool for everyone, so one host
+//!   opening sockets as fast as it could, each dropped at the header
+//!   deadline, kept nodes from re-registering; the per-address cap (64)
+//!   was most of the pool for a few addresses.
+//! - Choice: from `accept`, an address's new sockets take a token of its
+//!   rate (`connect_burst`, `connect_refill`, the limiter the handlers
+//!   used) and count against a small per-address cap (16, scaled for
+//!   IPv6 blocks). Every socket counts as not authenticated, against
+//!   `max_unauthenticated`, a share of `max_connections`, until it
+//!   authenticates (a node registered, a client paired with its node, the
+//!   node's data connection claimed): then it moves to the rest of
+//!   `max_connections` and gives back its rate token
+//!   ([`Authenticated::promote`]). Strangers fill only their share; the
+//!   rest is for those who proved something.
+//! - Alternatives: refusing by load (a flood still wins the race); a
+//!   share per path (nodes and clients both come in on `/v1/*` before
+//!   they prove anything).
+//! - Cost: many hosts can still fill the unauthenticated share (a botnet
+//!   is out of scope, README); nodes and clients already in keep working.
 //! - Alternatives: a timeout around each connection's whole life (cuts
 //!   long websockets); `hyper-util`'s auto builder (HTTP/2 too, which the
 //!   relay does not serve).
@@ -31,7 +52,7 @@
 use std::io;
 use std::net::IpAddr;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -47,8 +68,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt as _;
 
-use super::Relay;
-use super::throttle::Refusal;
+use super::address::Block;
+use super::{Relay, lock};
 
 /// What a connection refused before any HTTP is told.
 const REFUSED: &[u8] =
@@ -89,13 +110,16 @@ pub(super) async fn run(
             continue;
         };
         let _nodelay = stream.set_nodelay(true);
+        let authenticated = Authenticated(Arc::clone(&place.0));
         let io = Counted {
             stream,
             _place: place,
         };
         let service = TowerToHyperService::new(app.clone().map_request(
             move |mut request: hyper::Request<Incoming>| {
-                let _previous = request.extensions_mut().insert(ConnectInfo(peer));
+                let extensions = request.extensions_mut();
+                let _previous = extensions.insert(ConnectInfo(peer));
+                let _previous = extensions.insert(authenticated.clone());
                 request
             },
         ));
@@ -163,17 +187,72 @@ async fn serve_connection<S>(
     }
 }
 
-/// A connection's places in the relay's counts, given back when the socket
+/// A socket's places in the relay's counts, given back when the socket
 /// closes (`Relay::connection`).
-pub(crate) struct ConnectionPlace {
-    pub(super) relay: Arc<Relay>,
-    /// The address counted, when counted by address.
-    pub(super) address: Option<IpAddr>,
+pub(crate) struct ConnectionPlace(Arc<Socket>);
+
+impl ConnectionPlace {
+    pub(super) fn new(relay: Arc<Relay>, peer: IpAddr, counted: Option<Vec<Block>>) -> Self {
+        Self(Arc::new(Socket {
+            relay,
+            peer,
+            counted,
+            standing: Mutex::new(Standing::Unauthenticated),
+        }))
+    }
 }
 
 impl Drop for ConnectionPlace {
     fn drop(&mut self) {
-        self.relay.release_connection(self.address);
+        let socket = &self.0;
+        let mut standing = lock(&socket.standing);
+        let was = std::mem::replace(&mut *standing, Standing::Closed);
+        let counted = socket.counted.as_deref();
+        match was {
+            Standing::Unauthenticated => socket.relay.release_connection(false, counted),
+            Standing::Authenticated => socket.relay.release_connection(true, counted),
+            Standing::Closed => {}
+        }
+    }
+}
+
+/// One accepted socket, shared by its place and its requests' handlers.
+struct Socket {
+    relay: Arc<Relay>,
+    peer: IpAddr,
+    /// The blocks it is counted in, unless it came from a trusted proxy.
+    counted: Option<Vec<Block>>,
+    standing: Mutex<Standing>,
+}
+
+/// Which share of `max_connections` a socket is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Standing {
+    Unauthenticated,
+    Authenticated,
+    /// Closed: its places are given back.
+    Closed,
+}
+
+/// The handle a request's handler moves its socket into the authenticated
+/// share with (a request extension, put there for every request).
+#[derive(Clone)]
+pub(crate) struct Authenticated(Arc<Socket>);
+
+impl Authenticated {
+    /// The socket has authenticated: out of the unauthenticated counts, in
+    /// all and for its address, into the share kept for those that have,
+    /// and the token it took of its address's rate given back. Once only;
+    /// nothing after the socket closed.
+    pub(crate) fn promote(&self) {
+        let socket = &self.0;
+        let mut standing = lock(&socket.standing);
+        if *standing == Standing::Unauthenticated {
+            socket
+                .relay
+                .authenticate(socket.peer, socket.counted.as_deref());
+            *standing = Standing::Authenticated;
+        }
     }
 }
 
@@ -224,27 +303,8 @@ impl AsyncWrite for Counted {
     }
 }
 
-/// The address a peer is counted under from `accept`, if any.
-pub(super) fn counted_address(relay: &Relay, peer: IpAddr) -> Option<IpAddr> {
-    relay
-        .client_address_header
-        .is_none()
-        .then(|| super::rate::bucket_key(peer))
-}
-
-/// Which limit refused a connection at `accept`.
-pub(super) const fn refusal(by_address: bool) -> Refusal {
-    if by_address {
-        Refusal::AddressConnections
-    } else {
-        Refusal::Connections
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-
     use super::*;
 
     #[test]
@@ -266,14 +326,5 @@ mod tests {
         let text = std::str::from_utf8(REFUSED).unwrap();
         assert!(text.starts_with("HTTP/1.1 503 "));
         assert!(text.ends_with("\r\n\r\n"));
-    }
-
-    #[test]
-    fn peers_are_counted_by_their_block() {
-        let peer: SocketAddr = "[2001:db8:1:2:3:4:5:6]:7".parse().unwrap();
-        assert_eq!(
-            super::super::rate::bucket_key(peer.ip()),
-            "2001:db8:1:2::".parse::<IpAddr>().unwrap()
-        );
     }
 }

@@ -2,8 +2,8 @@
 //! while doing nothing. Requests that never finish their headers, many
 //! connections from one address, a stop with them still open; registering
 //! places and a node's client places filled by strangers. Several client
-//! addresses are stood for by `X-Real-IP` on a relay set to read it, as
-//! behind a reverse proxy (`Relay::with_config`), so the tests run on
+//! addresses are stood for by `X-Real-IP` from a trusted loopback proxy,
+//! as behind a reverse proxy (`Relay::with_config`), so the tests run on
 //! every platform's loopback.
 
 use std::net::SocketAddr;

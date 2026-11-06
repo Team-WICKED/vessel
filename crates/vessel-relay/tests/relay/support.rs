@@ -54,15 +54,22 @@ impl Relay {
     }
 
     pub(crate) async fn with_limits(limits: Limits) -> Self {
-        Self::with_config(limits, None).await
+        Self::behind(limits, None, &[]).await
     }
 
     /// A relay that takes the client's address from `header`, as behind a
-    /// reverse proxy: how tests stand for many client addresses.
+    /// reverse proxy on this machine (loopback is its trusted proxy): how
+    /// tests stand for many client addresses.
     pub(crate) async fn with_config(limits: Limits, header: Option<&str>) -> Self {
+        Self::behind(limits, header, &["127.0.0.1"]).await
+    }
+
+    /// [`Relay::with_config`], believing the header only from `trusted`.
+    pub(crate) async fn behind(limits: Limits, header: Option<&str>, trusted: &[&str]) -> Self {
         let mut config = RelayConfig::new(token());
         config.limits = limits;
         config.client_address_header = header.map(|name| name.parse().unwrap());
+        config.trusted_proxies = trusted.iter().map(|proxy| proxy.parse().unwrap()).collect();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let shutdown = CancellationToken::new();

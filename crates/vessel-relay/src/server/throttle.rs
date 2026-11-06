@@ -90,6 +90,10 @@ pub(crate) enum Refusal {
     Connections,
     /// A socket past `Limits::max_connections_per_address`, at `accept`.
     AddressConnections,
+    /// A socket past `Limits::max_unauthenticated`, at `accept`.
+    Unauthenticated,
+    /// A new connection past its address's rate (`Limits::connect_burst`).
+    AcceptRate,
 }
 
 /// How often each kind of refusal is logged at most.

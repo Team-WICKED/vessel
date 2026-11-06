@@ -2,15 +2,16 @@
 //! reverse proxy (`vesseld relay`).
 //!
 //! State is in memory only: which nodes are registered, which clients wait
-//! for which node, and the per-address rate limiter. A restart forgets it
-//! all; nodes register again on their own (`NodeLink`), and clients
-//! reconnect.
+//! for which node, the per-address rate limiter and counts, and which
+//! nodes registered before. A restart forgets it all; nodes register again
+//! on their own (`NodeLink`), and clients reconnect.
 //!
-//! Every websocket task also watches the server's shutdown token: axum's
-//! graceful shutdown stops accepting, but upgraded connections run in tasks
-//! of their own.
+//! Every websocket task also watches the server's shutdown token: the
+//! accept loop (`accept`) stops accepting and drops what is left after
+//! `shutdown_grace`, but upgraded connections run in tasks of their own.
 
 mod accept;
+mod address;
 mod control;
 mod pairing;
 mod rate;
@@ -34,6 +35,8 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{ConnId, RelayClose, RelayToken, RoutingId};
 use vessel_secure::MAX_RECORD;
 
+pub use self::address::{BadProxy, TrustedProxy};
+use self::address::{Block, blocks};
 use self::rate::RateLimiter;
 use self::throttle::{Refusal, RefusalLog};
 use crate::carrier::Keepalive;
@@ -73,6 +76,21 @@ use crate::{ACCEPT_PATH, CONNECT_PATH, HEALTH_PATH, NODE_PATH};
 ///   before, so they get back in while strangers hold the rest.
 ///   `max_connections` (1000) keeps every socket under the 1024 budget,
 ///   whatever the other limits are set to.
+/// - Round 8: one host, or one IPv6 `/48`, must not be able to deny the
+///   relay, and nodes registered here before must get back in under a
+///   flood (many hosts, a botnet, are out of scope: README). From
+///   `accept`, an address's new sockets are rate-limited
+///   (`connect_burst`, `connect_refill`) and capped at 16 not
+///   authenticated yet; sockets not authenticated yet fill only
+///   `max_unauthenticated` of `max_connections`, the rest kept for
+///   registered nodes and paired clients (`accept`'s Decision Log). Every
+///   per-address count is kept per IPv4 address and per IPv6 `/64`, `/56`
+///   and `/48`, the wider blocks with two and four times the limit
+///   (`address`). A place kept for known nodes is taken only by a
+///   connection whose first message names one, when no open place is
+///   left; until then the connection holds no place, for at most
+///   `first_message_timeout`. The client address header is believed only
+///   from `trusted_proxies`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Limits {
@@ -89,9 +107,14 @@ pub struct Limits {
     pub ping_interval: Duration,
     /// Silence after which a connection is dropped.
     pub idle_timeout: Duration,
-    /// New connections an address may open at once...
+    /// New connections an address may open at once (an IPv4 address or an
+    /// IPv6 `/64`; a `/56` twice this, a `/48` four times), counted from
+    /// `accept`, or at the upgrade by the header's address through a
+    /// trusted proxy; a connection that authenticates gives its token
+    /// back...
     pub connect_burst: u32,
-    /// ...and then one more every this long.
+    /// ...and then one more every this long (a `/56` twice as often, a
+    /// `/48` four times).
     pub connect_refill: Duration,
     /// Nodes registered at once. A node registering again takes its own
     /// place back; another is refused (`full`) until one leaves.
@@ -110,18 +133,25 @@ pub struct Limits {
     pub header_read_timeout: Duration,
     /// Connections open at once, of every kind, counted from `accept`.
     pub max_connections: usize,
-    /// Connections open at once from one address (an IPv4 address, an
-    /// IPv6 `/64`), counted from `accept`. Not applied behind a proxy
-    /// (`client_address_header`), where every connection is the proxy's.
+    /// Of `max_connections`, the sockets that have not authenticated yet
+    /// (a registered node's control connection and a client paired with a
+    /// node have): the rest is kept for those that have.
+    pub max_unauthenticated: usize,
+    /// Sockets not authenticated yet from one address (an IPv4 address, an
+    /// IPv6 `/64`; a `/56` twice this, a `/48` four times), counted from
+    /// `accept`. Not applied to a trusted proxy's connections.
     pub max_connections_per_address: usize,
-    /// Control connections still registering at once from one address.
+    /// Control connections still registering, or waiting for a place, at
+    /// once from one address (scaled as `max_connections_per_address`).
     pub max_registering_per_address: usize,
-    /// Of `max_registering`, the places only a node that registered here
-    /// before may keep (named by its first message), so known nodes get
-    /// back in while strangers hold the rest. At most half of
-    /// `max_registering`: a larger value counts as half.
+    /// Of `max_registering`, the places kept for nodes that registered
+    /// here before: taken only when no open place is left, by a
+    /// connection whose first message names such a node; anyone else is
+    /// refused then. At most half of `max_registering`: a larger value
+    /// counts as half.
     pub reserved_registering: usize,
-    /// Relayed client connections at once from one address.
+    /// Relayed client connections at once from one address (scaled as
+    /// `max_connections_per_address`).
     pub max_clients_per_address: usize,
     /// How long a registering node has for its first message, and a
     /// spliced client for its first record.
@@ -149,10 +179,11 @@ impl Default for Limits {
             max_bytes_per_second: 16 * 1024 * 1024,
             header_read_timeout: Duration::from_secs(10),
             max_connections: 1000,
-            max_connections_per_address: 128,
+            max_unauthenticated: 500,
+            max_connections_per_address: 16,
             max_registering_per_address: 8,
             reserved_registering: 16,
-            max_clients_per_address: 32,
+            max_clients_per_address: 16,
             first_message_timeout: Duration::from_secs(2),
             shutdown_grace: Duration::from_secs(5),
         }
@@ -170,10 +201,14 @@ pub struct RelayConfig {
     pub limits: Limits,
     /// Behind a reverse proxy every connection comes from the proxy: name
     /// the header in which it passes the client's address (`X-Real-IP`,
-    /// `CF-Connecting-IP`) so the rate limit is per client, not global.
-    /// Only set it when every request goes through that proxy, which must
-    /// overwrite the header: otherwise clients choose their own address.
+    /// `CF-Connecting-IP`) so the limits are per client, not global. Only
+    /// taken from `trusted_proxies`, which must overwrite it.
     pub client_address_header: Option<HeaderName>,
+    /// The peers whose `client_address_header` is believed; needed with
+    /// it (`serve` refuses a header without them, and ignores them without
+    /// a header). Their sockets are not counted per address at `accept`;
+    /// anyone else is counted by its socket address throughout.
+    pub trusted_proxies: Vec<TrustedProxy>,
 }
 
 impl RelayConfig {
@@ -184,6 +219,7 @@ impl RelayConfig {
             token,
             limits: Limits::default(),
             client_address_header: None,
+            trusted_proxies: Vec::new(),
         }
     }
 }
@@ -191,12 +227,27 @@ impl RelayConfig {
 /// Serve the relay on `listener` until `shutdown`.
 ///
 /// # Errors
-/// The listener failed.
+/// A client address header without a trusted proxy (`InvalidInput`), or
+/// the listener failed.
 pub async fn serve(
     listener: TcpListener,
     config: RelayConfig,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
+    if config.client_address_header.is_some() && config.trusted_proxies.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a client address header is believed only from trusted proxies: name at least one \
+             (--trusted-proxy)",
+        ));
+    }
+    let mut config = config;
+    if config.client_address_header.is_none() && !config.trusted_proxies.is_empty() {
+        // Without the header a proxy cannot say who its clients are: it is
+        // counted as any peer is.
+        tracing::warn!("trusted proxies are ignored without a client address header");
+        config.trusted_proxies.clear();
+    }
     let relay = Arc::new(Relay::new(config, shutdown.clone()));
     let app = Router::new()
         .route(HEALTH_PATH, get(|| async { "ok" }))
@@ -212,6 +263,7 @@ pub(crate) struct Relay {
     token: RelayToken,
     limits: Limits,
     client_address_header: Option<HeaderName>,
+    trusted_proxies: Vec<TrustedProxy>,
     shutdown: CancellationToken,
     /// Registered nodes by routing id.
     nodes: Mutex<HashMap<RoutingId, Registration>>,
@@ -226,28 +278,31 @@ pub(crate) struct Relay {
     refusals: RefusalLog,
 }
 
-/// What the relay holds at once, against `Limits`. Addresses are as the
-/// rate limiter keys them (an IPv4 address, an IPv6 `/64`); an address
+/// What the relay holds at once, against `Limits`. Per-address counts are
+/// kept for every block an address counts in (`address::blocks`); a block
 /// with nothing counted has no entry.
 #[derive(Debug, Default)]
 struct Load {
-    /// Sockets open, from `accept`.
-    connections: usize,
-    /// Sockets open per address (not counted behind a proxy).
-    connections_per_address: HashMap<IpAddr, usize>,
-    /// Control connections that have not registered yet, in the open
-    /// places...
+    /// Sockets that have authenticated (a registered node's control
+    /// connection, a client paired with a node and that node's data
+    /// connection)...
+    authenticated: usize,
+    /// ...and those that have not, yet.
+    unauthenticated: usize,
+    /// Sockets not authenticated yet, per block (not a trusted proxy's).
+    unauthenticated_per_block: HashMap<Block, usize>,
+    /// Control connections registering in the open places...
     registering: usize,
     /// ...and in the places kept for nodes that registered before.
     registering_reserved: usize,
-    /// Control connections that have not registered yet, per address.
-    registering_per_address: HashMap<IpAddr, usize>,
+    /// Control connections registering or waiting for a place, per block.
+    registering_per_block: HashMap<Block, usize>,
     /// Relayed clients in all.
     clients: usize,
     /// Relayed clients per node.
     clients_per_node: HashMap<RoutingId, usize>,
-    /// Relayed clients per address.
-    clients_per_address: HashMap<IpAddr, usize>,
+    /// Relayed clients per block.
+    clients_per_block: HashMap<Block, usize>,
 }
 
 /// One more for `key`.
@@ -263,6 +318,28 @@ fn count_down<K: std::hash::Hash + Eq>(counts: &mut HashMap<K, usize>, key: &K) 
         if *count == 0 {
             let _gone = counts.remove(key);
         }
+    }
+}
+
+/// Whether one more fits in every one of `blocks` under `limit` (scaled
+/// per block, `Block::limit`).
+fn fits(counts: &HashMap<Block, usize>, blocks: &[Block], limit: usize) -> bool {
+    blocks
+        .iter()
+        .all(|block| counts.get(block).copied().unwrap_or(0) < block.limit(limit))
+}
+
+/// One more in every one of `blocks`.
+fn count_up_all(counts: &mut HashMap<Block, usize>, blocks: &[Block]) {
+    for block in blocks {
+        count_up(counts, *block);
+    }
+}
+
+/// One less in every one of `blocks`.
+fn count_down_all(counts: &mut HashMap<Block, usize>, blocks: &[Block]) {
+    for block in blocks {
+        count_down(counts, block);
     }
 }
 
@@ -292,21 +369,48 @@ impl Known {
 #[derive(Debug)]
 pub(crate) struct Full;
 
-/// A control connection's place among those registering, given back on
-/// drop. A place kept for known nodes is provisional: the connection keeps
-/// it only by naming a node that registered here before (`confirm`).
+/// Where a registering control connection stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seat {
+    /// In an open place.
+    Open,
+    /// In no place yet: every open place was taken when it came. Its first
+    /// message decides: a node registered here before takes a kept place
+    /// if one is free, anyone else is refused.
+    Waiting,
+    /// In a place kept for nodes registered here before.
+    Kept,
+}
+
+/// A control connection's place while it registers, given back on drop
+/// (see `Seat`).
 pub(crate) struct RegisteringSlot<'a> {
     relay: &'a Relay,
+    blocks: Vec<Block>,
     address: IpAddr,
-    reserved: bool,
+    seat: Mutex<Seat>,
 }
 
 impl RegisteringSlot<'_> {
-    /// Whether the connection may go on registering as `node`.
+    /// Whether the connection may go on registering as `node`: always from
+    /// an open place; from none, only a node registered here before, and
+    /// only while a kept place is free (it takes it).
     pub(crate) fn confirm(&self, node: &RoutingId) -> bool {
-        if !self.reserved || lock(&self.relay.known).ids.contains(node) {
-            return true;
+        let mut seat = lock(&self.seat);
+        match *seat {
+            Seat::Open | Seat::Kept => return true,
+            Seat::Waiting => {}
         }
+        let known = lock(&self.relay.known).ids.contains(node);
+        if known {
+            let mut load = lock(&self.relay.load);
+            if load.registering_reserved < self.relay.kept_registering() {
+                load.registering_reserved = load.registering_reserved.saturating_add(1);
+                *seat = Seat::Kept;
+                return true;
+            }
+        }
+        drop(seat);
         self.relay
             .refused(Refusal::NotKnown, Some(*node), Some(self.address));
         false
@@ -315,13 +419,16 @@ impl RegisteringSlot<'_> {
 
 impl Drop for RegisteringSlot<'_> {
     fn drop(&mut self) {
+        let seat = *lock(&self.seat);
         let mut load = lock(&self.relay.load);
-        if self.reserved {
-            load.registering_reserved = load.registering_reserved.saturating_sub(1);
-        } else {
-            load.registering = load.registering.saturating_sub(1);
+        match seat {
+            Seat::Open => load.registering = load.registering.saturating_sub(1),
+            Seat::Kept => {
+                load.registering_reserved = load.registering_reserved.saturating_sub(1);
+            }
+            Seat::Waiting => {}
         }
-        count_down(&mut load.registering_per_address, &self.address);
+        count_down_all(&mut load.registering_per_block, &self.blocks);
     }
 }
 
@@ -330,7 +437,7 @@ impl Drop for RegisteringSlot<'_> {
 pub(crate) struct ClientSlot<'a> {
     relay: &'a Relay,
     node: RoutingId,
-    address: IpAddr,
+    blocks: Vec<Block>,
 }
 
 impl Drop for ClientSlot<'_> {
@@ -338,7 +445,7 @@ impl Drop for ClientSlot<'_> {
         let mut load = lock(&self.relay.load);
         load.clients = load.clients.saturating_sub(1);
         count_down(&mut load.clients_per_node, &self.node);
-        count_down(&mut load.clients_per_address, &self.address);
+        count_down_all(&mut load.clients_per_block, &self.blocks);
     }
 }
 
@@ -360,6 +467,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Where a request counts: the client's address, and whether it came from
+/// a trusted proxy's header (`Relay::client_address`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Client {
+    pub(crate) address: IpAddr,
+    pub(crate) proxied: bool,
+}
+
 impl Relay {
     fn new(config: RelayConfig, shutdown: CancellationToken) -> Self {
         let rate = RateLimiter::new(config.limits.connect_burst, config.limits.connect_refill);
@@ -367,6 +482,7 @@ impl Relay {
             token: config.token,
             limits: config.limits,
             client_address_header: config.client_address_header,
+            trusted_proxies: config.trusted_proxies,
             shutdown,
             nodes: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
@@ -378,124 +494,205 @@ impl Relay {
         }
     }
 
-    /// A place for a socket just accepted from `peer`, or `None` past
-    /// `max_connections` or, unless behind a proxy,
-    /// `max_connections_per_address`.
+    /// Whether `peer` is one of the trusted proxies.
+    fn is_trusted_proxy(&self, peer: IpAddr) -> bool {
+        self.trusted_proxies
+            .iter()
+            .any(|proxy| proxy.contains(peer))
+    }
+
+    /// A place for a socket just accepted from `peer`, or `None`. A trusted
+    /// proxy's sockets are not limited per address (the proxy's own limits
+    /// stand in, and the client's address is known only from the request);
+    /// anyone else's take a token of the address's rate
+    /// (`connect_burst`, `connect_refill`) and a place for its blocks
+    /// (`max_connections_per_address`). Every socket counts against
+    /// `max_unauthenticated` until it authenticates
+    /// (`accept::Authenticated::promote`), and against `max_connections`.
     fn connection(self: &Arc<Self>, peer: IpAddr) -> Option<accept::ConnectionPlace> {
-        let address = accept::counted_address(self, peer);
-        let refusal = {
-            let mut load = lock(&self.load);
-            let of_address = address
-                .and_then(|address| load.connections_per_address.get(&address).copied())
-                .unwrap_or(0);
-            if load.connections >= self.limits.max_connections {
-                accept::refusal(false)
-            } else if of_address >= self.limits.max_connections_per_address {
-                accept::refusal(true)
-            } else {
-                load.connections = load.connections.saturating_add(1);
-                if let Some(address) = address {
-                    count_up(&mut load.connections_per_address, address);
-                }
-                return Some(accept::ConnectionPlace {
-                    relay: Arc::clone(self),
-                    address,
-                });
+        let counted = (!self.is_trusted_proxy(peer)).then(|| blocks(peer));
+        let refusal = 'refuse: {
+            let limits = &self.limits;
+            if counted.is_some() && !lock(&self.rate).admit(peer, tokio::time::Instant::now()) {
+                break 'refuse Refusal::AcceptRate;
             }
+            let mut load = lock(&self.load);
+            let all = load.authenticated.saturating_add(load.unauthenticated);
+            if all >= limits.max_connections {
+                break 'refuse Refusal::Connections;
+            }
+            if load.unauthenticated >= limits.max_unauthenticated {
+                break 'refuse Refusal::Unauthenticated;
+            }
+            if let Some(blocks) = &counted {
+                if !fits(
+                    &load.unauthenticated_per_block,
+                    blocks,
+                    limits.max_connections_per_address,
+                ) {
+                    break 'refuse Refusal::AddressConnections;
+                }
+                count_up_all(&mut load.unauthenticated_per_block, blocks);
+            }
+            load.unauthenticated = load.unauthenticated.saturating_add(1);
+            return Some(accept::ConnectionPlace::new(
+                Arc::clone(self),
+                peer,
+                counted,
+            ));
         };
-        self.refused(refusal, None, address);
+        self.refused(refusal, None, Some(peer));
         None
     }
 
-    /// A socket's place given back (`accept::ConnectionPlace`).
-    fn release_connection(&self, address: Option<IpAddr>) {
-        let mut load = lock(&self.load);
-        load.connections = load.connections.saturating_sub(1);
-        if let Some(address) = address {
-            count_down(&mut load.connections_per_address, &address);
+    /// A socket authenticated: out of the unauthenticated counts, into the
+    /// authenticated one, and the token it took from its address's rate
+    /// given back (only sockets that never authenticate spend the rate).
+    fn authenticate(&self, peer: IpAddr, counted: Option<&[Block]>) {
+        {
+            let mut load = lock(&self.load);
+            load.unauthenticated = load.unauthenticated.saturating_sub(1);
+            load.authenticated = load.authenticated.saturating_add(1);
+            if let Some(blocks) = counted {
+                count_down_all(&mut load.unauthenticated_per_block, blocks);
+            }
+        }
+        if counted.is_some() {
+            lock(&self.rate).refund(peer);
         }
     }
 
-    /// The address a request counts under: the proxy's header when one is
-    /// configured and present, else the peer; an IPv6 address by its `/64`.
-    fn client_address(&self, peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
-        let address = self
-            .client_address_header
-            .as_ref()
-            .and_then(|name| headers.get(name))
-            .and_then(|value| value.to_str().ok())
-            .and_then(|text| text.trim().parse::<IpAddr>().ok())
-            .unwrap_or_else(|| peer.ip());
-        rate::bucket_key(address)
+    /// A socket's places given back when it closes.
+    fn release_connection(&self, authenticated: bool, counted: Option<&[Block]>) {
+        let mut load = lock(&self.load);
+        if authenticated {
+            load.authenticated = load.authenticated.saturating_sub(1);
+        } else {
+            load.unauthenticated = load.unauthenticated.saturating_sub(1);
+            if let Some(blocks) = counted {
+                count_down_all(&mut load.unauthenticated_per_block, blocks);
+            }
+        }
     }
 
-    /// A place for a control connection from `address` to register in, or
-    /// `None` past `max_registering_per_address`, or when the open places
-    /// and those kept for known nodes are all taken.
+    /// Where a request counts: the trusted proxy's header when the peer is
+    /// one and the header holds an address, else the peer itself.
+    fn client_address(&self, peer: SocketAddr, headers: &HeaderMap) -> Client {
+        let from_header = self
+            .client_address_header
+            .as_ref()
+            .filter(|_name| self.is_trusted_proxy(peer.ip()))
+            .and_then(|name| headers.get(name))
+            .and_then(|value| value.to_str().ok())
+            .and_then(|text| text.trim().parse::<IpAddr>().ok());
+        match from_header {
+            Some(address) => Client {
+                address,
+                proxied: true,
+            },
+            None => Client {
+                address: peer.ip(),
+                proxied: false,
+            },
+        }
+    }
+
+    /// Whether a request from `client` is admitted by the rate of new
+    /// connections: one through a trusted proxy is charged here, by its
+    /// header's address (its socket was not); any other was at `accept`.
+    fn admit(&self, client: Client) -> bool {
+        if !client.proxied {
+            return true;
+        }
+        if lock(&self.rate).admit(client.address, tokio::time::Instant::now()) {
+            return true;
+        }
+        self.refused(Refusal::AcceptRate, None, Some(client.address));
+        false
+    }
+
+    /// A request through a trusted proxy authenticated: the token its
+    /// client's address paid back.
+    fn refund(&self, client: Client) {
+        if client.proxied {
+            lock(&self.rate).refund(client.address);
+        }
+    }
+
+    /// The registering places kept for nodes registered here before: at
+    /// most half, so a node new here always has room.
+    fn kept_registering(&self) -> usize {
+        self.limits
+            .reserved_registering
+            .min(self.limits.max_registering >> 1)
+    }
+
+    /// A place for a control connection from `address` to register in: an
+    /// open one if any is free; else, while places are kept for known
+    /// nodes, none yet (`Seat::Waiting`, decided by its first message).
+    /// `None` past `max_registering_per_address` (scaled per block), or
+    /// when there is neither.
     fn registering(&self, address: IpAddr) -> Option<RegisteringSlot<'_>> {
-        let refusal = {
-            let mut load = lock(&self.load);
+        let blocks = blocks(address);
+        let refusal = 'refuse: {
             let limits = &self.limits;
-            // At most half are kept, so a node new here always has room.
-            let kept = limits.reserved_registering.min(limits.max_registering >> 1);
+            let kept = self.kept_registering();
             let open = limits.max_registering.saturating_sub(kept);
-            let of_address = load
-                .registering_per_address
-                .get(&address)
-                .copied()
-                .unwrap_or(0);
-            let reserved = if of_address >= limits.max_registering_per_address {
-                None
-            } else if load.registering < open {
-                load.registering = load.registering.saturating_add(1);
-                Some(false)
-            } else if load.registering_reserved < kept {
-                load.registering_reserved = load.registering_reserved.saturating_add(1);
-                Some(true)
-            } else {
-                None
-            };
-            match reserved {
-                Some(reserved) => {
-                    count_up(&mut load.registering_per_address, address);
-                    return Some(RegisteringSlot {
-                        relay: self,
-                        address,
-                        reserved,
-                    });
-                }
-                None if of_address >= limits.max_registering_per_address => {
-                    Refusal::AddressRegistering
-                }
-                None => Refusal::Registering,
+            let mut load = lock(&self.load);
+            if !fits(
+                &load.registering_per_block,
+                &blocks,
+                limits.max_registering_per_address,
+            ) {
+                break 'refuse Refusal::AddressRegistering;
             }
+            let seat = if load.registering < open {
+                load.registering = load.registering.saturating_add(1);
+                Seat::Open
+            } else if kept > 0 {
+                Seat::Waiting
+            } else {
+                break 'refuse Refusal::Registering;
+            };
+            count_up_all(&mut load.registering_per_block, &blocks);
+            return Some(RegisteringSlot {
+                relay: self,
+                blocks,
+                address,
+                seat: Mutex::new(seat),
+            });
         };
         self.refused(refusal, None, Some(address));
         None
     }
 
     /// A place for a client of `node` from `address`, or `None` when the
-    /// node, the address or the relay carries its most clients already.
+    /// node, the address (any of its blocks) or the relay carries its most
+    /// clients already.
     fn client(&self, node: RoutingId, address: IpAddr) -> Option<ClientSlot<'_>> {
+        let blocks = blocks(address);
         let refusal = {
             let mut load = lock(&self.load);
             let limits = &self.limits;
             let of_node = load.clients_per_node.get(&node).copied().unwrap_or(0);
-            let of_address = load.clients_per_address.get(&address).copied().unwrap_or(0);
             if load.clients >= limits.max_clients {
                 Refusal::Clients
             } else if of_node >= limits.max_clients_per_node {
                 Refusal::NodeClients
-            } else if of_address >= limits.max_clients_per_address {
+            } else if !fits(
+                &load.clients_per_block,
+                &blocks,
+                limits.max_clients_per_address,
+            ) {
                 Refusal::AddressClients
             } else {
                 load.clients = load.clients.saturating_add(1);
                 count_up(&mut load.clients_per_node, node);
-                count_up(&mut load.clients_per_address, address);
+                count_up_all(&mut load.clients_per_block, &blocks);
                 return Some(ClientSlot {
                     relay: self,
                     node,
-                    address,
+                    blocks,
                 });
             }
         };
@@ -530,8 +727,8 @@ impl Relay {
             ),
             Refusal::NotKnown => tracing::info!(
                 %node, %address, more,
-                "registration refused: only nodes registered before may take the places kept \
-                 for them (reserved_registering)"
+                "registration refused: no open place, and the places kept for nodes registered \
+                 before are not for this one, or all taken (reserved_registering)"
             ),
             Refusal::Clients => tracing::info!(
                 %node, limit = limits.max_clients, more,
@@ -553,10 +750,21 @@ impl Relay {
                 "connection refused at accept: the relay holds its most connections \
                  (max_connections)"
             ),
+            Refusal::Unauthenticated => tracing::info!(
+                limit = limits.max_unauthenticated,
+                more,
+                "connection refused at accept: the share of connections not authenticated yet \
+                 is full (max_unauthenticated)"
+            ),
             Refusal::AddressConnections => tracing::info!(
                 %address, limit = limits.max_connections_per_address, more,
-                "connection refused at accept: this address holds its most connections \
-                 (max_connections_per_address)"
+                "connection refused at accept: this address holds its most connections not \
+                 authenticated yet (max_connections_per_address)"
+            ),
+            Refusal::AcceptRate => tracing::info!(
+                %address, burst = limits.connect_burst, more,
+                "connection refused: this address opens new connections too fast \
+                 (connect_burst, connect_refill)"
             ),
         }
     }
@@ -566,12 +774,6 @@ impl Relay {
         upgrade
             .max_message_size(self.limits.max_message)
             .max_frame_size(self.limits.max_message)
-    }
-
-    /// Whether a new connection from `address` (`client_address`) is
-    /// admitted by the rate of new connections.
-    fn admit(&self, address: IpAddr) -> bool {
-        lock(&self.rate).admit(address, tokio::time::Instant::now())
     }
 
     /// Make `registration` the node's, replacing any earlier one; a new
