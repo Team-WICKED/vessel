@@ -18,9 +18,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-CI runs exactly these on Linux, Windows and macOS. Code that only builds on
-Linux must be behind `cfg(unix)` with a working (or explicitly erroring)
-Windows path.
+CI runs exactly these, but not on every push: hosted minutes are limited
+(macOS counts 10x, Windows 2x). Pull requests to `main` run Linux; Windows
+and macOS run only when the coordinator starts them at a milestone merge.
+So do not push to get a CI result and do not wait on CI: the local gate is
+the bar for a track branch. Code that only builds on Linux must be behind
+`cfg(unix)` with a working (or explicitly erroring) Windows path; where the
+crate allows it, also run `cargo clippy --target x86_64-pc-windows-gnu` and
+`--target x86_64-apple-darwin` locally (crates that build C, such as `ring`
+or bundled SQLite, need a cross C toolchain; say so in the report when you
+could not).
 
 ## 2. Types: no "any", no strings pretending to be types
 
