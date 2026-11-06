@@ -59,7 +59,8 @@ Milestone 4 (one person's machines as one fleet; see
 [docs/plans/backend-m4.md](docs/plans/backend-m4.md)) is in progress.
 Built so far on one node: harness profiles (`profiles.toml`, `vessel run
 --profile`, `vessel profiles`), moving a structured session to another
-profile (`vessel session move-profile`), and agent tools: every session's
+profile (`vessel session move-profile`) or copying it to one (`vessel
+session copy|move`), and agent tools: every session's
 agent gets the `vessel` MCP server (`vessel mcp`) with a credential of its
 own, to start and drive sessions of its own. `vessel init` sets a machine
 up and can be run again: the node, its harnesses (offering their install
@@ -217,6 +218,25 @@ vessel fleet members
 - MCP servers defined in the home's `fleet.toml` reach every session; a
   secret they need is set on each node with `vessel fleet secret set
   NAME` (typed, not shown, or piped) and never leaves it.
+
+### Copying a conversation or a memory
+
+A structured session's conversation, or a profile's memory, is copied on
+demand (between profiles of one node now; across nodes once the fleet's
+envelope lands):
+
+```bash
+vessel session copy 3f2a --profile claude-work --cwd /srv/app --start   # resume a copy there
+vessel session move 3f2a --profile claude-work   # copy, resume there, stop it here
+vessel fleet memory copy --from-profile claude-alt --from-project /srv/app --profile claude-work
+```
+
+- Between turns only. Nothing is overwritten: a session lands whole or
+  not at all, and memory that differs is written beside the existing
+  file as `<name>.vessel-incoming`.
+- The copy is renamed for the working directory it goes to (Claude Code
+  names its projects after it); the new session records where it came
+  from.
 
 ### Environment
 

@@ -30,3 +30,5 @@ mod structured;
 mod support;
 #[cfg(test)]
 mod terminal;
+#[cfg(test)]
+mod transfers;

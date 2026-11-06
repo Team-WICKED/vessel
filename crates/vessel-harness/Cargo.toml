@@ -32,6 +32,8 @@ which.workspace = true
 
 [dev-dependencies]
 dirs.workspace = true
+# Throwaway homes for the memory and rebase tests.
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 vessel-harness = { workspace = true, features = ["fakes"] }
 vessel-testkit.workspace = true

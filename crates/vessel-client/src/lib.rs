@@ -57,7 +57,7 @@ pub use address::{
     InvalidAddress, InvalidRemotePath, InvalidSshTarget, NodeAddress, RemotePath, SecureTarget,
     SshTarget,
 };
-pub use client::NodeClient;
+pub use client::{NodeClient, TransferReadError};
 pub use connector::{Connector, WsConnector};
 pub use credential::{CredentialError, CredentialMismatch, CredentialSource, DeviceCredential};
 pub use error::{ConnectError, StreamError};

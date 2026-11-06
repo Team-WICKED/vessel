@@ -58,6 +58,20 @@ built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
   beside the existing ones. Limits: 256 MiB per file and 2 GiB per
   transfer (`MAX_TRANSFER_FILE`, `MAX_TRANSFER_TOTAL`); a transfer over
   either is `invalid_request`, naming the limit and the size.
+  As built (F4): all six run on one node; `from.node` naming another node
+  is `unsupported` until Track X's envelope. A `TransferId` is a UUIDv4;
+  the holder check, not the id, keeps a transfer to its opener (another
+  caller gets `not_found`, as for an unknown id). At most 16 transfers
+  are open on a node (`unavailable` beyond). `session.export` of a
+  terminal session is `unsupported`, of one whose agent is still starting
+  `conflict`; `force` copies the transcript as far as it is written,
+  cancelling nothing. `memory.export` without `profile` is Claude Code's
+  default profile. `session.import` refuses (`conflict`) the profile and
+  directory the session already is in on the same node, and a different
+  file in the way, before writing anything; an unknown target profile is
+  `invalid_request` before the source is asked; `start` needs the
+  directory to exist (`invalid_request`). `memory.import` with `project`
+  needs `from.project`.
 - Secrets (F3), all admin: `secret.set { name, value }`, `secret.list`
   (names only), `secret.delete { name }`, `secret.copy { name, to }`. There
   is no `secret.get`: a value leaves a node only into another node's store.

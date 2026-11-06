@@ -265,6 +265,9 @@ fn a_session_named_memory_is_refused() {
     let error = link_session(&files, home.path(), to.path()).unwrap_err();
     assert!(matches!(error, LinkError::Refused { .. }), "{error:?}");
     assert!(!to.path().join("projects").exists());
+    // Nor is it copied to another node.
+    let error = files.regular_files(home.path()).unwrap_err();
+    assert!(matches!(error, LinkError::Refused { .. }), "{error:?}");
 }
 
 #[cfg(unix)]
@@ -293,6 +296,15 @@ fn symbolic_links_are_never_followed() {
             from.project.join(ID).join("escape"),
             from.project.join(ID).join("memory")
         ]
+    );
+    // A copy to another node takes exactly the files a move links.
+    let regular = files.regular_files(from.path()).unwrap();
+    assert_eq!(regular.len(), linked.linked, "{regular:?}");
+    assert!(
+        regular
+            .iter()
+            .all(|path| !skipped.iter().any(|left| path.starts_with(left))),
+        "{regular:?}"
     );
     assert!(
         !to.path()

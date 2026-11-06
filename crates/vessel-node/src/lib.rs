@@ -78,6 +78,7 @@ mod service;
 mod sessions;
 mod shutdown;
 mod subscribe;
+mod transfers;
 mod transport;
 mod unbuilt;
 

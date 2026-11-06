@@ -21,6 +21,8 @@ mod nodes;
 mod reconnect;
 #[cfg(test)]
 mod support;
+#[cfg(test)]
+mod transfers;
 
 use support::{Fixture, within};
 

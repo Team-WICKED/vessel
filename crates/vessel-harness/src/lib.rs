@@ -61,6 +61,7 @@ mod launch;
 mod layout;
 mod lookup;
 mod mcp;
+mod memory;
 mod profile;
 mod sessions;
 mod setup;
@@ -73,6 +74,7 @@ pub use launch::{Launch, launch};
 pub use layout::{HarnessLayout, layout};
 pub use lookup::Lookup;
 pub use mcp::{EncodeProblem, McpError, McpFile, WrittenMcpFile};
+pub use memory::{MemoryFilesError, RebaseError, memory_files, rebase};
 pub use profile::{
     Position, Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles, same_variable,
 };

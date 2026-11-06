@@ -11,11 +11,11 @@ use vessel_client::pairing::{self, PreambleError};
 use vessel_client::secure;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    ClientInfo, CloseTransfer, CreateSession, Deliver, DeviceId, DeviceInfo, DeviceSecret,
-    ErrorCode, GetNode, HarnessKind, InviteDevice, ListDevices, ListSessions, NodeClose, NodeId,
+    ClientInfo, CopySecret, CreateSession, Deliver, DeviceId, DeviceInfo, DeviceSecret, ErrorCode,
+    GetNode, HarnessKind, InviteDevice, ListDevices, ListSessions, NodeClose, NodeId,
     NodePublicKey, Origin, OriginBy, PairingOffer, Preamble, PreambleReply, RefusalReason,
     RelayCall, Request, RevokeDevice, Scope, SessionId, SessionInput, SessionMode, SessionSpec,
-    TerminalSize, TransferId,
+    TerminalSize,
 };
 use vessel_relay::NodeCarrier;
 use vessel_rpc::memory::{self, MemoryTransport};
@@ -459,7 +459,7 @@ async fn relaying_needs_its_own_scope_and_unbuilt_methods_say_so() {
     let mut members = Vec::new();
     for scopes in [
         vec![Scope::Sync],
-        vec![Scope::Read, Scope::Sync, Scope::Relay],
+        vec![Scope::Read, Scope::Admin, Scope::Sync, Scope::Relay],
     ] {
         let member = DeviceInfo {
             id: DeviceId::random(),
@@ -494,13 +494,14 @@ async fn relaying_needs_its_own_scope_and_unbuilt_methods_say_so() {
     assert_eq!(no_home.code(), Some(ErrorCode::Unavailable), "{no_home}");
 
     let unbuilt = members[1]
-        .call(CloseTransfer {
-            transfer: TransferId::random(),
+        .call(CopySecret {
+            name: "DOCS_TOKEN".parse().unwrap(),
+            to: NodeId::random(),
         })
         .await
         .unwrap_err();
     assert_eq!(unbuilt.code(), Some(ErrorCode::Unsupported));
-    assert!(unbuilt.to_string().contains("transfer.close"), "{unbuilt}");
+    assert!(unbuilt.to_string().contains("secret.copy"), "{unbuilt}");
     node.stop().await.unwrap();
 }
 

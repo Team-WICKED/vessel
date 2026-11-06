@@ -7,6 +7,8 @@
 //!                                          ▲                   │
 //!                                          └──── Managed ◀─────┘   (managed.json)
 //! launch:  McpDefinitions + secrets ──resolve──▶ ResolvedMcpServers
+//! transfer: files in a home ──snapshot──▶ staging BlobStore   (session.export, memory.export)
+//!           received BlobStore ──place──▶ files in another home (session.import, memory.import)
 //! ```
 //!
 //! No network and no node: the node moves manifests and blobs between
@@ -81,6 +83,7 @@ mod rel;
 mod resolve;
 mod skill;
 mod target;
+mod transfer;
 
 pub use apply::{Applied, ApplyError, Conflict, ConflictKind, apply};
 pub use blobs::{BlobStore, BlobWriter, InvalidBlob, PastEnd};
@@ -93,6 +96,9 @@ pub use plan::{Place, Plan, PlanError, Skip, SkipReason, Step, plan};
 pub use resolve::resolve;
 pub use skill::{SkillName, SkillNameError, skill_name};
 pub use target::Target;
+pub use transfer::{
+    Incoming, Limits, OnConflict, PlaceError, Placed, Snapshot, SnapshotError, place, snapshot,
+};
 
 /// Write `contents` to `path` atomically and owner-only (0600 on Unix),
 /// creating its directory owner-only (0700) if missing: how Vessel keeps

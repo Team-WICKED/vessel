@@ -35,6 +35,7 @@ use crate::server::{self, Gateway};
 use crate::service::{NodeService, Parts};
 use crate::sessions::Sessions;
 use crate::shutdown::Teardown;
+use crate::transfers::{self, Transfers};
 
 /// A running node. Stop it with [`Node::stop`]; dropping it leaves it
 /// running until the process exits.
@@ -344,6 +345,11 @@ fn core(
         &tasks,
         &stop,
     );
+    let transfers = Arc::new(Transfers::new(
+        transfers::root(&config.data_dir),
+        transfers::IDLE,
+    ));
+    transfers.sweep(&tasks, &stop);
     let service = Arc::new(Guarded(NodeService::new(Parts {
         lifecycle: lifecycle.clone(),
         lookup: config.harness_lookup.clone(),
@@ -355,6 +361,7 @@ fn core(
         agents: Arc::clone(&agents),
         fleet,
         links,
+        transfers,
     })));
     Core {
         runtime,
@@ -484,6 +491,9 @@ fn prepare(dir: &DataDir, env: HarnessEnv) -> Result<Prepared, NodeError> {
     // After the lock: the MCP directory is emptied, which only the node
     // owning the data directory may do.
     let mcp_dir = dir.prepare_mcp_dir().map_err(NodeError::McpDir)?;
+    // Transfers expire at restart (protocol 6); same reason to wait for the
+    // lock.
+    transfers::clear(dir);
     let profiles = NodeProfiles::load(dir.clone(), env).map_err(NodeError::Profiles)?;
     Ok(Prepared {
         id,

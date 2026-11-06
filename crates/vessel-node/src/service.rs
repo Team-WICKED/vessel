@@ -8,12 +8,14 @@ use std::time::Duration;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, BlobChunk, CreateSession, Creator, DeviceInfo, ErrorCode, EventPage, FleetMember,
-    Generation, GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession,
-    ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile,
-    NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice,
-    SendInput, SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet,
-    WireError,
+    Ack, BlobChunk, CloseTransfer, CreateSession, Creator, DeleteSecret, DeviceInfo, ErrorCode,
+    EventPage, ExportMemory, ExportSession, FleetMember, Generation, GetManifest, GetNode,
+    GetSession, Harness, ImportMemory, ImportSession, Invitation, InviteDevice, KillSession,
+    ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions, Manifest,
+    MemoryImported, MoveProfile, NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReadTransfer,
+    ReloadProfiles, ReportApplied, RevokeDevice, SecretName, SendInput, SessionId, SessionImported,
+    SessionInfo, SessionOrigin, SessionSpec, SetSecret, StopNode, Subscribe, Subscribed,
+    TransferManifest, Unsubscribe, WatchFleet, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
@@ -27,6 +29,9 @@ use crate::profiles::launch::{Launcher, agent_session};
 use crate::profiles::{NodeProfiles, moving};
 use crate::sessions::Sessions;
 use crate::subscribe;
+use crate::transfers::export::Exporter;
+use crate::transfers::import::{Importer, Local};
+use crate::transfers::{Holder, Transfers};
 
 /// The node's protocol implementation.
 #[derive(Debug)]
@@ -48,6 +53,8 @@ pub(crate) struct NodeService {
     fleet: Arc<Home>,
     /// The links to other nodes of the fleet (protocol 6, `envelope`).
     pub(crate) links: Arc<Links>,
+    /// Open transfers (protocol 6).
+    transfers: Arc<Transfers>,
 }
 
 /// The parts a [`NodeService`] serves.
@@ -62,6 +69,7 @@ pub(crate) struct Parts {
     pub(crate) agents: Arc<Agents>,
     pub(crate) fleet: Arc<Home>,
     pub(crate) links: Arc<Links>,
+    pub(crate) transfers: Arc<Transfers>,
 }
 
 impl NodeService {
@@ -77,6 +85,7 @@ impl NodeService {
             agents,
             fleet,
             links,
+            transfers,
         } = parts;
         Self {
             lifecycle,
@@ -89,6 +98,7 @@ impl NodeService {
             agents,
             fleet,
             links,
+            transfers,
         }
     }
 }
@@ -190,13 +200,29 @@ impl NodeService {
         connection: &Connection,
         request: CreateSession,
     ) -> Result<SessionInfo, WireError> {
+        self.create(connection, request.spec, None).await
+    }
+
+    /// A session of `spec` for `connection`'s caller: `session.create`'s
+    /// path, also an import's (`origin` says where it came from).
+    async fn create(
+        &self,
+        connection: &Connection,
+        spec: SessionSpec,
+        origin: Option<SessionOrigin>,
+    ) -> Result<SessionInfo, WireError> {
         if self.lifecycle.is_draining() {
             return Err(wire(&ServiceError::Draining));
         }
         let mut options = self
             .launcher
-            .options(&self.profiles, &request.spec, &connection.principal)
+            .options(&self.profiles, &spec, &connection.principal)
             .map_err(|error| wire(&error))?;
+        // An import says where it came from; otherwise the launcher's
+        // (a call delivered from another node records `remote`).
+        if origin.is_some() {
+            options.origin = origin;
+        }
         let id = SessionId::random();
         let secret = self
             .agents
@@ -211,7 +237,7 @@ impl NodeService {
             self.agents.forget(id);
             return Err(wire(&error));
         }
-        let created = self.sessions.create(request.spec, options).await;
+        let created = self.sessions.create(spec, options).await;
         if created.is_err() {
             self.agents.forget(id);
         }
@@ -496,5 +522,197 @@ impl NodeService {
     ) -> Result<Vec<FleetMember>, WireError> {
         let devices = self.devices.list().await.map_err(|error| wire(&error))?;
         Ok(self.fleet.members(devices).await)
+    }
+}
+
+/// This node's secrets (protocol 6, F3): the store `vessel fleet secret`
+/// uses (`fleet::secrets`), on the wire. All admin. A value only ever goes
+/// in; there is no call that reads one back.
+impl NodeService {
+    pub(crate) async fn set_secret(
+        &self,
+        _: &Connection,
+        request: SetSecret,
+    ) -> Result<Ack, WireError> {
+        let files = self.fleet.files().clone();
+        tokio::task::spawn_blocking(move || {
+            crate::fleet::set_secret(&files, &request.name, request.value.expose())
+        })
+        .await
+        .map_err(|error| wire(&ServiceError::Task(error)))?
+        .map(|()| Ack)
+        .map_err(|error| secrets_wire(&error))
+    }
+
+    pub(crate) async fn list_secrets(
+        &self,
+        _: &Connection,
+        _: ListSecrets,
+    ) -> Result<Vec<SecretName>, WireError> {
+        let files = self.fleet.files().clone();
+        tokio::task::spawn_blocking(move || crate::fleet::secret_names(&files))
+            .await
+            .map_err(|error| wire(&ServiceError::Task(error)))?
+            .map_err(|error| secrets_wire(&error))
+    }
+
+    pub(crate) async fn delete_secret(
+        &self,
+        _: &Connection,
+        request: DeleteSecret,
+    ) -> Result<Ack, WireError> {
+        let files = self.fleet.files().clone();
+        let name = request.name.clone();
+        let deleted =
+            tokio::task::spawn_blocking(move || crate::fleet::delete_secret(&files, &name))
+                .await
+                .map_err(|error| wire(&ServiceError::Task(error)))?
+                .map_err(|error| secrets_wire(&error))?;
+        if deleted {
+            Ok(Ack)
+        } else {
+            Err(WireError::new(
+                ErrorCode::NotFound,
+                format!("secret {} is not set on this node", request.name),
+            ))
+        }
+    }
+}
+
+/// A `secrets.toml` problem on the wire; the message names no value.
+fn secrets_wire(error: &crate::fleet::SecretsError) -> WireError {
+    let code = match error {
+        crate::fleet::SecretsError::File(_) => ErrorCode::Internal,
+        crate::fleet::SecretsError::Parse { .. } | crate::fleet::SecretsError::Entry { .. } => {
+            ErrorCode::Conflict
+        }
+    };
+    WireError::new(code, error.to_string())
+}
+
+/// Transfers (protocol 6, F4): `transfers` exports and serves them, and
+/// pulls imports from a source, which is this node until the remote
+/// source on the envelope (`pass_on`) is built.
+impl NodeService {
+    fn exporter(&self) -> Exporter<'_> {
+        Exporter {
+            sessions: &self.sessions,
+            profiles: &self.profiles,
+            transfers: &self.transfers,
+        }
+    }
+
+    fn importer(&self) -> Importer<'_> {
+        Importer {
+            profiles: &self.profiles,
+            transfers: &self.transfers,
+            node: self.lifecycle.info().id,
+        }
+    }
+
+    /// Where an import from `node` pulls, for `connection`'s caller: this
+    /// node (an agent only copies a session it started, as for
+    /// `session.export`), or another, which needs a source on the envelope
+    /// (`pass_on`; not built yet).
+    async fn source(
+        &self,
+        connection: &Connection,
+        node: vessel_proto::NodeId,
+        session: Option<SessionId>,
+    ) -> Result<Local<'_>, WireError> {
+        if node != self.lifecycle.info().id {
+            return Err(crate::transfers::wire(
+                &crate::transfers::TransferError::Remote,
+            ));
+        }
+        if let Some(session) = session {
+            self.check_owner(connection.principal(), session).await?;
+        }
+        Ok(Local {
+            exporter: self.exporter(),
+            holder: Holder::of(connection.principal()),
+        })
+    }
+
+    /// `session.export` (ownership checked by the guard).
+    pub(crate) async fn export_session(
+        &self,
+        connection: &Connection,
+        request: ExportSession,
+    ) -> Result<TransferManifest, WireError> {
+        self.exporter()
+            .session(Holder::of(connection.principal()), request)
+            .await
+            .map_err(|error| wire(&error))
+    }
+
+    /// `memory.export`.
+    pub(crate) async fn export_memory(
+        &self,
+        connection: &Connection,
+        request: ExportMemory,
+    ) -> Result<TransferManifest, WireError> {
+        self.exporter()
+            .memory(Holder::of(connection.principal()), request)
+            .await
+            .map_err(|error| wire(&error))
+    }
+
+    /// `transfer.read`: only for whoever opened it.
+    pub(crate) async fn read_transfer(
+        &self,
+        connection: &Connection,
+        request: ReadTransfer,
+    ) -> Result<BlobChunk, WireError> {
+        self.transfers
+            .read(Holder::of(connection.principal()), request)
+            .await
+    }
+
+    /// `transfer.close`: only for whoever opened it.
+    pub(crate) async fn close_transfer(
+        &self,
+        connection: &Connection,
+        request: CloseTransfer,
+    ) -> Result<Ack, WireError> {
+        self.transfers
+            .close(Holder::of(connection.principal()), request.transfer)
+            .await
+            .map(|()| Ack)
+            .map_err(|error| crate::transfers::wire(&error))
+    }
+
+    /// `session.import`: pulled and placed, then resumed if asked, as a
+    /// session that records where it came from.
+    pub(crate) async fn import_session(
+        &self,
+        connection: &Connection,
+        request: ImportSession,
+    ) -> Result<SessionImported, WireError> {
+        if request.start && self.lifecycle.is_draining() {
+            return Err(wire(&ServiceError::Draining));
+        }
+        let source = self
+            .source(connection, request.from.node, Some(request.from.session))
+            .await?;
+        let placed = self.importer().session(&source, &request).await?;
+        let mut imported = placed.imported;
+        if request.start {
+            let info = self
+                .create(connection, placed.spec, Some(placed.origin))
+                .await?;
+            imported.session = Some(Box::new(info));
+        }
+        Ok(imported)
+    }
+
+    /// `memory.import`.
+    pub(crate) async fn import_memory(
+        &self,
+        connection: &Connection,
+        request: ImportMemory,
+    ) -> Result<MemoryImported, WireError> {
+        let source = self.source(connection, request.from.node, None).await?;
+        self.importer().memory(&source, &request).await
     }
 }

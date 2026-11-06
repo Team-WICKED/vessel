@@ -32,6 +32,7 @@ use vessel_proto::{
 use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, McpError, TerminalMcp};
+use crate::memory::MemoryFilesError;
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -54,9 +55,26 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     login_command: Some(&["login"]),
     account_files: &["auth.json"],
     sessions: Some(session_files),
+    memory: Some(memory_directories),
+    rebase: None,
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
 };
+
+/// `memories/`: Codex's memory has no project in its path, so only all of
+/// it can be asked for.
+fn memory_directories(
+    _home: &Path,
+    project: Option<&Path>,
+) -> Result<Vec<PathBuf>, MemoryFilesError> {
+    if project.is_some() {
+        return Err(MemoryFilesError::Unsupported {
+            harness: HarnessKind::Codex,
+            per_project: true,
+        });
+    }
+    Ok(vec![PathBuf::from("memories")])
+}
 
 /// Finds `sessions/*/*/*/rollout-<timestamp>-<id>.jsonl`, the id matched
 /// whole (a suffix of a longer id is another session). Symbolic links are

@@ -10,8 +10,8 @@
 //!   the session goes back to its previous agent). The check is bounded by
 //!   [`LOGIN_CHECK_TIMEOUT`]: a check that hangs (asking for input nobody
 //!   gives) counts as not logged in.
-//! - The homes come from `vessel_harness::home` with the node's own
-//!   environment, as the harness itself would resolve them.
+//! - The homes come from `NodeProfiles::home`: the account the node was
+//!   given (`HarnessEnv`), as the harness itself would resolve them there.
 
 use std::process::Stdio;
 use std::time::Duration;

@@ -3,9 +3,10 @@
 //!
 //! [Decision Log]
 //! - Targets: every profile's home (ADR 0011), each harness's default
-//!   profile included, through `vessel_harness::home` with the node's own
-//!   environment (a profile that does not set the home variable gets the
-//!   node's, as the harness would) and `vessel_fleet::Target::for_harness`.
+//!   profile included, through `NodeProfiles::home` with the account the
+//!   node was given (a profile that does not set the home variable gets
+//!   that account's, as the harness would) and
+//!   `vessel_fleet::Target::for_harness`.
 //!   Homes that do not exist are skipped by the plan, so a harness that is
 //!   not set up here gets nothing. `OpenCode` is left out when the default
 //!   Claude Code home (`~/.claude`) is a target, since `OpenCode` reads that

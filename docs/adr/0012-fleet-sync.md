@@ -346,9 +346,9 @@ It is idempotent: running it again fills gaps and changes nothing else.
   or from standard input; `list` prints names; `delete` removes one. They
   edit the file through `toml_edit` under the fleet lock, keeping its
   comments; the node notices a change within seconds. There is no way to
-  read a value back out, and protocol 6's `secret.set`, `secret.list` and
-  `secret.delete` (admin) will call the same functions; `secret.copy`
-  waits for protocol 6.
+  read a value back out. Protocol 6's `secret.set`, `secret.list` and
+  `secret.delete` (admin) call the same functions; `secret.copy` waits
+  for Track X's envelope.
 - **MCP servers at launch (F3).** The node's `McpSource` is the fleet's
   (`fleet::FleetMcp`): a snapshot of the definitions of the manifest this
   node last applied (or published, on the home) and of `secrets.toml`,
@@ -363,6 +363,65 @@ It is idempotent: running it again fills gaps and changes nothing else.
 - **`OpenCode`** also reads `~/.claude/CLAUDE.md` and `~/.claude/skills`,
   so on a node whose default Claude Code home is a target it would see the
   fleet's files twice; the node leaves `OpenCode` out there.
+
+## As built (history and memory, F4, 2026-11-06)
+
+Built between profiles of one node; an import naming another node answers
+`unsupported` until Track X's envelope, which plugs into the same seam
+(the import pulls through a `Source`: this node's export, read and close
+for the caller now, `fleet.forward` later).
+
+- **Which files.** A session's are the files a move between profiles
+  links (`SessionFiles::regular_files`: Claude Code's transcript, its
+  `<id>/` directory and `file-history/<id>/`; Codex's rollout), never
+  `memory/`, no symbolic link followed. Memory is Claude Code's
+  `projects/<slug>/memory/`, one project's or every project's, and Codex's
+  `memories/`, all of it only. Gemini CLI and `OpenCode` are refused
+  (`unsupported`): their layouts are not confirmed. `memory.export`
+  without a profile means Claude Code's default profile.
+- **Snapshots.** An export copies the files into
+  `<data_dir>/transfers/<id>/` (by hash, so the reads are fixed and can
+  resume) and holds them for the caller that opened it: anyone else
+  reading or closing it gets `not_found`, as for an unknown id. At most 16
+  are open at once (`unavailable` after that), each for 10 idle minutes;
+  the directory is emptied at start. A live session mid-turn is refused
+  unless `force`, which copies the transcript as far as it is written
+  (nothing is cancelled: the source keeps running); an ended session is
+  exported as it is; a terminal session is refused.
+- **Renaming.** Claude Code names a project directory after its working
+  directory, so a copy for another directory goes under the target's
+  name. The source's name is replaced whatever its spelling: the target
+  node cannot resolve a directory that exists only on the source.
+  `file-history/` and Codex's dated rollouts keep their paths.
+- **Placing never overwrites.** A session lands whole or not at all: a
+  different file in the way, or a link on the way, refuses it before
+  anything is written. Memory goes beside what differs
+  (`<name>.vessel-incoming`), as the materialiser does. Files are written
+  owner-only; a profile home that does not exist is not created. Copying
+  a session into the profile and directory it is already in on the same
+  node is refused (`conflict`): a second session would append to the
+  same transcript.
+- **Resuming.** With `start`, the target creates the session through
+  `session.create`'s own path (an agent's limits apply) with `origin:
+  imported { node, session }`. An agent copies only sessions it started.
+  `vessel session move` is that import, then a kill of the source once
+  the copy has started; `vessel session copy` leaves the source running
+  and starts the copy with `--start`. `vessel fleet memory copy` takes
+  `--from`, `--from-profile`, `--from-project`, `--to`, `--profile` and
+  `--project` (in place of this ADR's first sketch, `--profile P --from A
+  --to B`, which could not name two profiles).
+- **Codex resuming in another directory** (protocol 6, decision 3),
+  checked 2026-11-06 with throwaway homes and fakes only, never a Codex
+  login: a copy into another profile and directory puts the rollout at
+  the same `sessions/YYYY/MM/DD/` path, and the new session's
+  `session/load` carries the target directory (`fake-acp` as `codex-acp`
+  reports both; `vessel-node`'s `tests/e2e/transfers.rs`). Not checked:
+  what the real `codex-acp` does with it. None is installed on the
+  development machine, and running one needs a login. Codex names a
+  rollout by its id, not its directory, so the load is expected to find
+  it; whether the resumed conversation then runs in the new directory or
+  in the one recorded inside the rollout is open, for the manual smoke
+  test with a test account.
 
 ## As built (`vessel init`, F5, 2026-11-06)
 
