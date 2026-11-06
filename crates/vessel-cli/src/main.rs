@@ -28,8 +28,59 @@ use clap::Parser as _;
 
 use crate::args::{Cli, Command};
 
-#[tokio::main]
-async fn main() -> ExitCode {
+/// The stack of the thread the CLI runs on.
+const STACK: usize = 8 * 1024 * 1024;
+
+/// Run the CLI on a thread with an 8 MiB stack.
+///
+/// [Decision Log]
+/// - Purpose: in debug builds every `async fn`'s `poll` gets a stack frame
+///   holding the temporaries of all its arms, and a command nests several
+///   (`main`, `commands::run`, the command, `connect`, ...). The main
+///   thread's stack is 1 MiB on Windows, and it overflowed there twice:
+///   when the profile commands were added, then the fleet commands.
+///   Boxing the command future moved the futures to the heap, not those
+///   frames.
+/// - Choice: a thread of its own with the 8 MiB Linux gives a main thread,
+///   building the same runtime `#[tokio::main]` built and blocking on the
+///   CLI there. Tokio's worker threads keep their size; a command's own
+///   future runs on this thread.
+/// - Alternatives: boxing every arm of every command (each new command
+///   would need remembering it); a release-only workaround (debug builds
+///   are what the tests run).
+fn main() -> ExitCode {
+    let spawned = std::thread::Builder::new()
+        .name("vessel".to_owned())
+        .stack_size(STACK)
+        .spawn(|| {
+            match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(cli()),
+                Err(error) => {
+                    complain(&format!("error: cannot start the async runtime: {error}\n"));
+                    ExitCode::FAILURE
+                }
+            }
+        });
+    match spawned.map(std::thread::JoinHandle::join) {
+        Ok(Ok(code)) => code,
+        // The panic hook has printed what happened.
+        Ok(Err(_panicked)) => ExitCode::FAILURE,
+        Err(error) => {
+            complain(&format!("error: cannot start a thread: {error}\n"));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Write `text` to stderr before (or instead of) the runtime.
+fn complain(text: &str) {
+    let _ignored = std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes());
+}
+
+async fn cli() -> ExitCode {
     let cli = Cli::parse();
     // A node shows its lifecycle; client commands only warnings.
     let default_level = match cli.command {
@@ -58,9 +109,7 @@ async fn main() -> ExitCode {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
 
-    // Boxed: the future of every command together is large, and the main
-    // thread's stack is 1 MiB on Windows (it overflowed there once the
-    // profile commands were added).
+    // Boxed: the future of every command together is large (see `main`).
     match Box::pin(commands::run(cli)).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
