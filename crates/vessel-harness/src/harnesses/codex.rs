@@ -27,6 +27,7 @@ use toml_edit::{Array, InlineTable, Value};
 use vessel_proto::{EnvName, McpServerName, McpTransport, ResolvedMcpServers, ResolvedValue};
 
 use super::{Descriptor, Home, Structured};
+use crate::layout::HarnessLayout;
 use crate::mcp::{McpError, TerminalMcp};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
@@ -40,6 +41,10 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     home: Home {
         variable: Some("CODEX_HOME"),
         default: &[".codex"],
+    },
+    layout: HarnessLayout {
+        instructions: Some("AGENTS.md"),
+        skills: Some("skills"),
     },
     login: Some(&["login", "status"]),
     sessions: Some(session_files),

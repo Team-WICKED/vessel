@@ -7,7 +7,8 @@
 //! `profiles.toml` ([`Profile`], [`parse_profiles`]), each harness's home
 //! and login check ([`home`], [`login_check`]), where a session's files are
 //! and linking them into another home ([`session_files`],
-//! [`link_session`]), and MCP servers for terminal sessions ([`McpFile`]).
+//! [`link_session`]), MCP servers for terminal sessions ([`McpFile`]), and
+//! where shared instructions and skills live in a home ([`layout`]).
 //!
 //! Must not: run sessions, speak ACP, or leak harness specifics. Nothing
 //! outside this crate matches on `HarnessKind` to decide behaviour; callers
@@ -53,6 +54,7 @@ pub mod fakes;
 mod harnesses;
 mod home;
 mod launch;
+mod layout;
 mod lookup;
 mod mcp;
 mod profile;
@@ -62,6 +64,7 @@ pub use discover::discover;
 pub use error::HarnessError;
 pub use home::{home, login_check};
 pub use launch::{Launch, launch, launch_in};
+pub use layout::{HarnessLayout, layout};
 pub use lookup::Lookup;
 pub use mcp::{McpError, McpFile, WrittenMcpFile};
 pub use profile::{Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles};

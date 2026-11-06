@@ -15,6 +15,7 @@ use std::path::Path;
 
 use vessel_proto::{HarnessKind, ResolvedMcpServers};
 
+use crate::layout::HarnessLayout;
 use crate::mcp::{McpError, TerminalMcp};
 use crate::sessions::{SessionFiles, SessionFilesError};
 
@@ -30,6 +31,8 @@ pub(crate) struct Descriptor {
     pub(crate) structured: Structured,
     /// Where the harness keeps its configuration, logins and sessions.
     pub(crate) home: Home,
+    /// Where shared configuration (instructions, skills) lives in the home.
+    pub(crate) layout: HarnessLayout,
     /// Arguments after the binary that report whether it is logged in,
     /// without changing anything; `None` if the harness has no such command.
     pub(crate) login: Option<&'static [&'static str]>,

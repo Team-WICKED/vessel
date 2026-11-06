@@ -13,6 +13,7 @@
 //! ACP), and there is no login check or session move yet.
 
 use super::{Descriptor, Home, Structured};
+use crate::layout::HarnessLayout;
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     binary: "opencode",
@@ -21,6 +22,10 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     home: Home {
         variable: None,
         default: &[".config", "opencode"],
+    },
+    layout: HarnessLayout {
+        instructions: Some("AGENTS.md"),
+        skills: Some("skills"),
     },
     login: None,
     sessions: None,
