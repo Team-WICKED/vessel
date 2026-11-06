@@ -12,7 +12,10 @@
 //!   (`projects/<slug>`), so a session or memory copied to another
 //!   directory must be renamed for Claude to find it there; Codex files a
 //!   rollout by date and records the directory inside it, so its paths
-//!   stay as they are.
+//!   stay as they are. The project's name is replaced whatever it is: a
+//!   session's or one project's files are under one project, named after
+//!   a spelling of the source directory that the target node cannot
+//!   resolve (the directory exists only on the source).
 //! - Only names are looked at; files are listed without following a
 //!   symbolic link (a link in a memory directory could point anywhere),
 //!   and special files are skipped.
@@ -217,10 +220,16 @@ mod tests {
             Path::new("projects/-home-u-app/abc/subagents/x.jsonl")
         );
         assert_eq!(
+            renamed("projects/-private-srv-work-app/abc.jsonl"),
+            Path::new("projects/-home-u-app/abc.jsonl"),
+            "a spelling of the directory only the source node could resolve"
+        );
+        assert_eq!(
             renamed("file-history/abc/1"),
             Path::new("file-history/abc/1"),
             "not named after the directory"
         );
+        assert_eq!(renamed("projects/x"), Path::new("projects/x"), "no project");
         let rollout = Path::new("sessions/2026/11/06/rollout-x-abc.jsonl");
         assert_eq!(
             rebase(HarnessKind::Codex, rollout, from, to).unwrap(),
