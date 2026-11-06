@@ -18,6 +18,7 @@ mod id;
 mod key;
 mod node;
 mod pairing;
+mod profile;
 mod proxy;
 mod raw;
 mod relay;
@@ -46,6 +47,7 @@ pub use node::{
     MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,
 };
 pub use pairing::{InvalidRoute, LinkError, OfferVersion, PairingLink, PairingOffer, RouteUrl};
+pub use profile::{AgentAuth, AgentSecret, Creator, InvalidProfileName, ProfileInfo, ProfileName};
 pub use proxy::ProxyExit;
 pub use raw::RawJson;
 pub use relay::{
