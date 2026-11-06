@@ -288,6 +288,20 @@ It is idempotent: running it again fills gaps and changes nothing else.
   `skills/<name>/...` are placed (PROTOCOL.md, version 5); a member skips
   any other top-level path without a failure, so a newer home does not
   stop an older member.
+- **Owner-only.** Members write every fleet file 0600 (0700 when
+  executable) and every directory they create 0700, whatever the
+  source's mode: a manifest carries only the executable bit, so a member
+  can never make a file readable by more people than the home did. Dot
+  entries inside a skill (`.env`, `.git/`) are not bundled.
+- **Safety of the materialiser** (after an independent review): records
+  are kept by canonical target root, so a profile linked to another
+  home is written once and never loses files to the other's name; a
+  file is removed only if it is still a regular file with the recorded
+  content, was not adopted (a file that was the user's before Vessel
+  came is released, never removed), and is not the same file as one the
+  bundle places; places are reached through open directories without
+  following a symlink, and every step looks again right before acting;
+  a harness home that does not exist is skipped, not created.
 - **`OpenCode`** also reads `~/.claude/CLAUDE.md` and `~/.claude/skills`,
   so on a node whose default Claude Code home is a target it would see the
   fleet's files twice; the node leaves `OpenCode` out there.
