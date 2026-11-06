@@ -38,7 +38,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
-use vessel_fleet::{BlobStore, PastEnd, Sources};
+use vessel_fleet::{BlobStore, Sources};
 use vessel_proto::{
     BlobChunk, BlobHash, BundlePath, DeviceId, DeviceInfo, ErrorCode, FleetMember, Generation,
     Manifest, ReportApplied, Scope, WireError,
@@ -148,30 +148,7 @@ impl Home {
                 format!("blob {hash} is not in the current bundle"),
             ));
         }
-        let blobs = published.blobs.clone();
-        let read = tokio::task::spawn_blocking(move || {
-            blobs.read_chunk(&hash, offset, BlobChunk::MAX_LEN)
-        })
-        .await
-        .map_err(|error| internal(&error))?;
-        match read {
-            Ok((data, total)) => Ok(BlobChunk {
-                data: data.into(),
-                total,
-            }),
-            Err(error)
-                if error
-                    .get_ref()
-                    .is_some_and(<dyn std::error::Error + Send + Sync>::is::<PastEnd>) =>
-            {
-                Err(WireError::new(ErrorCode::InvalidRequest, error.to_string()))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(WireError::new(
-                ErrorCode::NotFound,
-                format!("blob {hash} is not in the store"),
-            )),
-            Err(error) => Err(internal(&error)),
-        }
+        super::chunks::serve(published.blobs.clone(), hash, offset).await
     }
 
     /// `fleet.watch`.
