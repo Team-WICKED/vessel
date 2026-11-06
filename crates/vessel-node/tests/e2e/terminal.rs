@@ -32,7 +32,7 @@ async fn a_terminal_session_survives_clients_and_a_node_restart() {
         let mut live = client.follow(id, EventSeq::ZERO).await.unwrap();
         let mut seen = Vec::new();
         collect_until(&mut live, &mut seen, "> ").await;
-        client.send(id, keys("hello vessel\n")).await.unwrap();
+        client.send(id, keys("hello vessel\r")).await.unwrap();
         collect_until(&mut live, &mut seen, "echo: hello vessel").await;
         if cfg!(unix) {
             let resize = SessionInput::Terminal {
@@ -120,7 +120,7 @@ async fn a_terminal_session_survives_clients_and_a_node_restart() {
 
         // It can be read, not driven.
         assert_eq!(
-            client.send(id, keys("again\n")).await.unwrap_err().code(),
+            client.send(id, keys("again\r")).await.unwrap_err().code(),
             Some(ErrorCode::Conflict)
         );
         node.stop().await.unwrap();
@@ -156,7 +156,7 @@ async fn killed_sessions_end_and_errors_carry_their_codes() {
         // Killing again is harmless; input is refused.
         client.kill(info.id).await.unwrap();
         assert_eq!(
-            client.send(info.id, keys("x\n")).await.unwrap_err().code(),
+            client.send(info.id, keys("x\r")).await.unwrap_err().code(),
             Some(ErrorCode::Conflict)
         );
         // Subscribing past the end is an invalid request.
@@ -244,7 +244,7 @@ async fn tiny_rings_force_store_gap_fills_and_lag_without_losing_records() {
         let mut first = client.follow(id, EventSeq::ZERO).await.unwrap();
         let mut seen = Vec::new();
         collect_until(&mut first, &mut seen, "> ").await;
-        for line in ["one\n", "two\n", "three\n", "four\n", "five\n"] {
+        for line in ["one\r", "two\r", "three\r", "four\r", "five\r"] {
             client.send(id, keys(line)).await.unwrap();
         }
         collect_until(&mut first, &mut seen, "echo: five").await;
@@ -286,7 +286,7 @@ async fn a_gap_pruned_from_the_store_is_reported_once_then_the_ring_follows() {
         let mut first = client.follow(id, EventSeq::ZERO).await.unwrap();
         let mut seen = Vec::new();
         collect_until(&mut first, &mut seen, "> ").await;
-        for line in ["one\n", "two\n", "three\n"] {
+        for line in ["one\r", "two\r", "three\r"] {
             client.send(id, keys(line)).await.unwrap();
         }
         // The first follower lags too; it only has to see the output.

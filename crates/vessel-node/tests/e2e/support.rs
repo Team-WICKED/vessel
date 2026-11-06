@@ -110,6 +110,9 @@ pub(crate) fn terminal_spec(fixture: &Fixture, harness: HarnessKind) -> SessionS
     }
 }
 
+/// Keys typed into a terminal session. End lines with `\r`, as a terminal
+/// does for Enter: Unix PTYs turn it into `\n` (`ICRNL`), while `ConPTY` on
+/// Windows completes a console line only on `\r` (`\n` is Ctrl-J there).
 pub(crate) fn keys(text: &'static str) -> SessionInput {
     SessionInput::Terminal {
         input: TerminalInput::Data {
