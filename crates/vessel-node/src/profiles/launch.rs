@@ -208,6 +208,10 @@ impl Launcher {
             created_by: creator(principal),
             notices,
             id: None,
+            // This node's own caller; a delivered call (Track X) and an
+            // import (F4) set where the session came from.
+            origin: None,
+            via: None,
         })
     }
 

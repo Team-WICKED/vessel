@@ -30,6 +30,10 @@ pub enum Column {
     Profile,
     /// `sessions.created_by` (a `Creator`, schema 3).
     CreatedBy,
+    /// `sessions.via` (a `NodeId`, schema 4).
+    Via,
+    /// `sessions.origin` (a `SessionOrigin`, schema 4).
+    Origin,
 }
 
 /// Anything that can go wrong in the store.

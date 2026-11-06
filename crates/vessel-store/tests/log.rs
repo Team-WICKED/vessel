@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use fixtures::{at, data_dir, new_session, open, output, plain, record, status};
 use vessel_proto::{
-    AgentEvent, Creator, DeviceId, EventRecord, EventSeq, HarnessSessionId, ProfileName,
-    SessionEvent, SessionId, SessionInfo, SessionStatus,
+    AgentEvent, Creator, DeviceId, EventRecord, EventSeq, HarnessSessionId, NodeId, ProfileName,
+    RemoteCreator, SessionEvent, SessionId, SessionInfo, SessionOrigin, SessionStatus,
 };
 use vessel_store::{ByteCount, Retention, Store, StoreConfig, StoreError};
 
@@ -585,6 +585,75 @@ async fn profile_and_creator_are_stored_and_moves_projected() {
     assert_eq!(stored.created_by, device);
 }
 
+/// Schema 4: where a session came from (protocol 6) is stored and read
+/// back after the store is opened again, as after a restart; a session of
+/// this node's own has neither.
+#[tokio::test]
+async fn origin_and_via_survive_a_restart() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let home = NodeId::random();
+    let imported = SessionOrigin::Imported {
+        node: NodeId::random(),
+        session: SessionId::random(),
+    };
+    let remote = SessionOrigin::Remote {
+        node: NodeId::random(),
+        by: RemoteCreator::Device {
+            id: DeviceId::random(),
+        },
+    };
+    let mut sessions = Vec::new();
+    for (n, (origin, via)) in [
+        (Some(imported), None),
+        (Some(remote), Some(home)),
+        (None, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut session = new_session(i64::try_from(n).unwrap());
+        session.origin = origin;
+        session.via = via;
+        store.create_session(session.clone()).await.unwrap();
+        sessions.push(session);
+    }
+    store.close().await;
+    drop(store);
+
+    let store = open(&dir, StoreConfig::default()).await;
+    for session in &sessions {
+        let stored = store.session(session.id).await.unwrap().unwrap();
+        assert_eq!(stored.origin, session.origin);
+        assert_eq!(stored.via, session.via);
+    }
+}
+
+/// Sessions stored before schema 4 came from this node: neither column.
+#[tokio::test]
+async fn sessions_from_schema_3_have_no_origin() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+    store.close().await;
+    drop(store);
+    let connection = rusqlite::Connection::open(dir.database_path()).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE sessions DROP COLUMN via;
+             ALTER TABLE sessions DROP COLUMN origin;",
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 3).unwrap();
+    drop(connection);
+
+    let store = open(&dir, StoreConfig::default()).await;
+    let stored = store.session(session.id).await.unwrap().unwrap();
+    assert_eq!((stored.origin, stored.via), (None, None));
+    assert_eq!(stored.created_by, session.created_by);
+}
+
 /// Sessions stored before schema 3 read as the owner's, on the default
 /// profile: all a node could do then.
 #[tokio::test]
@@ -599,7 +668,9 @@ async fn sessions_from_schema_2_read_as_the_owners_on_the_default() {
     connection
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN profile;
-             ALTER TABLE sessions DROP COLUMN created_by;",
+             ALTER TABLE sessions DROP COLUMN created_by;
+             ALTER TABLE sessions DROP COLUMN via;
+             ALTER TABLE sessions DROP COLUMN origin;",
         )
         .unwrap();
     connection.pragma_update(None, "user_version", 2).unwrap();
