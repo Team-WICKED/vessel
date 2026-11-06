@@ -78,8 +78,9 @@ built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
   `secret.copy` sends `secret.set` to `to` through the envelope, so it
   needs the target's owner to have granted the home `admin` there.
 - `session.read` takes `wait?` (seconds, capped at 60, protocol 6): with
-  nothing at `from` yet, the node answers when something arrives or the
-  wait ends (an empty page).
+  nothing at `from` yet, the node answers as soon as a record lands there
+  or the session ends, or when the wait ends (an empty page). An ended or
+  stored session answers at once.
 - `SessionInfo` takes `via?` (the home a creating call came through) and
   `origin?`: `{"kind":"remote","node","by"}` (`by` owner or `{"kind":
   "device","id"}`) for a session created by a forwarded call, `{"kind":

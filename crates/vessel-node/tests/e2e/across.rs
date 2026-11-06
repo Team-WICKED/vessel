@@ -11,14 +11,15 @@ use vessel_client::NodeClient;
 use vessel_node::Node;
 use vessel_node::fleet::{self, DEFAULT_GRANT, FleetFiles, FleetInit};
 use vessel_proto::{
-    CreateSession, Creator, ErrorCode, GetSession, HarnessKind, KillSession, ListNodes, ListPeers,
-    ListSessions, NodeId, ReadEvents, RemoteCreator, Scope, SendInput, SessionId, SessionOrigin,
+    CreateSession, Creator, ErrorCode, EventSeq, GetSession, HarnessKind, KillSession, ListNodes,
+    ListPeers, ListSessions, NodeId, ReadEvents, RemoteCreator, Scope, SendInput, SessionId,
+    SessionOrigin, SessionStatus,
 };
 
 use crate::agents::{as_agent, code, credential, structured, vessel_mcp};
 use crate::fleet::{fleet_config, write};
 use crate::secure::{Relay, relayed_with};
-use crate::support::{Fixture, prompt, structured_spec, within};
+use crate::support::{Fixture, prompt, read_until, status_of, structured_spec, within};
 
 /// One node of the test fleet.
 struct Member {
@@ -187,8 +188,16 @@ async fn calls_reach_members_through_the_home_within_every_grant() {
 }
 
 /// `caller` waits on `session` of `target` through the home, and the read
-/// returns once a prompt sent the same way makes records there.
+/// returns once a prompt sent the same way makes records there: woken by
+/// them, well before its wait runs out. The session runs before the wait
+/// starts, so no change of status can be what wakes it.
 async fn long_poll_across_two_hops(caller: &Member, target: &Member, session: SessionId) {
+    let mut stream = target.owner.follow(session, EventSeq::ZERO).await.unwrap();
+    read_until(&mut stream, &mut Vec::new(), |record| {
+        status_of(record) == Some(&SessionStatus::Running)
+    })
+    .await;
+    let asked = std::time::Instant::now();
     let from = target
         .owner
         .call(GetSession { session })
@@ -228,6 +237,10 @@ async fn long_poll_across_two_hops(caller: &Member, target: &Member, session: Se
         .await
         .unwrap();
     let page = waiting.await.unwrap().unwrap();
+    assert!(
+        asked.elapsed() < Duration::from_secs(15),
+        "the read slept through the records"
+    );
     assert!(!page.records.is_empty());
     assert!(page.records.iter().all(|record| record.seq >= from));
     let _killed = caller
