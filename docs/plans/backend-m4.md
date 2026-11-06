@@ -363,7 +363,16 @@ member vesseld                         home vesseld
   gateway (follow, kept edits, reports, scopes, delete and restore),
   between two nodes through an in-process relay (join while running,
   follow an edit, leave), and the CLI through a relay.
-- **Next:** F3 (secrets and the `McpSource`).
+- **F3 (done, except `secret.copy`):** `secrets.toml`, `vessel fleet
+  secret set|list|delete`, and the fleet's `McpSource` (`FleetMcp`) in
+  place of `NoMcpServers`; `secret.copy` and the `secret.*` rows wait for
+  protocol 6, whose handlers will call the same store. Tests: the store
+  (comments kept, owner-only, errors never quoting a value), a member
+  receiving the definitions, a session's agent getting a server with
+  this node's secret and starting without it once the secret is deleted
+  (named in its log), and the CLI (stdin only, names only).
+- **Next:** F4 (history and memory transfer), once Track R's protocol 6
+  contract lands.
 
 ## Track F: fleet and first run
 
