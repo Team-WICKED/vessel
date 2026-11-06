@@ -45,7 +45,9 @@ Target shape of the backend after milestone 1. Status per crate is in
 The dependency direction is fixed by ADR 0001; adding an edge means updating
 that ADR and this table. Test-only edges: `vessel-node`'s end-to-end tests
 drive a node through `vessel-client` (a dev-dependency; the client does not
-depend on the node, so there is no cycle).
+depend on the node, so there is no cycle), and `vessel-remote`'s and
+`vessel-cli`'s SSH tests read `vessel-store`'s node lock to stop any node
+they started.
 
 ## Data flow
 
@@ -178,8 +180,13 @@ depend on the node, so there is no cycle).
     there, then `mv -f` onto `vesseld-<version>` or
     `vesseld-<version>-dev-<hash>`; then `cleanup`), `release` (the
     archive and `SHA256SUMS` fetched locally with `gh release download`
-    and checked). Tested against a temporary home through `ssh` and `gh`
-    stand-ins (Unix only).
+    and checked), `provision` (which build a machine gets: `local`,
+    `release`, or `auto`, shared by `node install` and the connector) and
+    `connector` (`SshConnector`: `ssh … <data_dir>/bin/<binary> attach`,
+    protocol frames over the child's stdio, `ProxyExit` codes as typed
+    errors, exit 127 installs and retries once, 60 s handshake). Tested
+    against a temporary home through `ssh` and `gh` stand-ins, and with
+    the real `vesseld` through `fake-ssh` (Unix only).
   - Release workflow (`.github/workflows/release.yml`, milestone 2): on a
     `v<version>` tag matching the workspace version, it builds `vesseld`
     for the four targets (musl through `cargo-zigbuild`), packaged as
@@ -229,8 +236,15 @@ depend on the node, so there is no cycle).
     without repeats or gaps; input lost with the connection is reported,
     not resent (tested through a TCP proxy the test cuts). `vessel node
     install` uploads a local build or this version's release to an SSH
-    node. Connecting to SSH nodes, `node status` and `node update` come
-    with the SSH connector.
+    node; any command reaches an SSH node through `SshConnector`, which
+    installs on first contact. `vessel node status` shows the version,
+    serving or draining, and live sessions. `vessel node update` installs,
+    then stops the node at once with no live session, lists them and
+    changes nothing by default, drains with `--when-idle`, or stops with
+    `--now` after confirming. End to end through `fake-ssh` and the real
+    `vesseld` (`tests/remote.rs`, Unix): fresh install and start, run and
+    attach, a changed pinned id refused, update side by side with
+    refuse-then-drain, and an SSH drop during attach resumed.
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.
