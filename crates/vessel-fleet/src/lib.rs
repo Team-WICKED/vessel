@@ -91,7 +91,7 @@ pub use managed::{Content, Managed, ManagedError, Record};
 pub use place::MissingSource;
 pub use plan::{Place, Plan, PlanError, Skip, SkipReason, Step, plan};
 pub use resolve::resolve;
-pub use skill::{SkillNameError, skill_name};
+pub use skill::{SkillName, SkillNameError, skill_name};
 pub use target::Target;
 
 /// The instructions file's place in a bundle.
