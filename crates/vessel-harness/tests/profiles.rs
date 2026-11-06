@@ -11,7 +11,7 @@ use vessel_proto::{HarnessKind, McpTransport, ResolvedMcpServers, ResolvedValue,
 
 use support::{
     HTTP_SECRET, STDIO_SECRET, TempDir, asking, assert_no_secret_in_debug,
-    assert_no_secret_on_argv, fake, profile, servers, set, structured, terminal,
+    assert_no_secret_on_argv, fake, profile, servers, set, structured, terminal, under_home,
 };
 
 #[cfg(test)]
@@ -159,6 +159,12 @@ mod support {
     args = ["--yolo"]
     "#;
 
+    /// `name` under the profiles' home, as `~/name` expands: the system's
+    /// separator.
+    pub(super) fn under_home(name: &str) -> String {
+        format!("/home/u{}{name}", std::path::MAIN_SEPARATOR)
+    }
+
     pub(super) fn profile(name: &str) -> Profile {
         parse_profiles(PROFILES, Some(Path::new("/home/u")))
             .unwrap()
@@ -216,7 +222,7 @@ fn a_claude_terminal_gets_the_profile_and_an_owner_only_mcp_file() {
     );
     assert_eq!(
         set(command, "CLAUDE_CONFIG_DIR").as_deref(),
-        Some("/home/u/.claude-alt")
+        Some(under_home(".claude-alt").as_str())
     );
     assert_eq!(
         command.env_change("ANTHROPIC_API_KEY"),
@@ -296,7 +302,7 @@ fn codex_gets_servers_as_overrides_and_values_in_its_environment() {
     assert!(launched.unattached.is_empty());
     assert_eq!(
         set(command, "CODEX_HOME").as_deref(),
-        Some("/home/u/.codex-work")
+        Some(under_home(".codex-work").as_str())
     );
     assert_eq!(set(command, "DOCS_TOKEN").as_deref(), Some(STDIO_SECRET));
     assert_eq!(
@@ -475,7 +481,7 @@ fn structured_sessions_take_the_environment_but_not_arguments_or_servers() {
     assert!(launched.command.args.is_empty());
     assert_eq!(
         set(&launched.command, "CLAUDE_CONFIG_DIR").as_deref(),
-        Some("/home/u/.claude-alt")
+        Some(under_home(".claude-alt").as_str())
     );
     assert_eq!(
         launched.command.env_change("ANTHROPIC_API_KEY"),
@@ -526,7 +532,7 @@ fn login_checks_run_with_the_profile() {
     assert_eq!(check.args, ["auth", "status"]);
     assert_eq!(
         set(&check, "CLAUDE_CONFIG_DIR").as_deref(),
-        Some("/home/u/.claude-alt")
+        Some(under_home(".claude-alt").as_str())
     );
     assert_eq!(
         check.env_change("ANTHROPIC_API_KEY"),
