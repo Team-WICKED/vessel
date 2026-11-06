@@ -331,7 +331,7 @@ pub enum ProfileProblem {
 pub fn parse_profiles(text: &str, user_home: Option<&Path>) -> Result<Profiles, ProfilesError> {
     let raw: RawFile = toml_edit::de::from_str(text).map_err(|error| ProfilesError::Toml {
         position: position(text, error.span()),
-        message: error.message().to_owned(),
+        message: without_values(error.message()),
     })?;
     let home = user_home.and_then(Path::to_str);
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
@@ -447,6 +447,33 @@ fn expand(value: &str, home: Option<&str>) -> Option<String> {
         "/"
     };
     Some(format!("{home}{separator}{rest}"))
+}
+
+/// The TOML library's message without the value it found. Serde's type
+/// and value errors quote it (``invalid type: integer `98765`, expected a
+/// string``, `invalid type: string "--token=…", expected a sequence`),
+/// and a value in `env` or `args` may be a secret that `profile.reload`
+/// would send to a client. Only the kind found and what was expected stay.
+/// Syntax errors, unknown and missing fields name keys and positions only
+/// (checked against `toml_edit` 0.25), so they pass as they are.
+fn without_values(message: &str) -> String {
+    for prefix in ["invalid type: ", "invalid value: "] {
+        let Some(at) = message.find(prefix) else {
+            continue;
+        };
+        let (before, rest) = message.split_at(at);
+        let rest = rest.get(prefix.len()..).unwrap_or_default();
+        // What was expected is written by code, never taken from the file,
+        // so the last separator is the real one even if the value holds it.
+        return match rest.rsplit_once(", expected ") {
+            Some((found, expected)) => {
+                let kind = found.split(['`', '"']).next().unwrap_or_default().trim();
+                format!("{before}{prefix}{kind}, expected {expected}")
+            }
+            None => format!("{before}{prefix}a value of another type"),
+        };
+    }
+    message.to_owned()
 }
 
 /// `line L, column C` of a byte offset, both from 1.
@@ -591,6 +618,57 @@ mod tests {
         let typed = "[profiles.x]\nharness = \"claude\"\nunset = \"HOME\"\n";
         let shown = parse_profiles(typed, home()).unwrap_err().to_string();
         assert!(shown.contains("line 3"), "{shown}");
+    }
+
+    /// Review finding: serde's messages quoted the value they found, and a
+    /// value may be a secret.
+    #[test]
+    fn errors_never_quote_a_value() {
+        for (text, kind) in [
+            ("env = { PIN = 98765432123 }", "integer, expected a string"),
+            (
+                "args = \"--token=sk-SECRET\"",
+                "string, expected a sequence",
+            ),
+            ("env = \"sk-SECRET\"", "string, expected a map"),
+            ("unset = \"sk-SECRET\"", "string, expected a sequence"),
+            ("label = 1.5e300", "floating point, expected a string"),
+            ("env = { K = true }", "boolean, expected a string"),
+            (
+                "env = { K = 98765432123.5 }",
+                "floating point, expected a string",
+            ),
+        ] {
+            let text = format!("[profiles.x]\nharness = \"claude\"\n{text}\n");
+            let shown = parse_profiles(&text, home()).unwrap_err().to_string();
+            for value in ["98765432123", "sk-SECRET", "1500000", "true"] {
+                assert!(!shown.contains(value), "{value} in {shown}");
+            }
+            assert!(shown.contains(kind), "{shown}");
+            assert!(shown.contains("line 3"), "{shown}");
+        }
+        for text in [
+            "profiles = \"sk-SECRET\"\n",
+            "[profiles]\nx = \"sk-SECRET\"\n",
+            "[profiles.x]\nharness = \"claude\"\nenv = { K = sk-SECRET }\n",
+            "[profiles.x]\nharness = \"claude\"\nenv = { K = \"\\q sk-SECRET\" }\n",
+            "[profiles.x]\nharness = \"claude\"\nenv = { K = \"a\" } sk-SECRET\n",
+        ] {
+            let shown = parse_profiles(text, home()).unwrap_err().to_string();
+            assert!(!shown.contains("SECRET"), "{shown}");
+        }
+        assert_eq!(
+            without_values("invalid value: string \"a, expected b\", expected one of x"),
+            "invalid value: string, expected one of x"
+        );
+        assert_eq!(
+            without_values("invalid type: integer `5`"),
+            "invalid type: a value of another type"
+        );
+        assert_eq!(
+            without_values("missing field `harness`"),
+            "missing field `harness`"
+        );
     }
 
     #[test]
