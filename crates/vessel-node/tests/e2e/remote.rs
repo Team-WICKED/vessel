@@ -198,7 +198,7 @@ async fn attach_starts_a_node_that_finds_harnesses_through_the_login_profile() {
         let mut stream = client.follow(id, EventSeq::ZERO).await.unwrap();
         let mut seen = Vec::new();
         collect_until(&mut stream, &mut seen, "> ").await;
-        client.send(id, keys("over attach\n")).await.unwrap();
+        client.send(id, keys("over attach\r")).await.unwrap();
         collect_until(&mut stream, &mut seen, "echo: over attach").await;
         assert!(remote.data_dir().log_dir().join("vesseld.log").exists());
 
@@ -300,7 +300,7 @@ async fn over_ssh_a_dropped_connection_resumes_from_its_cursor() {
             client
                 .send(
                     id,
-                    keys(Box::leak(format!("line {line}\n").into_boxed_str())),
+                    keys(Box::leak(format!("line {line}\r").into_boxed_str())),
                 )
                 .await
                 .unwrap();
@@ -321,7 +321,7 @@ async fn over_ssh_a_dropped_connection_resumes_from_its_cursor() {
         assert!(cursor < EventSeq::new(u64::try_from(seen.len()).unwrap()));
 
         // The session never noticed; a new connection resumes at the cursor.
-        client.send(id, keys("after the drop\n")).await.unwrap();
+        client.send(id, keys("after the drop\r")).await.unwrap();
         let mut again = remote.ssh(None);
         let resumed = connect(&mut again).await;
         let mut rest = resumed.follow(id, cursor).await.unwrap();
