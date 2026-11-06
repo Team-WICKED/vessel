@@ -12,10 +12,11 @@ use vessel_client::secure;
 use vessel_harness::Lookup;
 use vessel_proto::{
     ClientInfo, CreateSession, DeviceId, DeviceInfo, DeviceSecret, ErrorCode, HarnessKind,
-    InvitationSecret, InviteDevice, ListDevices, ListSessions, NodePublicKey, PairingOffer,
-    Preamble, PreambleReply, RefusalReason, RevokeDevice, Scope, SessionMode, SessionSpec,
-    TerminalSize,
+    InvitationSecret, InviteDevice, ListDevices, ListSessions, NodeClose, NodePublicKey,
+    PairingOffer, Preamble, PreambleReply, RefusalReason, RevokeDevice, Scope, SessionMode,
+    SessionSpec, TerminalSize,
 };
+use vessel_relay::NodeCarrier;
 use vessel_rpc::memory::{self, MemoryTransport};
 use vessel_rpc::{CallError, ClientConfig, Connection};
 use vessel_secure::{MemoryCarrier, NodeKeypair, SecureChannel, SecureError, memory_pair};
@@ -161,6 +162,73 @@ async fn the_node_key_comes_from_node_key_and_survives_a_restart() {
     again.stop().await.unwrap();
 }
 
+/// An in-memory carrier the node can close with a code, as it closes
+/// websockets: the code is recorded for the test to read.
+struct Closable {
+    carrier: MemoryCarrier,
+    closed: Arc<Mutex<Option<NodeClose>>>,
+}
+
+impl futures_util::Stream for Closable {
+    type Item = std::io::Result<bytes::Bytes>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_next(cx)
+    }
+}
+
+impl futures_util::Sink<bytes::Bytes> for Closable {
+    type Error = std::io::Error;
+
+    fn poll_ready(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_ready(cx)
+    }
+
+    fn start_send(self: std::pin::Pin<&mut Self>, item: bytes::Bytes) -> std::io::Result<()> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).start_send(item)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_flush(cx)
+    }
+
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_close(cx)
+    }
+}
+
+impl NodeCarrier for Closable {
+    async fn close_with(self, close: NodeClose) {
+        *self.closed.lock().unwrap() = Some(close);
+    }
+}
+
+/// The node's gateway answering on one end of a new in-memory pair; the
+/// other end, and how the node closed it (if it did).
+fn carrier(node: &Node) -> (MemoryCarrier, Arc<Mutex<Option<NodeClose>>>) {
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let closed = Arc::new(Mutex::new(None));
+    let node_end = Closable {
+        carrier: node_end,
+        closed: Arc::clone(&closed),
+    };
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    (client_end, closed)
+}
+
 /// A secure channel to the node: a carrier the gateway answers with the
 /// node's key, and the client's end after its handshake to `key`.
 async fn secure(
@@ -169,11 +237,21 @@ async fn secure(
 ) -> (
     Result<SecureChannel<MemoryCarrier>, SecureError>,
     tokio::task::JoinHandle<Result<(), SecureError>>,
+    Arc<Mutex<Option<NodeClose>>>,
 ) {
     let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let closed = Arc::new(Mutex::new(None));
+    let node_end = Closable {
+        carrier: node_end,
+        closed: Arc::clone(&closed),
+    };
     let gateway = node.secure.clone();
     let accepted = tokio::spawn(async move { gateway.accept(node_end).await });
-    (vessel_secure::initiate(client_end, key).await, accepted)
+    (
+        vessel_secure::initiate(client_end, key).await,
+        accepted,
+        closed,
+    )
 }
 
 /// Pairing and authenticating through the real Noise channel, as `/secure`
@@ -185,18 +263,14 @@ async fn devices_pair_and_authenticate_over_the_secure_channel() {
     let offer = invite(&node, None);
     let config = ClientConfig::default();
 
-    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
-    let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let (client_end, _closed) = carrier(&node);
     let (paired, connection) = secure::pair(client_end, &offer, "laptop", client(), &config)
         .await
         .unwrap();
     assert_eq!(paired.node.id, node.info().id);
     assert_eq!(connection.devices().await.unwrap().len(), 1);
 
-    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
-    let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let (client_end, _closed) = carrier(&node);
     let connection = secure::open(
         client_end,
         &offer.key,
@@ -209,9 +283,7 @@ async fn devices_pair_and_authenticate_over_the_secure_channel() {
     assert!(connection.sessions().await.unwrap().is_empty());
 
     // Spent: the same link again is refused, and that is final.
-    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
-    let gateway = node.secure.clone();
-    drop(tokio::spawn(async move { gateway.accept(node_end).await }));
+    let (client_end, _closed) = carrier(&node);
     let error = secure::pair(client_end, &offer, "again", client(), &config)
         .await
         .unwrap_err();
@@ -220,17 +292,18 @@ async fn devices_pair_and_authenticate_over_the_secure_channel() {
 }
 
 /// A client that pinned another key never gets a channel, and the node
-/// reports the failed handshake to its caller (which closes with 4401).
+/// closes the carrier with 4401 so the client knows it is final.
 #[tokio::test]
 async fn a_client_with_another_key_gets_no_channel() {
     let (_temp, node) = node().await;
     let other = *NodeKeypair::generate().unwrap().public();
-    let (channel, accepted) = secure(&node, &other).await;
+    let (channel, accepted, closed) = secure(&node, &other).await;
     assert!(channel.is_err());
     assert!(matches!(
         accepted.await.unwrap(),
         Err(SecureError::Handshake(_))
     ));
+    assert_eq!(*closed.lock().unwrap(), Some(NodeClose::HandshakeFailed));
     node.stop().await.unwrap();
 }
 
