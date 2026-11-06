@@ -55,4 +55,62 @@ fn secrets_are_owner_only() {
         |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(dir.root()), 0o700);
     assert_eq!(mode(&dir.token_path()), 0o600);
+    let _id = dir.load_or_create_node_id().unwrap();
+    assert_eq!(mode(&dir.root().join("node.id")), 0o600);
+}
+
+/// A data directory that already exists with group or other access (one
+/// made by hand, or left 0775 by an earlier version) is made owner-only.
+#[cfg(unix)]
+#[test]
+fn an_existing_open_directory_is_made_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("vessel");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o775)).unwrap();
+    DataDir::new(&root).prepare().unwrap();
+    let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+}
+
+/// The event log and `SQLite`'s `-wal` and `-shm` files are owner-only,
+/// whether new or left readable by an earlier version.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_event_log_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mode =
+        |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let temp = tempfile::tempdir().unwrap();
+    let dir = DataDir::new(temp.path());
+    let opened = vessel_store::Store::open(&dir, vessel_store::StoreConfig::default())
+        .await
+        .unwrap();
+    let database = dir.database_path();
+    let sidecars = ["vessel.db-wal", "vessel.db-shm"].map(|name| temp.path().join(name));
+    assert_eq!(mode(&database), 0o600);
+    for sidecar in &sidecars {
+        assert_eq!(mode(sidecar), 0o600, "{}", sidecar.display());
+    }
+    opened.store.close().await;
+    drop(opened);
+
+    // As an earlier version left them.
+    for path in std::iter::once(&database).chain(&sidecars) {
+        if path.exists() {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+    }
+    let reopened = vessel_store::Store::open(&dir, vessel_store::StoreConfig::default())
+        .await
+        .unwrap();
+    for path in std::iter::once(&database).chain(&sidecars) {
+        if path.exists() {
+            assert_eq!(mode(path), 0o600, "{}", path.display());
+        }
+    }
+    reopened.store.close().await;
 }
