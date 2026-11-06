@@ -13,9 +13,9 @@ use vessel_proto::{
     GetNode, GetSession, Harness, ImportMemory, ImportSession, Invitation, InviteDevice,
     KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions,
     Manifest, MemoryImported, MoveProfile, NodeInfo, ProfileInfo, ReadBlob, ReadEvents,
-    ReadTransfer, ReloadProfiles, ReportApplied, Request as _, RevokeDevice, SecretName, SendInput,
-    SessionId, SessionImported, SessionInfo, SessionOrigin, SessionSpec, SetSecret, StopNode,
-    Subscribe, Subscribed, TransferManifest, Unsubscribe, WatchFleet, WireError,
+    ReadTransfer, ReloadProfiles, ReportApplied, RevokeDevice, SecretName, SendInput, SessionId,
+    SessionImported, SessionInfo, SessionOrigin, SessionSpec, SetSecret, StopNode, Subscribe,
+    Subscribed, TransferManifest, Unsubscribe, WatchFleet, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
@@ -27,6 +27,7 @@ use crate::lifecycle::Lifecycle;
 use crate::principal::Principal;
 use crate::profiles::launch::{Launcher, agent_session};
 use crate::profiles::{NodeProfiles, moving};
+use crate::secret_copy::Copied;
 use crate::sessions::Sessions;
 use crate::subscribe;
 use crate::transfers::export::Exporter;
@@ -622,7 +623,9 @@ impl NodeService {
 ///   (`pass_on`) as the caller, so the target runs it as the home's device
 ///   cut down to the caller's origin: copying needs the target to have
 ///   granted the home `admin`, which the default grant (`read`, `operate`)
-///   leaves out on purpose. A refusal for that says so and how to grant it
+///   leaves out on purpose. The target is asked a value-free `secret.list`
+///   first, and the value goes only if that passes (`secret_copy`), so a
+///   target that would refuse it never receives it. A refusal for that says so and how to grant it
 ///   (join again with `--grant`); the home itself grants its members only
 ///   `sync` and `relay`, so a secret is set there directly instead.
 /// - The value is never logged and never in an error: `SecretValue`
@@ -659,26 +662,18 @@ impl NodeService {
             name: name.clone(),
             value,
         };
-        let delivered = self
-            .pass_on(connection.principal(), to, Box::new(set.into_call()))
-            .await;
-        let forwarded = match delivered {
-            Ok(forwarded) => forwarded,
-            Err(error)
-                if error.code == ErrorCode::Forbidden && error.message.contains("`admin`") =>
-            {
-                return Err(self.not_granted(&name, to).await);
+        // Asked first, the value sent only if that passes (`secret_copy`).
+        let principal = connection.principal();
+        let copied =
+            crate::secret_copy::copy(set, |call| self.pass_on(principal, to, Box::new(call)))
+                .await?;
+        match copied {
+            Copied::Stored => {
+                tracing::info!(secret = %name, %to, "secret copied");
+                Ok(Ack)
             }
-            Err(error) => return Err(error),
-        };
-        let _ack = SetSecret::response_from(*forwarded.reply).map_err(|unexpected| {
-            WireError::new(
-                ErrorCode::Internal,
-                format!("node {to} answered out of turn: {unexpected}"),
-            )
-        })?;
-        tracing::info!(secret = %name, %to, "secret copied");
-        Ok(Ack)
+            Copied::NotGranted => Err(self.not_granted(&name, to).await),
+        }
     }
 
     /// Why `to` refused to store a secret for want of `admin`, and what to
