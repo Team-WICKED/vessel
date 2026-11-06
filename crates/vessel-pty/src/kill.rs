@@ -44,6 +44,13 @@ impl Killer {
     }
 
     /// Ask the program (Unix: its whole group) to stop.
+    #[cfg_attr(
+        not(unix),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "same signature as the Unix version, whose signal can fail"
+        )
+    )]
     pub(crate) fn signal(&mut self, signal: Signal) -> Result<(), SignalError> {
         #[cfg(unix)]
         {
@@ -52,7 +59,16 @@ impl Killer {
         #[cfg(not(unix))]
         {
             let _ = signal;
-            self.killer.kill().map_err(SignalError::from)
+            // `portable-pty` 0.9's Windows killer inverts `TerminateProcess`'s
+            // result: success comes back as an error carrying "the
+            // operation completed successfully", failure as `Ok`. Its value
+            // therefore says nothing, and terminating our own child can
+            // only fail once the child has exited, which is what stopping
+            // wants anyway. So the request counts as delivered either way.
+            if let Err(reported) = self.killer.kill() {
+                tracing::trace!(%reported, "pty killer result (inverted in portable-pty 0.9)");
+            }
+            Ok(())
         }
     }
 

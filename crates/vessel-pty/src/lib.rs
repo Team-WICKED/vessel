@@ -23,6 +23,10 @@
 //!   stop and swept with `SIGKILL` once the leader exits; output then ends
 //!   because no process holds the PTY any more. On Windows the pseudo
 //!   console is closed when the program exits, which ends the output.
+//! - Windows start: the pseudo console waits for an answer to its startup
+//!   cursor query before it shows any output; the reader answers it
+//!   (module `startup`), or no session would show anything until a
+//!   terminal attached.
 //! - Windows gap: stopping terminates the direct child only (for an npm
 //!   `.cmd` shim that is `cmd.exe`). The harness under it is attached to
 //!   the same pseudo console and is told the console closed
@@ -39,6 +43,8 @@ mod error;
 mod kill;
 mod process;
 mod size;
+#[cfg(any(windows, test))]
+mod startup;
 mod streams;
 mod threads;
 

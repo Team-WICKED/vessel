@@ -70,11 +70,14 @@ pub(crate) fn start(
     spawn("vessel-pty-wait", move || {
         wait_for_exit(child, &sweep, exit_sender);
     })?;
-    let (output_sender, output) = mpsc::channel(OUTPUT_CHUNKS);
-    spawn("vessel-pty-read", move || {
-        read_output(reader, &output_sender);
-    })?;
     let (control, control_receiver) = mpsc::channel(CONTROL_MESSAGES);
+    let (output_sender, output) = mpsc::channel(OUTPUT_CHUNKS);
+    // Weak, like `PtyInput`'s: the control thread (and with it the PTY)
+    // must close when the `PtyProcess` lets go, whatever the reader does.
+    let console = control.downgrade();
+    spawn("vessel-pty-read", move || {
+        read_output(reader, &output_sender, &console);
+    })?;
     spawn("vessel-pty-control", move || {
         apply_control(control_receiver, writer, master);
     })?;
@@ -125,7 +128,21 @@ fn exit_code(status: &portable_pty::ExitStatus) -> Option<i32> {
 }
 
 /// Reader thread: copy PTY output into the channel until the PTY closes.
-fn read_output(mut reader: Box<dyn Read + Send>, output: &mpsc::Sender<Bytes>) {
+///
+/// On Windows the start of the output goes through [`CursorQuery`] first:
+/// the pseudo console's startup cursor query is answered through `console`
+/// and dropped (see the `startup` module).
+///
+/// [`CursorQuery`]: crate::startup::CursorQuery
+fn read_output(
+    mut reader: Box<dyn Read + Send>,
+    output: &mpsc::Sender<Bytes>,
+    console: &mpsc::WeakSender<Control>,
+) {
+    #[cfg(windows)]
+    let mut query = crate::startup::CursorQuery::default();
+    #[cfg(not(windows))]
+    let _ = console;
     let mut buffer = vec![0_u8; READ_BUFFER];
     loop {
         match reader.read(&mut buffer) {
@@ -134,8 +151,23 @@ fn read_output(mut reader: Box<dyn Read + Send>, output: &mpsc::Sender<Bytes>) {
                 let Some(chunk) = buffer.get(..read) else {
                     break;
                 };
+                #[cfg(windows)]
+                let chunk = if query.watching() {
+                    let filtered = query.feed(chunk);
+                    if filtered.answer {
+                        answer_cursor_query(console);
+                    }
+                    Bytes::from(filtered.output)
+                } else {
+                    Bytes::copy_from_slice(chunk)
+                };
                 // One allocation per chunk, sized to what was read.
-                if output.blocking_send(Bytes::copy_from_slice(chunk)).is_err() {
+                #[cfg(not(windows))]
+                let chunk = Bytes::copy_from_slice(chunk);
+                if chunk.is_empty() {
+                    continue;
+                }
+                if output.blocking_send(chunk).is_err() {
                     break;
                 }
             }
@@ -146,6 +178,27 @@ fn read_output(mut reader: Box<dyn Read + Send>, output: &mpsc::Sender<Bytes>) {
                 break;
             }
         }
+    }
+    #[cfg(windows)]
+    {
+        let held = query.finish();
+        if !held.is_empty() && output.blocking_send(Bytes::from(held)).is_err() {
+            tracing::debug!("pty output closed before its last bytes");
+        }
+    }
+}
+
+/// Send the pseudo console the cursor report it waits for at startup.
+#[cfg(windows)]
+fn answer_cursor_query(console: &mpsc::WeakSender<Control>) {
+    let reply = Control::Write(Bytes::from_static(crate::startup::REPLY));
+    let sent = console
+        .upgrade()
+        .is_some_and(|control| control.blocking_send(reply).is_ok());
+    if sent {
+        tracing::debug!("answered the pseudo console's startup cursor query");
+    } else {
+        tracing::debug!("pty closed before the startup cursor query was answered");
     }
 }
 
