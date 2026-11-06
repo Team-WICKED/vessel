@@ -116,6 +116,8 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
             "4",
             "--max-unauthenticated",
             "45",
+            "--max-node-clients-per-address",
+            "3",
         ])
         .spawn()
         .unwrap();
@@ -143,6 +145,7 @@ async fn vesseld_relay_takes_its_limits_from_flags_and_refuses_a_zero_count() {
         "reserved_registering=1",
         "max_clients_per_address=4",
         "max_unauthenticated=45",
+        "max_node_clients_per_address=3",
     ] {
         assert!(limits.contains(field), "{field}: {limits}");
     }

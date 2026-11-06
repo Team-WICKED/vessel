@@ -132,6 +132,7 @@ impl Node {
             closing: closing.clone(),
             connections: connections.clone(),
             unadmitted: Arc::new(Semaphore::new(MAX_UNADMITTED)),
+            unadmitted_relayed: Arc::new(Semaphore::new(vessel_relay::RELAYED_UNADMITTED)),
         };
         let teardown = Teardown {
             runtime,

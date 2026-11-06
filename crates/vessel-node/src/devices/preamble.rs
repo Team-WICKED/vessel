@@ -26,8 +26,9 @@ use super::{Devices, Registration};
 use crate::lifecycle::Lifecycle;
 use crate::principal::Principal;
 
-/// How long a new channel may take to send its preamble; a client that
-/// connects and says nothing is dropped instead of holding a connection.
+/// How long a new direct channel may take to send its preamble; a client
+/// that connects and says nothing is dropped instead of holding a
+/// connection. A relayed one has less (`Route::preamble_within`).
 pub(crate) const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A client the node will serve.
@@ -50,16 +51,17 @@ pub(crate) enum NotAdmitted {
     Transport(String),
 }
 
-/// Read and answer the preamble on `channel`. On success the caller serves
-/// the protocol on the same channel; on a refusal the channel has been
-/// closed.
+/// Read the preamble on `channel` within `within` and answer it. On
+/// success the caller serves the protocol on the same channel; on a
+/// refusal the channel has been closed.
 pub(crate) async fn admit<T: FrameTransport>(
     channel: &mut T,
     devices: &Devices,
     lifecycle: &Lifecycle,
     closing: &CancellationToken,
+    within: Duration,
 ) -> Result<Admitted, NotAdmitted> {
-    let first = match tokio::time::timeout(PREAMBLE_TIMEOUT, channel.next()).await {
+    let first = match tokio::time::timeout(within, channel.next()).await {
         Err(_elapsed) => return Err(NotAdmitted::NoPreamble("no preamble in time")),
         Ok(None) => return Err(NotAdmitted::NoPreamble("closed before the preamble")),
         Ok(Some(Err(error))) => return Err(NotAdmitted::Transport(error.to_string())),

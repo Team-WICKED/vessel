@@ -24,7 +24,7 @@ use vessel_store::NodeToken;
 
 use crate::auth;
 use crate::guard::Guarded;
-use crate::secure::SecureGateway;
+use crate::secure::{Route, SecureGateway};
 use crate::service::Connection;
 use crate::transport::WsTransport;
 
@@ -104,7 +104,10 @@ async fn secure(State(gateway): State<Gateway>, upgrade: WebSocketUpgrade) -> Re
             let _tracked = connection;
             gateway
                 .secure
-                .accept_logged(AxumCarrier::new(socket, Some(gateway.keepalive)), "direct")
+                .accept_logged(
+                    AxumCarrier::new(socket, Some(gateway.keepalive)),
+                    Route::Direct,
+                )
                 .await;
         })
 }

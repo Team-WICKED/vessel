@@ -51,7 +51,7 @@ use vessel_relay::{LinkState, NodeLink, Reach, TlsConfig, WsCarrier};
 use vessel_secure::NodeKeypair;
 
 use crate::error::NodeError;
-use crate::secure::SecureGateway;
+use crate::secure::{Route, SecureGateway};
 
 /// The node's relay links.
 #[derive(Debug)]
@@ -112,7 +112,7 @@ impl Serving {
         let accept = move |carrier: WsCarrier| {
             let gateway = gateway.clone();
             drop(tracker.spawn(async move {
-                gateway.accept_logged(carrier, "relay").await;
+                gateway.accept_logged(carrier, Route::Relayed).await;
             }));
         };
         drop(self.connections.spawn(link.run(accept, stop)));
