@@ -284,6 +284,13 @@ they started.
     `VESSEL_SSH` (the `ssh` program) and `VESSEL_GH` (the GitHub CLI);
     tests set all three so they never touch the user's book, the real
     `ssh`, or GitHub (the README lists them).
+    Milestone 3 (Track P, in progress): `vessel node pair [--label]
+    [--ttl 10m]` (the link alone on stdout, a QR code from `qrcode` 0.14
+    when stdout is a terminal, instructions on stderr), `vessel node
+    devices` and `vessel node devices revoke ID-PREFIX`, over any
+    connection with the `admin` scope; `nodes show` for a paired node.
+    `nodes add --pair` and connecting to paired nodes wait for
+    `SecureConnector`.
 - Milestone 3, Track S (in progress, `backend/m3-secure`):
   - `vessel-secure` (2026-11-06): `initiate`/`respond` run Noise
     `NK_25519_ChaChaPoly_SHA256` (prologue `vessel/secure/1`, 48-byte

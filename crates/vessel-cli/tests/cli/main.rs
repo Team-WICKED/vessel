@@ -9,6 +9,7 @@
 //! `reconnect` (an attach that survives a lost connection).
 
 #[cfg(test)]
+mod devices;
 mod nodes;
 #[cfg(test)]
 mod reconnect;

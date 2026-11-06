@@ -104,8 +104,9 @@ crossterm = { version = "0.29", default-features = false, features = ["windows"]
 curve25519-dalek = { version = "4.1.3", default-features = false }
 dirs = "6"
 futures-util = "0.3"
-# OS randomness for the 256-bit node token (vessel-store, ADR 0005) and
-# for test and relay keys (vessel-secure).
+# OS randomness for the 256-bit node token (vessel-store, ADR 0005), test
+# and relay keys (vessel-secure), and device credentials and pairing
+# invitations (vessel-node, ADR 0010).
 getrandom = "0.4"
 hostname = "0.4"
 # Unix process groups and signals (killpg) without `unsafe` (vessel-proc);
@@ -118,6 +119,10 @@ portable-pty = "0.9"
 # (`.cmd` shim, node, the harness, its MCP servers) stops together. Keeps
 # the Win32 FFI and its `unsafe` out of this workspace.
 process-wrap = { version = "10", default-features = false, features = ["job-object", "kill-on-drop", "tokio1"] }
+# Pairing links as QR codes in the terminal (`vessel node pair`, M3 plan
+# decision 2). Default features off: the unicode renderer only, with no
+# dependencies and no `unsafe` (checked 2026-11-06).
+qrcode = { version = "0.14", default-features = false }
 # SQLite event log with the library compiled in (vessel-store, ADR 0004).
 rusqlite = { version = "0.41", features = ["bundled"] }
 # Safe `tcgetwinsize` for the fake-tui test binary (vessel-testkit only).
@@ -125,8 +130,9 @@ rustix = { version = "1", default-features = false, features = ["std", "termios"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # SHA-256 of a vesseld build (vessel-remote): its `-dev-<hash>` name and the
-# checksum the remote verifies before installing it (ADR 0008). RustCrypto,
-# pure Rust, so Windows clients need no system library.
+# checksum the remote verifies before installing it (ADR 0008); device
+# credential hashes (vessel-store) and invitation keys (vessel-node, ADR
+# 0010). RustCrypto, pure Rust, so Windows clients need no system library.
 sha2 = "0.11"
 # Noise NK for the end-to-end secure channel (vessel-secure, ADR 0009). No
 # `std` feature: it would enable `snow`'s optional `ring` (C and assembly).

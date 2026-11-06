@@ -10,6 +10,7 @@ mod args;
 mod attach;
 mod commands;
 mod connect;
+mod devices;
 mod error;
 mod io;
 mod log;

@@ -116,6 +116,63 @@ pub(crate) enum NodeCommand {
     Update(Update),
     /// Show the node: version, state (serving or draining), live sessions.
     Status,
+    /// Make a single-use link that pairs a new device with the node (needs
+    /// the `admin` scope). Prints the link, and a QR code on a terminal.
+    Pair {
+        /// Name for the device on the node (else it names itself).
+        #[arg(long)]
+        label: Option<String>,
+        /// How long the link works: `90s`, `10m`, `2h` (at most `24h`).
+        #[arg(long, default_value = "10m", value_parser = ttl_secs)]
+        ttl: u32,
+    },
+    /// List the node's paired devices, or revoke one.
+    Devices {
+        #[command(subcommand)]
+        command: Option<DevicesCommand>,
+    },
+}
+
+/// `vessel node devices ...`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum DevicesCommand {
+    /// Revoke a device: it is refused from now on and its open connections
+    /// close. Other devices are not affected.
+    Revoke {
+        /// The device's id, or a unique prefix of it.
+        device: String,
+    },
+}
+
+/// Longest pairing link lifetime, as the node allows (ADR 0010).
+const MAX_TTL_SECS: u32 = 24 * 60 * 60;
+
+/// `--ttl`: a number of seconds, minutes (`m`) or hours (`h`), from one
+/// second to a day.
+fn ttl_secs(text: &str) -> Result<u32, String> {
+    let text = text.trim();
+    let (number, unit) = match text.strip_suffix(['s', 'm', 'h']) {
+        Some(number) => (number, text.chars().last()),
+        None => (text, None),
+    };
+    let scale = match unit {
+        Some('m') => 60,
+        Some('h') => 60 * 60,
+        _ => 1,
+    };
+    let invalid = || format!("`{text}` is not a duration like `90s`, `10m` or `2h`");
+    let secs = number
+        .parse::<u32>()
+        .map_err(|_number| invalid())?
+        .checked_mul(scale)
+        .ok_or_else(invalid)?;
+    if secs == 0 {
+        return Err("a pairing link must work for at least a second".to_owned());
+    }
+    if secs > MAX_TTL_SECS {
+        return Err("a pairing link works at most 24h".to_owned());
+    }
+    Ok(secs)
 }
 
 /// `vessel node update`.
@@ -234,4 +291,23 @@ pub(crate) struct Run {
 
 fn parse_seq(text: &str) -> Result<EventSeq, std::num::ParseIntError> {
     text.parse().map(EventSeq::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_link_lifetimes_read_like_durations_and_stay_within_a_day() {
+        assert_eq!(ttl_secs("90"), Ok(90));
+        assert_eq!(ttl_secs("90s"), Ok(90));
+        assert_eq!(ttl_secs("10m"), Ok(600));
+        assert_eq!(ttl_secs(" 2h "), Ok(7200));
+        assert_eq!(ttl_secs("24h"), Ok(MAX_TTL_SECS));
+        assert!(ttl_secs("25h").is_err());
+        assert!(ttl_secs("0m").is_err());
+        assert!(ttl_secs("ten").is_err());
+        assert!(ttl_secs("1d").is_err());
+        assert!(ttl_secs("4294967295h").is_err(), "overflow is an error");
+    }
 }

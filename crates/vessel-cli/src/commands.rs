@@ -18,7 +18,7 @@ use crate::attach::{self, terminal};
 use crate::connect::{connect, connect_to, data_dir, is_here};
 use crate::error::CliError;
 use crate::selector::SessionSelector;
-use crate::{io, nodes, remote, render};
+use crate::{devices, io, nodes, remote, render};
 
 pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
     let target = &cli.target;
@@ -41,6 +41,12 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             let text = render::node_status(&node, &sessions, env!("CARGO_PKG_VERSION"));
             Ok(io::out(text.as_bytes()).await?)
         }
+        Command::Node {
+            command: NodeCommand::Pair { label, ttl },
+        } => devices::pair(target, label, ttl).await,
+        Command::Node {
+            command: NodeCommand::Devices { command },
+        } => devices::devices(target, command).await,
         Command::Nodes { command } => nodes::command(target, command).await,
         Command::Status => {
             let client = connect(target).await?.client;
