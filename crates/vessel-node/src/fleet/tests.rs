@@ -123,7 +123,10 @@ impl Home {
         .unwrap();
         let claude = temp.path().join("claude");
         std::fs::create_dir_all(&claude).unwrap();
-        let mut config = Config::new(data);
+        let mut config = Config::new(
+            data,
+            vessel_harness::HarnessEnv::new(temp.path().join("user")),
+        );
         config.bind = None;
         config.harness_lookup = Lookup::new(Vec::<PathBuf>::new());
         config.fleet = fast(vec![(HarnessKind::ClaudeCode, claude)]);

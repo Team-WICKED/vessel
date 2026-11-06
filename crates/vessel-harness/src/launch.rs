@@ -8,6 +8,7 @@ use std::sync::Arc;
 use vessel_proc::CommandSpec;
 use vessel_proto::{McpServerName, ResolvedMcpServers, SessionMode, SessionSpec};
 
+use crate::env::HarnessEnv;
 use crate::error::HarnessError;
 use crate::harnesses::{Structured, descriptor};
 use crate::lookup::Lookup;
@@ -44,14 +45,16 @@ pub struct Launch {
 /// itself with its ACP arguments, or a separate adapter (which needs only
 /// the adapter to be installed); its MCP servers go over ACP instead, so
 /// `mcp` is not used, and neither are the profile's arguments. In both
-/// modes the profile's variables are set and its `unset` ones removed.
+/// modes the harness inherits `env`'s account (its home variable as there,
+/// removed when unset there, and on Unix `HOME`), then the profile's
+/// variables are set and its `unset` ones removed.
 ///
 /// A terminal session's MCP configuration file goes in `mcp_dir`, an
 /// owner-only directory of the node's (ADR 0012); there is no fallback to
 /// a shared directory, so without one a harness that needs the file is
 /// refused.
 ///
-/// The working directory defaults to the node user's home directory, is
+/// The working directory defaults to `env`'s user home, is
 /// made absolute, and must exist: running an agent in a different directory
 /// than asked is worse than refusing.
 ///
@@ -69,6 +72,7 @@ pub struct Launch {
 /// harness needs a file and `mcp_dir` is `None`.
 pub fn launch(
     lookup: &Lookup,
+    env: &HarnessEnv,
     spec: &SessionSpec,
     profile: &Profile,
     mcp: &ResolvedMcpServers,
@@ -107,6 +111,9 @@ pub fn launch(
                 Some(_) if mcp.is_empty() => {}
                 Some(render) => {
                     let rendered = render(mcp)?;
+                    // Against what the child really inherits for every
+                    // other variable: the process's. Its home variable and
+                    // `HOME` come from `env` and are refused here anyway.
                     check_environment(&rendered, profile, descriptor.home.variable, &|name| {
                         std::env::var_os(name)
                     })?;
@@ -134,8 +141,9 @@ pub fn launch(
             }
         },
     };
-    let command = with_profile(command, profile);
-    let command = match working_dir(spec)? {
+    // This node's account first (`HarnessEnv`), then the profile's own.
+    let command = with_profile(env.apply(command, harness), profile);
+    let command = match working_dir(spec, env)? {
         Some(cwd) => command.cwd(cwd),
         None => command,
     };
@@ -238,16 +246,16 @@ pub(crate) fn adapter_missing(binary: &str, install: &str) -> String {
 /// session would silently run somewhere else than meant. Clients send
 /// absolute paths (the CLI resolves its own relative ones). ACP needs an
 /// absolute directory as well.
-fn working_dir(spec: &SessionSpec) -> Result<Option<PathBuf>, HarnessError> {
+fn working_dir(spec: &SessionSpec, env: &HarnessEnv) -> Result<Option<PathBuf>, HarnessError> {
     let cwd = match &spec.cwd {
         Some(cwd) if !cwd.is_absolute() => {
             return Err(HarnessError::RelativeDirectory { cwd: cwd.clone() });
         }
         Some(cwd) => cwd.clone(),
-        // The node's own setting, so resolving it is the node's business.
-        None => match dirs::home_dir().map(std::path::absolute) {
-            Some(Ok(home)) => home,
-            Some(Err(_)) | None => return Ok(None),
+        // The user's home the node was given, never the process's own.
+        None => match std::path::absolute(env.user_home()) {
+            Ok(home) => home,
+            Err(_) => return Ok(None),
         },
     };
     if cwd.is_dir() {

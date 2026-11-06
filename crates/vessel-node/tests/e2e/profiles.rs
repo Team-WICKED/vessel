@@ -104,13 +104,12 @@ async fn run_under(
         .send(info.id, typed("env CLAUDE_CONFIG_DIR"))
         .await
         .unwrap();
-    let set = home.map(|home| format!("env CLAUDE_CONFIG_DIR={home}"));
-    let inherited_home = std::env::var("CLAUDE_CONFIG_DIR")
-        .ok()
-        .map(|home| format!("env CLAUDE_CONFIG_DIR={home}"));
-    let expected = set
-        .or(inherited_home)
-        .unwrap_or_else(|| "env CLAUDE_CONFIG_DIR unset".to_owned());
+    // A profile's own home, or else the fixture's account's, which has no
+    // home variable: never the test process's own (`HarnessEnv`).
+    let expected = home.map_or_else(
+        || "env CLAUDE_CONFIG_DIR unset".to_owned(),
+        |home| format!("env CLAUDE_CONFIG_DIR={home}"),
+    );
     let found = until_any(
         &mut stream,
         &mut seen,
@@ -279,7 +278,7 @@ async fn a_broken_profiles_file_stops_the_node_from_starting() {
     within(async {
         let fixture = Fixture::new();
         write_profiles(&fixture, "[profiles.claude]\nharness = \"codex\"\n");
-        let mut config = Config::new(fixture.data_dir());
+        let mut config = Config::new(fixture.data_dir(), fixture.harness_env());
         config.bind = Some(std::net::SocketAddr::from((
             std::net::Ipv4Addr::LOCALHOST,
             0,

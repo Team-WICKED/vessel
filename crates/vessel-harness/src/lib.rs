@@ -51,6 +51,7 @@
 //! [`CommandSpec`]: vessel_proc::CommandSpec
 
 mod discover;
+mod env;
 mod error;
 #[cfg(feature = "fakes")]
 pub mod fakes;
@@ -65,6 +66,7 @@ mod sessions;
 mod setup;
 
 pub use discover::discover;
+pub use env::HarnessEnv;
 pub use error::HarnessError;
 pub use home::{home, login_check};
 pub use launch::{Launch, launch};

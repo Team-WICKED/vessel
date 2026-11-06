@@ -138,7 +138,7 @@ pub(crate) fn start(
         Arc::clone(&home),
         links,
         config.clone(),
-        profiles.user_home().map(ToOwned::to_owned),
+        Some(profiles.user_home().to_owned()),
         tasks.clone(),
         stop.clone(),
     )));

@@ -7,7 +7,7 @@
 //! Tests wait on events, never on time; the timeout only turns a hang into
 //! a failure.
 
-use vessel_harness::{HarnessError, Profile, SessionFilesError, home};
+use vessel_harness::{HarnessError, Profile, SessionFilesError};
 use vessel_proto::{
     ContentBlock, Creator, DeviceId, ErrorCode, HarnessKind, HarnessSessionId, NodeId, SessionId,
     SessionInput, SessionOrigin, SessionStatus, StopReason,
@@ -32,7 +32,7 @@ mod support {
     use tokio::sync::broadcast::error::RecvError;
     use tokio_util::sync::CancellationToken;
     use vessel_harness::fakes::{Role, claude_project, install};
-    use vessel_harness::{Lookup, Profile, Profiles, home, parse_profiles};
+    use vessel_harness::{HarnessEnv, Lookup, Profile, Profiles, parse_profiles};
     use vessel_proto::{
         AgentEvent, ContentBlock, EventRecord, EventSeq, HarnessKind, HarnessSessionId,
         McpTransport, ProfileName, ResolvedMcpServers, ResolvedValue, SessionEvent, SessionInput,
@@ -53,6 +53,12 @@ mod support {
         "header-secret-c07",
         "profile-secret-9e2",
     ];
+
+    /// The account a fixture's harnesses run as: its own directory, no
+    /// home variables (never the machine's).
+    pub(super) fn env(dir: &Path) -> HarnessEnv {
+        HarnessEnv::new(dir.to_owned())
+    }
 
     pub(super) async fn within<F: Future>(test: F) -> F::Output {
         vessel_testkit::within(SAFETY_NET, test)
@@ -87,6 +93,7 @@ mod support {
             let runtime = SessionRuntime::new(
                 RuntimeConfig {
                     harness_lookup: Lookup::new([bin]),
+                    harness_env: env(&dir),
                     ring_capacity: DEFAULT_RING_CAPACITY,
                     durable_capacity: DEFAULT_DURABLE_CAPACITY,
                     agent_handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
@@ -117,7 +124,7 @@ mod support {
 
         /// `profile`'s harness home.
         pub(super) fn home_of(&self, profile: &Profile) -> PathBuf {
-            home(profile, &self.dir, |name| std::env::var_os(name)).unwrap()
+            env(&self.dir).home(profile).unwrap()
         }
 
         /// The working directory of [`Fixture::movable`] sessions.
@@ -493,10 +500,12 @@ async fn two_profiles_run_in_two_homes_and_unset_removes() {
                 .either("env CLAUDE_CONFIG_DIR=", "env CLAUDE_CONFIG_DIR unset")
                 .await;
             let expected = if profile.is_default() {
-                // The default profile changes nothing: the node's own.
-                std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from)
+                // The default profile changes nothing: the account the
+                // node was given, which has no home variable here (and so
+                // never the machine's own).
+                None
             } else {
-                home(&profile, fixture.homes(), |name| std::env::var_os(name))
+                fixture.home_of(&profile).into()
             };
             match expected {
                 Some(dir) => assert_eq!(got, format!("env CLAUDE_CONFIG_DIR={}", dir.display())),
@@ -713,7 +722,7 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
         reader.until_status(&SessionStatus::Running).await;
         assert_eq!(reader.logs, ["vessel: a notice"]);
 
-        let home = home(&alt, fixture.homes(), |name| std::env::var_os(name)).unwrap();
+        let home = fixture.home_of(&alt);
         assert_eq!(
             reader.ask("env CLAUDE_CONFIG_DIR").await,
             format!("env CLAUDE_CONFIG_DIR={}", home.display())

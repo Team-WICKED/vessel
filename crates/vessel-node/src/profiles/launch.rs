@@ -328,7 +328,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let profiles = NodeProfiles::load(
             vessel_store::DataDir::new(dir.path()),
-            Some(dir.path().to_owned()),
+            vessel_harness::HarnessEnv::new(dir.path().to_owned()),
         )
         .unwrap();
         let launcher = Launcher::new(dir.path().join("mcp"), Arc::new(OneServer), None);

@@ -138,9 +138,6 @@ pub(crate) enum ServiceError {
     /// its files cannot be found to move.
     #[error("the session's profile `{0}` is no longer defined")]
     ProfileGone(ProfileName),
-    /// The node user has no home directory, so harness homes are unknown.
-    #[error("the node user has no home directory")]
-    NoUserHome,
     /// A profile's harness home is a relative path, which the harness
     /// resolves per session.
     #[error("profile `{0}`'s harness home cannot be known (a relative path)")]
@@ -195,7 +192,6 @@ impl ServiceError {
             Self::Ended(_)
             | Self::Profiles(ProfilesFileError::Parse(_))
             | Self::ProfileGone(_)
-            | Self::NoUserHome
             | Self::HomeUnknown(_)
             | Self::NotLoggedIn(_)
             | Self::AgentGone(_)

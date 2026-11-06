@@ -10,8 +10,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use tempfile::TempDir;
 use vessel_client::{BearerToken, NodeClient, NodeUrl, SessionStream};
-use vessel_harness::Lookup;
 use vessel_harness::fakes::{Role, install};
+use vessel_harness::{HarnessEnv, Lookup};
 use vessel_node::{Config, DataDir, Node};
 use vessel_proto::{
     AgentEvent, ClientInfo, ContentBlock, EventRecord, EventSeq, HarnessKind, HarnessSessionId,
@@ -39,6 +39,8 @@ pub(crate) fn within<F: Future>(test: F) -> impl Future<Output = F::Output> {
 pub(crate) struct Fixture {
     data: TempDir,
     bin: TempDir,
+    /// The user home its nodes run harnesses under: never the machine's.
+    home: TempDir,
 }
 
 impl Fixture {
@@ -82,7 +84,22 @@ impl Fixture {
         let tui = Fake::Tui.path().unwrap();
         drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
         adapter(bin.path(), &Fake::Acp.path().unwrap());
-        Self { data, bin }
+        Self {
+            data,
+            bin,
+            home: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    /// The account its nodes' harnesses run as: a temporary home and no
+    /// home variables, so a default profile's home is under it.
+    pub(crate) fn harness_env(&self) -> HarnessEnv {
+        HarnessEnv::new(self.home.path().to_owned())
+    }
+
+    /// That temporary user home.
+    pub(crate) fn user_home(&self) -> &std::path::Path {
+        self.home.path()
     }
 
     pub(crate) fn data_dir(&self) -> DataDir {
@@ -94,7 +111,7 @@ impl Fixture {
     }
 
     pub(crate) async fn start_with(&self, adjust: impl FnOnce(&mut Config)) -> Node {
-        let mut config = Config::new(self.data_dir());
+        let mut config = Config::new(self.data_dir(), self.harness_env());
         config.bind = Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
         config.harness_lookup = Lookup::new([self.bin.path().to_path_buf()]);
         adjust(&mut config);

@@ -58,15 +58,13 @@ impl TargetSource {
 }
 
 fn profile_targets(profiles: &NodeProfiles) -> Vec<Target> {
-    let Some(user_home) = profiles.user_home() else {
-        return Vec::new();
-    };
+    let user_home = profiles.user_home();
     let mut targets: Vec<(HarnessKind, Target)> = profiles
         .list(None)
         .into_iter()
         .filter_map(|info| profiles.get(&info.name))
         .filter_map(|profile| {
-            let root = vessel_harness::home(&profile, user_home, |name| std::env::var_os(name))?;
+            let root = profiles.home(&profile)?;
             Some((
                 profile.harness(),
                 Target::for_harness(profile.harness(), root)?,

@@ -56,7 +56,13 @@ mod support {
             let acp = Fake::Acp.path().unwrap();
             drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
             drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Structured, &acp).unwrap());
-            let mut config = Config::new(DataDir::new(data.path()));
+            // A temporary home with no home variables, never the machine's.
+            let user_home = data.path().join("user-home");
+            std::fs::create_dir_all(&user_home).unwrap();
+            let mut config = Config::new(
+                DataDir::new(data.path()),
+                vessel_harness::HarnessEnv::new(user_home),
+            );
             config.bind = None;
             config.harness_lookup = Lookup::new([bin.path().to_path_buf()]);
             config.vessel_mcp = Some(VesselMcp::vessel(data.path().join("vessel")));

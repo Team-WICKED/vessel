@@ -20,6 +20,10 @@ pub const DEFAULT_DURABLE_CAPACITY: NonZeroUsize = nonzero(256);
 pub struct RuntimeConfig {
     /// Where harness binaries are found.
     pub harness_lookup: vessel_harness::Lookup,
+    /// The account harnesses run as: the user's home (the default working
+    /// directory) and the harness home variables they inherit. Given, never
+    /// read from the process (see `HarnessEnv`); tests give a temporary home.
+    pub harness_env: vessel_harness::HarnessEnv,
     /// In-memory records kept per session (a cache for live followers; the
     /// store is the source of truth). Also the live broadcast buffer: a
     /// follower further behind than this gets `Lagged`.
