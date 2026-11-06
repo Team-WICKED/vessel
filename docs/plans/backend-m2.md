@@ -9,6 +9,31 @@ fast server-side updates; item 2: remote use that is "very convenient"),
 proposed ADRs this plan depends on: 0007 (SSH transport) and 0008 (remote
 install and update).
 
+## State (2026-11-06)
+
+- **Track N is done** (N1-N8, merged into `backend/m2` at 609a0c6, CI green
+  on all three OSes). Since then, on `backend/m2-node`:
+  - `session.read` of a live session serves records retention pruned from
+    the store but its ring still holds (the cause of the pruned-gap flake);
+  - the node lock is unlocked explicitly, so a child process being started
+    cannot keep it held past a restart;
+  - `attach` and the rpc writer are split by responsibility.
+- **Track N limits, known and accepted for M2:**
+  - A `session.create` already past the draining check when the node
+    decides it is idle is interrupted by the stop.
+  - On Windows the named pipe is compiled and tested in process; the SSH
+    tests are Unix-only (Windows remotes are out of M2).
+  - A node started by `attach` has no supervisor: after a crash, the next
+    `attach` starts it again.
+- **Left for the milestone:**
+  - Track C, C1-C7: the `Connector` and resuming follow, the
+    `vessel-remote` ssh runner, platform detection, install, the
+    `SshConnector`, the CLI, and the release workflow with its signing key.
+    Track C also brings `vessel_testkit::vesseld()`.
+  - `README.md` and `ARCHITECTURE.md` describing remote use from the
+    client's side.
+  - The coordinator's manual smoke over real SSH (milestone done criteria).
+
 ## Goal
 
 Roadmap Phase 1, minus the relay:
