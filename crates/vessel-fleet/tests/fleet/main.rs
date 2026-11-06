@@ -10,6 +10,8 @@ mod home;
 #[cfg(test)]
 mod member;
 #[cfg(test)]
+mod names;
+#[cfg(test)]
 mod safety;
 #[cfg(test)]
 mod support;
