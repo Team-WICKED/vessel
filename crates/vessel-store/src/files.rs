@@ -78,6 +78,27 @@ fn open_new(path: &Path) -> io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
 }
 
+/// Replace `path` with `contents`, owner-only, atomically: readers see the
+/// old file or the new one, never a partial write.
+pub(crate) fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let temporary = temporary_name(path)?;
+    let written = write_new(&temporary, contents).and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err()
+        && let Err(error) = std::fs::remove_file(&temporary)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %temporary.display(), %error, "could not remove temporary file");
+    }
+    written
+}
+
+/// Open `path` for reading and writing, creating it owner-only if it is
+/// missing; existing contents are kept.
+pub(crate) fn open_private(path: &Path) -> io::Result<File> {
+    create_private_file(path)?;
+    OpenOptions::new().read(true).write(true).open(path)
+}
+
 /// Create `path` as an empty owner-only file unless it exists.
 pub(crate) fn create_private_file(path: &Path) -> io::Result<()> {
     match open_new(path) {

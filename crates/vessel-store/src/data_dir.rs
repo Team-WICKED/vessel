@@ -5,6 +5,11 @@
 //!   node.id          the node's id (a UUID), created on first start
 //!   token            the access token, created on first start
 //!   vessel.db        the event log (plus `SQLite`'s -wal and -shm files)
+//!   vesseld.lock     locked by the running node (`NodeLock`)
+//!   vesseld.owner    which process holds that lock: pid, binary, version
+//!   vesseld.sock     the node's local socket (Unix; ADR 0007)
+//!   bin/             installed `vesseld-<version>` binaries (ADR 0008)
+//!   logs/            the log of a node started by `vesseld attach`
 //! ```
 //!
 //! Every file is owner-only (0600 on Unix); see `files` for why and for
@@ -26,6 +31,11 @@ use crate::token::NodeToken;
 const NODE_ID_FILE: &str = "node.id";
 const TOKEN_FILE: &str = "token";
 const DATABASE_FILE: &str = "vessel.db";
+const LOCK_FILE: &str = "vesseld.lock";
+const OWNER_FILE: &str = "vesseld.owner";
+const SOCKET_FILE: &str = "vesseld.sock";
+const BIN_DIR: &str = "bin";
+const LOG_DIR: &str = "logs";
 
 /// A node's data directory. Constructing one does no I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +73,37 @@ impl DataDir {
     #[must_use]
     pub fn token_path(&self) -> PathBuf {
         self.root.join(TOKEN_FILE)
+    }
+
+    /// The file the running node keeps locked (see `NodeLock`).
+    #[must_use]
+    pub fn lock_path(&self) -> PathBuf {
+        self.root.join(LOCK_FILE)
+    }
+
+    /// Which process holds the node lock (see `NodeOwner`).
+    #[must_use]
+    pub fn owner_path(&self) -> PathBuf {
+        self.root.join(OWNER_FILE)
+    }
+
+    /// The node's local socket on Unix (ADR 0007). Windows uses a named
+    /// pipe instead, named after the node id by `vessel-node`.
+    #[must_use]
+    pub fn socket_path(&self) -> PathBuf {
+        self.root.join(SOCKET_FILE)
+    }
+
+    /// Installed `vesseld` binaries, side by side by version (ADR 0008).
+    #[must_use]
+    pub fn bin_dir(&self) -> PathBuf {
+        self.root.join(BIN_DIR)
+    }
+
+    /// Logs of a node started in the background by `vesseld attach`.
+    #[must_use]
+    pub fn log_dir(&self) -> PathBuf {
+        self.root.join(LOG_DIR)
     }
 
     /// Create the directory if it does not exist, owner-only on Unix. An
@@ -137,6 +178,14 @@ impl DataDir {
             return Ok(fresh);
         }
         self.read_token()
+    }
+
+    /// The node id, without creating one; `None` if no node has run here.
+    ///
+    /// # Errors
+    /// The file cannot be read or holds something else.
+    pub fn read_node_id(&self) -> Result<Option<NodeId>, StoreError> {
+        read_node_id(&self.root.join(NODE_ID_FILE))
     }
 
     /// The access token, without creating one (for local clients).
