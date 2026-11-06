@@ -189,6 +189,7 @@ impl SessionRuntime {
             life: parts.life,
             ready: false,
             disconnect: None,
+            failed_before_kill: false,
         };
         Ok(self.start(parts.shared, actor.run(), parts.durable))
     }
