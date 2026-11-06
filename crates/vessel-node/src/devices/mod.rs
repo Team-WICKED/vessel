@@ -88,6 +88,14 @@ impl Devices {
         Ok((self.make_invitation(request, Some(paired))?, redeemed))
     }
 
+    /// Withdraw a pending invitation, so it can no longer be redeemed
+    /// (nothing happens to one already used or expired).
+    pub(crate) fn withdraw(&self, invite: &InvitationSecret) {
+        if self.invitations().withdraw(invite) {
+            tracing::info!("withdrew a pairing invitation");
+        }
+    }
+
     fn make_invitation(
         &self,
         request: &InviteDevice,

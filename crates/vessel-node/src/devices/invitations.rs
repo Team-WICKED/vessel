@@ -124,6 +124,11 @@ impl Invitations {
             })
     }
 
+    /// Forget an invitation before it is used; whether it was pending.
+    pub(crate) fn withdraw(&mut self, secret: &InvitationSecret) -> bool {
+        self.pending.remove(&key(secret)).is_some()
+    }
+
     fn purge(&mut self, now: DateTime<Utc>) {
         self.pending.retain(|_key, pending| pending.expires > now);
     }

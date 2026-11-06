@@ -38,6 +38,8 @@ built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
   sends it when it connects, with the scopes chosen at join, `read` and
   `operate` by default; the device the home's redemption creates is the
   only one the member takes `fleet.deliver` from, and leaving revokes it).
+  A member grants once per join: if its owner revokes the home's device,
+  the home stays cut off until the node joins again.
   The home binds a member device to the node id and key of its first
   grant and answers `conflict` to a grant that would rebind it, that
   names an id or key another member device's grant holds, the home's own

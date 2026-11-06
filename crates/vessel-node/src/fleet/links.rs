@@ -28,6 +28,20 @@
 //!   once the membership is gone or names another home (`reconcile`), so
 //!   a former home loses its access even if `vessel fleet leave` ran while
 //!   the node was stopped.
+//! - Once per join (the review, item 2): the record names the join it was
+//!   made for, and a join's grant is never made again, whatever became of
+//!   its device. An owner who revoked the home's device here cut the home
+//!   off until the node joins again; before, every connection made a new
+//!   grant for a revoked device, so a restart, or a home dropping the
+//!   connection, undid the revocation.
+//! - No device for a home without a record (item 4): grants and
+//!   `reconcile` take one lock; a revoked grant's record is deleted only if
+//!   it still names that device (a home switch may have written the next
+//!   one meanwhile); a grant that fails withdraws its invitation and
+//!   revokes the device if one was made; and `reconcile` revokes any device
+//!   labelled for a fleet home (`fleet home <id>`, a label reserved for
+//!   this) that is not the one on record, which also catches a redemption
+//!   that landed after the member stopped waiting.
 //! - Who a member device speaks for (the review of 2026-11-06): a node id
 //!   is a name the node chose (`node.id`), not something its key proves,
 //!   and pairing checks only that the node answering a link claims the
@@ -104,6 +118,32 @@ struct Granted {
     scopes: Vec<Scope>,
     /// When.
     since: DateTime<Utc>,
+    /// The join it was made for (`Membership::joined_at`). A record from
+    /// before this field counts as the current join's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    joined: Option<DateTime<Utc>>,
+}
+
+impl Granted {
+    /// Whether this records the grant of `membership`'s join.
+    fn is_for(&self, membership: &Membership) -> bool {
+        self.home == membership.home
+            && self
+                .joined
+                .is_none_or(|joined| joined == membership.joined_at)
+    }
+}
+
+/// The label of the device a member's grant makes for its home `home`.
+fn home_device_label(home: NodeId) -> String {
+    format!("fleet home {home}")
+}
+
+/// Whether `label` is one [`home_device_label`] makes.
+fn is_home_device(label: &str) -> bool {
+    label
+        .strip_prefix("fleet home ")
+        .is_some_and(|home| home.parse::<NodeId>().is_ok())
 }
 
 /// A member's grant as its home keeps it (`fleet/grants/<device>.json`, the
@@ -345,65 +385,122 @@ impl Links {
             .map_err(|error| hop_error(home, error))
     }
 
-    /// Give the home of `membership` a credential on this node, once: the
-    /// scopes the membership names (none, for a membership from before
-    /// grants). Called by the pull loop right after it connects.
+    /// Give the home of `membership` a credential on this node, once per
+    /// join: the scopes the membership names (none, for a membership from
+    /// before grants). Called by the pull loop right after it connects.
     pub(crate) async fn grant(&self, client: &NodeClient, membership: &Membership) {
         if membership.grant.is_empty() {
             return;
         }
-        match self.granted().await {
-            Ok(Some(granted)) if granted.home == membership.home => {
-                if self.device_is_valid(granted.device).await {
-                    return;
+        let _granting = self.granting.lock().await;
+        let previous = match self.granted().await {
+            Ok(Some(granted)) if granted.is_for(membership) => {
+                if !self.device_is_valid(granted.device).await {
+                    tracing::info!(
+                        home = %membership.home,
+                        "the home's credential here was revoked; it is not granted again until \
+                         this node joins again"
+                    );
                 }
+                return;
             }
-            Ok(_) => {}
+            Ok(previous) => previous,
             Err(error) => {
                 tracing::warn!(%error, "cannot read what this node granted its home");
                 return;
             }
-        }
-        if let Err(error) = self.make_grant(client, membership).await {
-            tracing::warn!(home = %membership.home, %error, "could not grant the fleet's home a credential here");
+        };
+        match self.make_grant(client, membership).await {
+            Ok(device) => {
+                // An earlier join's (or another home's) device is done with.
+                if let Some(previous) = previous.filter(|previous| previous.device != device) {
+                    self.revoke(previous.device, "the device of an earlier grant")
+                        .await;
+                }
+            }
+            Err(error) => {
+                tracing::warn!(home = %membership.home, %error, "could not grant the fleet's home a credential here");
+            }
         }
     }
 
+    /// Make the grant and record it; the device made. On failure nothing is
+    /// left that could be redeemed or used.
     async fn make_grant(
         &self,
         client: &NodeClient,
         membership: &Membership,
-    ) -> Result<(), WireError> {
-        let (invitation, redeemed) = self
+    ) -> Result<DeviceId, WireError> {
+        let (invitation, mut redeemed) = self
             .devices
             .invite_tracked(&InviteDevice {
-                label: Some(format!("fleet home {}", membership.home)),
+                label: Some(home_device_label(membership.home)),
                 ttl_secs: GRANT_TTL_SECS,
                 scopes: Some(membership.grant.clone()),
             })
             .map_err(|error| error.to_wire())?;
-        let _ack = client
-            .call(GrantHome {
-                link: invitation.link,
-            })
+        let invite = invitation
+            .link
+            .decode()
+            .map_err(|error| internal(&error))?
+            .invite;
+        let device = match self
+            .redeemed_by(client, membership.home, invitation.link, &mut redeemed)
             .await
-            .map_err(|error| hop_error(membership.home, error))?;
-        let device = tokio::time::timeout(REDEEMED_WITHIN, redeemed)
-            .await
-            .map_err(|_elapsed| {
-                unavailable("the home said it redeemed the link, but it was not".to_owned())
-            })?
-            .map_err(|_dropped| unavailable("the link was dropped unredeemed".to_owned()))?;
+        {
+            Ok(device) => device,
+            Err(error) => {
+                self.devices.withdraw(&invite);
+                if let Ok(device) = redeemed.try_recv() {
+                    self.revoke(device, "the device of a failed grant").await;
+                }
+                return Err(error);
+            }
+        };
         let granted = Granted {
             home: membership.home,
             device,
             scopes: membership.grant.clone(),
             since: Utc::now(),
+            joined: Some(membership.joined_at),
         };
         let path = self.granted_path();
-        blocking(move || files::write_json(&path, &granted)).await?;
+        if let Err(error) = blocking(move || files::write_json(&path, &granted)).await {
+            self.revoke(device, "the device of a grant that could not be recorded")
+                .await;
+            return Err(error);
+        }
         tracing::info!(home = %membership.home, %device, "granted the fleet's home a credential here");
-        Ok(())
+        Ok(device)
+    }
+
+    /// Hand `link` to `home` and wait until it was redeemed: the device it
+    /// made.
+    async fn redeemed_by(
+        &self,
+        client: &NodeClient,
+        home: NodeId,
+        link: PairingLink,
+        redeemed: &mut tokio::sync::oneshot::Receiver<DeviceId>,
+    ) -> Result<DeviceId, WireError> {
+        let _ack = client
+            .call(GrantHome { link })
+            .await
+            .map_err(|error| hop_error(home, error))?;
+        tokio::time::timeout(REDEEMED_WITHIN, redeemed)
+            .await
+            .map_err(|_elapsed| {
+                unavailable("the home said it redeemed the link, but it was not".to_owned())
+            })?
+            .map_err(|_dropped| unavailable("the link was dropped unredeemed".to_owned()))
+    }
+
+    /// Revoke `device` (`what` it is, for the log); a failure is logged.
+    async fn revoke(&self, device: DeviceId, what: &str) {
+        match self.devices.revoke(device).await {
+            Ok(()) => tracing::info!(%device, "revoked {what}"),
+            Err(error) => tracing::warn!(%device, %error, "cannot revoke {what}"),
+        }
     }
 
     fn granted_path(&self) -> PathBuf {
@@ -437,7 +534,10 @@ impl Links {
     }
 
     /// A grant to a home this node no longer follows is revoked and
-    /// forgotten. Called by the fleet loop on every look.
+    /// forgotten, and so is any device made for a fleet home that is not
+    /// the one on record. Called by the fleet loop on every look; skipped
+    /// while a grant is being made (it holds the lock for up to
+    /// [`REDEEMED_WITHIN`]).
     ///
     /// [Decision Log]
     /// - Revoking is the one thing here that cannot be undone, so it needs
@@ -449,33 +549,79 @@ impl Links {
     ///   grant with a membership read from before the join (which revoked
     ///   the grant a join had just made).
     pub(crate) async fn reconcile(&self) {
+        let Ok(_granting) = self.granting.try_lock() else {
+            return;
+        };
         let granted = match self.granted().await {
-            Ok(Some(granted)) => granted,
-            Ok(None) => return,
+            Ok(granted) => granted,
             Err(error) => {
                 tracing::warn!(%error, "cannot read what this node granted its home");
                 return;
             }
         };
         let files = self.files.clone();
-        match blocking(move || super::member::membership(&files)).await {
-            Ok(Some(membership)) if membership.home == granted.home => return,
-            Ok(Some(_) | None) => {}
+        let membership = match blocking(move || super::member::membership(&files)).await {
+            Ok(membership) => membership,
             Err(error) => {
                 tracing::warn!(%error, "cannot read this node's fleet membership; its home's grant stays");
                 return;
             }
-        }
+        };
+        let kept = match (&granted, &membership) {
+            (Some(granted), Some(membership)) if granted.home == membership.home => {
+                Some(granted.device)
+            }
+            (Some(granted), Some(_) | None) => {
+                self.forget(granted).await;
+                None
+            }
+            (None, Some(_) | None) => None,
+        };
+        self.sweep(kept).await;
+    }
+
+    /// Revoke the former home's device and delete the record, if it still
+    /// names that device.
+    async fn forget(&self, granted: &Granted) {
         if let Err(error) = self.devices.revoke(granted.device).await {
             tracing::warn!(%error, "cannot revoke the former home's device");
             return;
         }
         let path = self.granted_path();
-        match blocking(move || files::remove(&path)).await {
+        let device = granted.device;
+        let forgotten = blocking(move || match files::read_json::<Granted>(&path)? {
+            Some(current) if current.device == device => files::remove(&path),
+            Some(_) | None => Ok(()),
+        })
+        .await;
+        match forgotten {
             Ok(()) => {
                 tracing::info!(home = %granted.home, "revoked the former fleet home's access here");
             }
             Err(error) => tracing::warn!(%error, "cannot forget the former home's grant"),
+        }
+    }
+
+    /// Revoke every live device made for a fleet home but `kept`.
+    async fn sweep(&self, kept: Option<DeviceId>) {
+        let devices = match self.devices.list().await {
+            Ok(devices) => devices,
+            Err(error) => {
+                tracing::warn!(%error, "cannot list this node's devices");
+                return;
+            }
+        };
+        for device in devices {
+            if device.revoked_at.is_none()
+                && is_home_device(&device.label)
+                && kept != Some(device.id)
+            {
+                self.revoke(
+                    device.id,
+                    "a device made for a fleet home with no record here",
+                )
+                .await;
+            }
         }
     }
 
