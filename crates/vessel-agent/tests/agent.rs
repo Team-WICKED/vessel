@@ -9,7 +9,7 @@ use vessel_proto::{
     StopReason, ToolCallId, ToolCallStatus,
 };
 
-use support::{Agent, setup, text, within};
+use support::{Agent, after, settled_once, setup, text, within};
 
 #[cfg(test)]
 mod support {
@@ -20,7 +20,7 @@ mod support {
         AgentInput, AgentOutput, AgentOutputs, AgentProcess, AgentSetup, Disconnect,
     };
     use vessel_proc::CommandSpec;
-    use vessel_proto::{AgentEvent, ContentBlock, ModelId};
+    use vessel_proto::{AgentEvent, ContentBlock, ModelId, PermissionOutcome, PermissionRequest};
     use vessel_testkit::Fake;
 
     const SAFETY_NET: Duration = Duration::from_secs(30);
@@ -46,6 +46,40 @@ mod support {
         vec![ContentBlock::Text {
             text: text.to_owned(),
         }]
+    }
+
+    /// The events after `request`, without harness log lines.
+    pub(super) fn after<'a>(events: &'a [AgentEvent], request: &AgentEvent) -> &'a [AgentEvent] {
+        let at = events.iter().position(|event| event == request).unwrap();
+        &events[at.saturating_add(1)..]
+    }
+
+    /// What a failed connection must leave behind for a turn with a permission
+    /// request open: the request withdrawn and the turn failed, once each.
+    pub(super) fn settled_once(events: &[AgentEvent], request: &PermissionRequest) {
+        let withdrawn = AgentEvent::PermissionResolved {
+            id: request.id,
+            outcome: PermissionOutcome::Cancelled,
+        };
+        assert_eq!(
+            events.iter().filter(|event| **event == withdrawn).count(),
+            1,
+            "{events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::TurnFailed { .. }))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::TurnEnded { .. })),
+            "{events:?}"
+        );
     }
 
     /// A running `fake-acp` and everything it reported so far.
@@ -505,6 +539,57 @@ async fn cancel_gets_through_a_flood_of_updates() {
             }
         );
         cancelled.await.unwrap().unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_agent_exiting_mid_turn_settles_the_turn_and_its_requests() {
+    within(async {
+        let mut agent = Agent::start(setup(None));
+        drop(agent.until(ready).await);
+        agent.input.prompt(text("exit")).await.unwrap();
+        let requested = agent
+            .until(|event| matches!(event, AgentEvent::PermissionRequested(_)))
+            .await;
+        let AgentEvent::PermissionRequested(request) = &requested else {
+            panic!("matched by the predicate above")
+        };
+        // Closed, or a broken pipe when withdrawing the request races the
+        // exit: either way the connection is over.
+        let disconnect = agent.until_end().await;
+        assert!(
+            matches!(disconnect, Disconnect::Closed | Disconnect::Protocol { .. }),
+            "{disconnect:?}"
+        );
+        settled_once(after(&agent.events, &requested), request);
+        assert_eq!(agent.process.wait().await, Some(9));
+    })
+    .await;
+}
+
+/// The connection fails rather than closes (the agent writes bytes that
+/// are not UTF-8): the driver is gone without having seen a close, and the
+/// turn and its request must still be settled.
+#[tokio::test]
+async fn a_broken_transport_still_settles_the_turn_and_its_requests() {
+    within(async {
+        let mut agent = Agent::start(setup(None));
+        drop(agent.until(ready).await);
+        agent.input.prompt(text("garbage")).await.unwrap();
+        let requested = agent
+            .until(|event| matches!(event, AgentEvent::PermissionRequested(_)))
+            .await;
+        let AgentEvent::PermissionRequested(request) = &requested else {
+            panic!("matched by the predicate above")
+        };
+        let Disconnect::Protocol { .. } = agent.disconnected().await else {
+            panic!("a broken transport is a protocol failure");
+        };
+        settled_once(after(&agent.events, &requested), request);
+        // The agent itself stays up; stopping it is the session's job.
+        agent.process.signal(Signal::Kill).unwrap();
+        drop(agent.until_end().await);
     })
     .await;
 }
