@@ -22,7 +22,8 @@ use crate::lookup::Lookup;
 ///
 /// # Errors
 /// [`HarnessError::NotInstalled`] or [`HarnessError::StructuredUnavailable`]
-/// when the program is missing, [`HarnessError::NoSuchDirectory`] for a bad
+/// when the program is missing, [`HarnessError::RelativeDirectory`] for a
+/// relative working directory, [`HarnessError::NoSuchDirectory`] for a bad
 /// working directory.
 pub fn launch(lookup: &Lookup, spec: &SessionSpec) -> Result<CommandSpec, HarnessError> {
     let harness = spec.harness;
@@ -63,18 +64,31 @@ pub(crate) fn adapter_missing(binary: &str, install: &str) -> String {
     format!("its ACP adapter `{binary}` is not installed (install it with `{install}`)")
 }
 
-/// The spec's directory, or the home directory, made absolute; `None` only
-/// when the node user has no home directory, in which case the node's own
-/// is inherited.
+/// The spec's directory, which must be absolute, or else the home
+/// directory; `None` only when the node user has no home directory, in
+/// which case the node's own is inherited.
 ///
-/// Absolute because ACP requires it, and because a relative path would
-/// otherwise depend on the node's own working directory, silently.
+/// A relative directory is refused rather than resolved: it would be
+/// resolved against `vesseld`'s own working directory, which the client
+/// does not know and which depends on how the node was started, so the
+/// session would silently run somewhere else than meant. Clients send
+/// absolute paths (the CLI resolves its own relative ones). ACP needs an
+/// absolute directory as well.
 fn working_dir(spec: &SessionSpec) -> Result<Option<PathBuf>, HarnessError> {
-    let Some(cwd) = spec.cwd.clone().or_else(dirs::home_dir) else {
-        return Ok(None);
+    let cwd = match &spec.cwd {
+        Some(cwd) if !cwd.is_absolute() => {
+            return Err(HarnessError::RelativeDirectory { cwd: cwd.clone() });
+        }
+        Some(cwd) => cwd.clone(),
+        // The node's own setting, so resolving it is the node's business.
+        None => match dirs::home_dir().map(std::path::absolute) {
+            Some(Ok(home)) => home,
+            Some(Err(_)) | None => return Ok(None),
+        },
     };
-    match std::path::absolute(&cwd) {
-        Ok(absolute) if absolute.is_dir() => Ok(Some(absolute)),
-        Ok(_) | Err(_) => Err(HarnessError::NoSuchDirectory { cwd }),
+    if cwd.is_dir() {
+        Ok(Some(cwd))
+    } else {
+        Err(HarnessError::NoSuchDirectory { cwd })
     }
 }

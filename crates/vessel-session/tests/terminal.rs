@@ -469,6 +469,10 @@ async fn launch_problems_are_typed_errors() {
         nowhere.cwd = Some(fixture.dir().join("no-such-dir"));
         let error = fixture.runtime.create(nowhere).await.unwrap_err();
         assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        let mut relative = support::terminal(HarnessKind::ClaudeCode);
+        relative.cwd = Some(std::path::PathBuf::from("."));
+        let error = fixture.runtime.create(relative).await.unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
 
         let structured = SessionSpec {
             harness: HarnessKind::ClaudeCode,

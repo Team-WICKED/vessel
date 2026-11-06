@@ -94,7 +94,9 @@ depend on the node, so there is no cycle).
     closes.
   - `vessel-harness`: one descriptor module per harness, `Lookup` (explicit
     search path), concurrent `discover` with a version-probe timeout,
-    `launch` (working directory made absolute and checked). The `fakes`
+    `launch` (working directory absolute and existing: a relative one is
+    refused with `InvalidRequest`, since it would name a directory relative
+    to `vesseld`'s own; the home directory when none is given). The `fakes`
     feature installs testkit binaries under real harness names for other
     crates' tests. Model selection is not here: it goes over ACP in
     `vessel-agent`.
