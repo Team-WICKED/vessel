@@ -19,10 +19,8 @@
 //!   is `unsupported`, what a client gets for any method a node lacks.
 
 use vessel_proto::{
-    Ack, BlobChunk, CloseTransfer, CopySecret, Deliver, ErrorCode, ExportMemory, ExportSession,
-    FleetNode, Forward, Forwarded, GrantHome, ImportMemory, ImportSession, ListNodes, ListPeers,
-    MemoryImported, Method, ReadTransfer, RelayCall, Request as _, SessionImported,
-    TransferManifest, WireError,
+    Ack, CopySecret, Deliver, ErrorCode, FleetNode, Forward, Forwarded, GrantHome, ListNodes,
+    ListPeers, Method, RelayCall, Request as _, WireError,
 };
 
 use crate::service::{Connection, NodeService};
@@ -61,11 +59,5 @@ unbuilt! {
     grant_home: GrantHome => Ack, "Track X";
     list_peers: ListPeers => Vec<FleetNode>, "Track X";
     list_nodes: ListNodes => Vec<FleetNode>, "Track X";
-    export_session: ExportSession => TransferManifest, "F4";
-    import_session: ImportSession => SessionImported, "F4";
-    export_memory: ExportMemory => TransferManifest, "F4";
-    import_memory: ImportMemory => MemoryImported, "F4";
-    read_transfer: ReadTransfer => BlobChunk, "F4";
-    close_transfer: CloseTransfer => Ack, "F4";
     copy_secret: CopySecret => Ack, "F3, with Track X's envelope";
 }
