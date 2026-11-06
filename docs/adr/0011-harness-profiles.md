@@ -17,8 +17,8 @@ logins side by side on one machine and moves work between them:
   per login, selected with `CLAUDE_CONFIG_DIR`.
 - In Paseo each is a provider that extends the built-in one:
   `{ "extends": "claude", "label": ..., "env": { "CLAUDE_CONFIG_DIR": ... } }`
-  (`teamwicked-infra/paseo-claude-account-swap/README.md`, "Add another
-  account"). Adding an account is configuration, not code.
+  (the operator's account-swap plugin notes, "Add another account").
+  Adding an account is configuration, not code.
 - When one account reaches its usage limit, a plugin moves a running agent
   to another account without losing the conversation. It hard-links the
   session's transcript files into the target directory (never `memory/`),

@@ -130,7 +130,9 @@ impl Devices {
             RefusalReason::Unavailable
         })?;
         let Some(stored) = stored else {
-            let _same_work = CredentialHash::of(secret);
+            // The same hashing as for a known device; `black_box` keeps the
+            // optimiser from dropping work whose result is unused.
+            let _same_work = std::hint::black_box(CredentialHash::of(std::hint::black_box(secret)));
             return Err(RefusalReason::UnknownDevice);
         };
         if !stored.credential.matches(secret) {
@@ -145,14 +147,20 @@ impl Devices {
         Ok(stored.info.scopes)
     }
 
-    /// Redeem an invitation: a new device named by the invitation's label,
-    /// or else by the name the device gave itself. Returns its id, its new
-    /// credential and its scopes (M3 grants every scope, ADR 0010).
+    /// Redeem an invitation: a new device, with the id `connection` is
+    /// registered under, named by the invitation's label or else by the
+    /// name the device gave itself. Returns its new credential and its
+    /// scopes (M3 grants every scope, ADR 0010).
+    ///
+    /// The connection is registered before the device is stored, as for
+    /// an authenticating device (see `connected`): a revocation that finds
+    /// the stored device also finds this connection to close.
     pub(crate) async fn pair(
         &self,
+        connection: &Registration,
         invite: &InvitationSecret,
         device_name: &str,
-    ) -> Result<(DeviceId, DeviceSecret, Vec<Scope>), RefusalReason> {
+    ) -> Result<(DeviceSecret, Vec<Scope>), RefusalReason> {
         let now = Utc::now();
         let redeemed = self
             .invitations()
@@ -165,7 +173,7 @@ impl Devices {
         })?;
         let secret = DeviceSecret::from_bytes(bytes);
         let info = DeviceInfo {
-            id: DeviceId::random(),
+            id: connection.device(),
             label: redeemed.label.unwrap_or_else(|| label(device_name)),
             created_at: now,
             last_seen: Some(now),
@@ -184,7 +192,7 @@ impl Devices {
                 RefusalReason::Unavailable
             })?;
         tracing::info!(device = %id, "paired a device");
-        Ok((id, secret, scopes))
+        Ok((secret, scopes))
     }
 
     /// Register a connection of `device` (see `connected`).
@@ -201,12 +209,14 @@ impl Devices {
     }
 }
 
-/// A label as stored: trimmed, without control characters, at most
-/// [`MAX_LABEL`] characters, and never empty.
+/// A label as stored: trimmed, without control or invisible formatting
+/// characters, at most [`MAX_LABEL`] characters, and never empty. Labels
+/// are shown in `vessel node devices`, where a bidi override could make
+/// one device's name read like another's.
 fn label(text: &str) -> String {
     let cleaned: String = text
         .chars()
-        .filter(|character| !character.is_control())
+        .filter(|&character| !character.is_control() && !invisible(character))
         .take(MAX_LABEL)
         .collect();
     let trimmed = cleaned.trim();
@@ -215,6 +225,28 @@ fn label(text: &str) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+/// Unicode format characters that change how text around them is shown
+/// without showing themselves: bidi embeddings, overrides, isolates and
+/// marks, zero-width characters, the soft hyphen, the byte order mark,
+/// interlinear annotations and tag characters. Listed rather than taken
+/// from a Unicode table, which would be a dependency for one filter.
+const fn invisible(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 #[cfg(test)]

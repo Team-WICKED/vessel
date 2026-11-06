@@ -80,6 +80,11 @@ pub(crate) struct Registration {
 }
 
 impl Registration {
+    /// The device this connection is registered under.
+    pub(crate) const fn device(&self) -> DeviceId {
+        self.device
+    }
+
     /// Cancelled when the device is revoked or the node stops.
     pub(crate) const fn closing(&self) -> &CancellationToken {
         &self.closing

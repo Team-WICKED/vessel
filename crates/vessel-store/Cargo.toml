@@ -4,7 +4,7 @@ description = "Vessel node data directory: identity, access token, and the SQLit
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 repository.workspace = true
 
 [dependencies]
@@ -23,6 +23,8 @@ subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+# Wipes the store's copy of `node.key` from memory (ADR 0009).
+zeroize.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true

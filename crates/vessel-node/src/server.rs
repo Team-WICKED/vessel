@@ -1,5 +1,7 @@
-//! HTTP: `GET /health` (open, for probes) and `GET /rpc` (the protocol 2
-//! websocket, token required).
+//! HTTP: `GET /health` (open, for probes), `GET /rpc` (the protocol
+//! websocket, token required) and `GET /secure` (a paired device's secure
+//! channel, ADR 0009: no token; the device proves itself inside the
+//! channel, after the handshake proved the node).
 //!
 //! Each websocket connection runs `vessel-rpc`'s server until it ends. The
 //! connections are tracked so shutdown can wait for them to flush their last
@@ -16,11 +18,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use tokio_util::task::TaskTracker;
+use vessel_relay::AxumCarrier;
 use vessel_rpc::Server;
 use vessel_store::NodeToken;
 
 use crate::auth;
 use crate::guard::Guarded;
+use crate::secure::SecureGateway;
 use crate::service::Connection;
 use crate::transport::WsTransport;
 
@@ -34,6 +38,7 @@ const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 pub(crate) struct Gateway {
     pub(crate) rpc: Arc<Server<Guarded>>,
     pub(crate) token: Arc<NodeToken>,
+    pub(crate) secure: SecureGateway,
     pub(crate) connections: TaskTracker,
 }
 
@@ -41,6 +46,7 @@ pub(crate) fn router(gateway: Gateway) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/rpc", get(rpc))
+        .route(SECURE_PATH, get(secure))
         .with_state(gateway)
 }
 
@@ -74,5 +80,26 @@ async fn rpc(
             {
                 tracing::info!(error = %error, "connection ended abnormally");
             }
+        })
+}
+
+/// Where paired devices reach the node directly; clients add it to a
+/// direct route (`ws://host:port`).
+pub(crate) const SECURE_PATH: &str = "/secure";
+
+/// A secure channel straight to the node. Messages and frames are capped
+/// at one record ([`vessel_secure::MAX_RECORD`]), so an oversized message
+/// is refused from its header, before the node buffers it.
+async fn secure(State(gateway): State<Gateway>, upgrade: WebSocketUpgrade) -> Response {
+    let connection = gateway.connections.token();
+    upgrade
+        .max_message_size(vessel_secure::MAX_RECORD)
+        .max_frame_size(vessel_secure::MAX_RECORD)
+        .on_upgrade(move |socket| async move {
+            let _tracked = connection;
+            gateway
+                .secure
+                .accept_logged(AxumCarrier::new(socket, None), "direct")
+                .await;
         })
 }

@@ -26,6 +26,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use vessel_proto::NodeId;
+use zeroize::Zeroizing;
 
 use crate::error::StoreError;
 use crate::files::{self, Privacy};
@@ -257,7 +258,8 @@ impl DataDir {
     /// There is no key file, it cannot be read, or it has the wrong size.
     pub fn read_node_key(&self) -> Result<NodeKeySecret, StoreError> {
         let path = self.node_key_path();
-        let bytes = std::fs::read(&path).map_err(StoreError::io(&path))?;
+        // Wiped on drop like the key itself (see `node_key`).
+        let bytes = Zeroizing::new(std::fs::read(&path).map_err(StoreError::io(&path))?);
         let key = NodeKeySecret::from_stored(&bytes).ok_or_else(|| StoreError::InvalidNodeKey {
             path: path.clone(),
             len: bytes.len(),

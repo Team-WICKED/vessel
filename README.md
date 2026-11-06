@@ -50,10 +50,10 @@ there on first contact, `attach` starts the node, and attaching survives
 a lost connection.
 
 Milestone 3 (a node behind NAT, through a relay; see
-[docs/plans/backend-m3.md](docs/plans/backend-m3.md)) is in progress: the
-end-to-end secure channel (`vessel-secure`) and the relay
-(`vessel-relay`, `vesseld relay`) exist; pairing and nodes and clients that
-use them are being built.
+[docs/plans/backend-m3.md](docs/plans/backend-m3.md)) is built and awaits
+its manual smoke test: the end-to-end secure channel (`vessel-secure`),
+the relay (`vessel-relay`, `vesseld relay`), and pairing devices with a
+node, which they then reach directly or through relays.
 
 Not yet: fleet sync, harness profiles, model routing, the LSP bridge. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -135,6 +135,34 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   of 60 s (nginx's default) is enough.
 - `GET /health` answers `ok`.
 
+### A node behind NAT: pairing a device
+
+A node with no public address keeps a connection to a relay (above), and
+devices pair with it once. Every connection, direct or relayed, is
+end-to-end encrypted to the node's key, which the device pins at pairing
+(ADRs 0009 and 0010).
+
+```bash
+# on the node's machine
+vesseld --relay wss://relay.example.com/vessel --relay-token-file relay.token
+vessel node pair --label laptop       # prints a single-use link (and a QR code)
+# on the laptop: paste the link at the prompt, never on the command line
+vessel nodes add gpu-box --pair
+vessel --node gpu-box run claude
+# later, on the node (or from any admin device)
+vessel node devices
+vessel node devices revoke 3fa9       # its open connections close
+```
+
+- `vessel nodes add --pair` shows the node's key fingerprint; compare it
+  with `vessel node status` on the node before confirming. Piped in, the
+  link needs `--yes`.
+- A node with a reachable address can advertise it (`vesseld --public
+  203.0.113.5:7077`): devices try it first, for 3 s, then the relays.
+- The device's credential is a file in `~/.config/vessel/credentials/`
+  (0600); the book points to it and never holds the secret. Moving a
+  device means pairing it again.
+
 ### Environment
 
 | Variable | Means | Default |
@@ -166,3 +194,20 @@ cargo test --workspace
 CI runs exactly those three on Linux, Windows and macOS. Lints are strict
 (no `unwrap`, no panics, no indexing, no raw arithmetic); see the workspace
 `Cargo.toml`.
+
+## License
+
+Vessel is **source-available, not open source.** It is licensed under the
+[PolyForm Strict License 1.0.0](LICENSE.md):
+
+- You may read the code and use the software for noncommercial purposes
+  (personal use, and noncommercial organisations as the license defines
+  them).
+- You may not distribute it, make changes to it or works based on it, or
+  use it for any commercial purpose.
+- Anything else, commercial use included, needs a separate license from
+  Team-WICKED.
+
+Contributions from outside Team-WICKED are not accepted.
+
+Copyright 2026 Team-WICKED.
