@@ -11,6 +11,32 @@ depends on: 0009 (the relay and transport security) and 0010 (pairing and
 device principals). "Grounding" at the end summarises what Paseo does, with
 file references.
 
+## State (2026-11-06)
+
+- **Track P, first part (needs no secure channel), on `backend/m3-pair`:**
+  - store: `node.key` (32 bytes, 0600, created on every start, never
+    replaced); the `devices` table (schema version 2) with SHA-256
+    credential hashes compared in constant time, revoked devices kept as
+    tombstones.
+  - node: principals per connection and the scope check for every call
+    (`guard::Guarded`); `device.invite` (in-memory, single-use, by hash,
+    at most a day and 64 waiting), `device.list`, `device.revoke` (closes
+    the device's connections); the device preamble and `SecureGateway`
+    over any frame transport; `--relay`, `--relay-token-file`, `--public`.
+  - client: paired nodes in the book (`key`, `relay`, `direct`,
+    `credential`), credential files, `pairing::pair`/`authenticate`, and
+    `NodeClient` device calls.
+  - CLI: `vessel node pair` (link and QR code), `vessel node devices
+    [revoke]`.
+- **Waiting for Track S (`vessel-secure`, `vessel-relay`):** deriving the
+  public key from `node.key` (until then `NodeInfo.public_key` is absent
+  and `device.invite` answers `unavailable`); `/secure` and relay links
+  into `SecureGateway`; `SecureConnector` (route order, timeouts,
+  transient and final errors) and the `wss://` TLS client; `vessel nodes
+  add --pair` (fingerprint, confirmation, pairing over a route) and
+  connecting to paired nodes; the key fingerprint and routes in `vessel
+  node status`; resume over the relay (P5).
+
 ## Goal
 
 Roadmap Phase 1, the relay:
