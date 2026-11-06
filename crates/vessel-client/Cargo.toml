@@ -14,6 +14,9 @@ vessel-rpc.workspace = true
 vessel-secure.workspace = true
 
 futures-util = { workspace = true, features = ["sink"] }
+# The random suffix of a credential file's temporary name; already in the
+# workspace through vessel-store and vessel-secure.
+getrandom.workspace = true
 # An empty root store when every route is `ws://` and the system has no
 # roots (`vessel_relay::TlsConfig::with_roots`); already built for
 # vessel-relay.

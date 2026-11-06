@@ -2554,6 +2554,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures-util",
+ "getrandom 0.4.3",
  "rustls",
  "serde",
  "serde_json",
