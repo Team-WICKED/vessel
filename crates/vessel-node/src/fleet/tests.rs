@@ -385,3 +385,46 @@ fn client_info() -> ClientInfo {
         version: "0".to_owned(),
     }
 }
+
+/// Protocol 6's secret rows (F3) on the same store as `vessel fleet
+/// secret`: an admin device sets, lists (names only) and deletes; a member
+/// with only `sync` cannot.
+#[tokio::test]
+async fn secrets_are_set_listed_and_deleted_by_admins_only() {
+    let home = Home::start().await;
+    let admin = home
+        .connector(home.pair(None).await)
+        .connect(client_info())
+        .await
+        .unwrap();
+    let name: vessel_proto::SecretName = "DOCS_TOKEN".parse().unwrap();
+    admin
+        .secret_set(
+            name.clone(),
+            vessel_proto::SecretValue::new("set-over-the-wire".to_owned()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin.secret_list().await.unwrap(), std::slice::from_ref(&name));
+    let file = read(&home.path("data/secrets.toml"));
+    assert!(file.contains("set-over-the-wire"), "stored on the node");
+
+    let member = home
+        .connector(home.pair(Some(vec![Scope::Sync])).await)
+        .connect(client_info())
+        .await
+        .unwrap();
+    let refused = member.secret_list().await.unwrap_err();
+    assert!(
+        matches!(&refused, CallError::Remote(error) if error.code == ErrorCode::Forbidden),
+        "{refused:?}"
+    );
+
+    admin.secret_delete(name.clone()).await.unwrap();
+    let missing = admin.secret_delete(name).await.unwrap_err();
+    assert!(
+        matches!(&missing, CallError::Remote(error) if error.code == ErrorCode::NotFound),
+        "{missing:?}"
+    );
+    home.node.stop().await.unwrap();
+}

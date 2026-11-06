@@ -7,11 +7,12 @@ use std::sync::Arc;
 use tokio_util::task::TaskTracker;
 use vessel_harness::Lookup;
 use vessel_proto::{
-    Ack, BlobChunk, CreateSession, DeviceInfo, ErrorCode, EventPage, FleetMember, Generation,
-    GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession, ListDevices,
-    ListHarnesses, ListMembers, ListProfiles, ListSessions, Manifest, MoveProfile, NodeInfo,
-    ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied, RevokeDevice, SendInput,
-    SessionId, SessionInfo, StopNode, Subscribe, Subscribed, Unsubscribe, WatchFleet, WireError,
+    Ack, BlobChunk, CreateSession, DeleteSecret, DeviceInfo, ErrorCode, EventPage, FleetMember,
+    Generation, GetManifest, GetNode, GetSession, Harness, Invitation, InviteDevice, KillSession,
+    ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions, Manifest,
+    MoveProfile, NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReloadProfiles, ReportApplied,
+    RevokeDevice, SecretName, SendInput, SessionId, SessionInfo, SetSecret, StopNode, Subscribe,
+    Subscribed, Unsubscribe, WatchFleet, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
@@ -474,4 +475,69 @@ impl NodeService {
         let devices = self.devices.list().await.map_err(|error| wire(&error))?;
         Ok(self.fleet.members(devices).await)
     }
+}
+
+/// This node's secrets (protocol 6, F3): the store `vessel fleet secret`
+/// uses (`fleet::secrets`), on the wire. All admin. A value only ever goes
+/// in; there is no call that reads one back.
+impl NodeService {
+    pub(crate) async fn set_secret(
+        &self,
+        _: &Connection,
+        request: SetSecret,
+    ) -> Result<Ack, WireError> {
+        let files = self.fleet.files().clone();
+        tokio::task::spawn_blocking(move || {
+            crate::fleet::set_secret(&files, &request.name, request.value.expose())
+        })
+        .await
+        .map_err(|error| wire(&ServiceError::Task(error)))?
+        .map(|()| Ack)
+        .map_err(|error| secrets_wire(&error))
+    }
+
+    pub(crate) async fn list_secrets(
+        &self,
+        _: &Connection,
+        _: ListSecrets,
+    ) -> Result<Vec<SecretName>, WireError> {
+        let files = self.fleet.files().clone();
+        tokio::task::spawn_blocking(move || crate::fleet::secret_names(&files))
+            .await
+            .map_err(|error| wire(&ServiceError::Task(error)))?
+            .map_err(|error| secrets_wire(&error))
+    }
+
+    pub(crate) async fn delete_secret(
+        &self,
+        _: &Connection,
+        request: DeleteSecret,
+    ) -> Result<Ack, WireError> {
+        let files = self.fleet.files().clone();
+        let name = request.name.clone();
+        let deleted =
+            tokio::task::spawn_blocking(move || crate::fleet::delete_secret(&files, &name))
+                .await
+                .map_err(|error| wire(&ServiceError::Task(error)))?
+                .map_err(|error| secrets_wire(&error))?;
+        if deleted {
+            Ok(Ack)
+        } else {
+            Err(WireError::new(
+                ErrorCode::NotFound,
+                format!("secret {} is not set on this node", request.name),
+            ))
+        }
+    }
+}
+
+/// A `secrets.toml` problem on the wire; the message names no value.
+fn secrets_wire(error: &crate::fleet::SecretsError) -> WireError {
+    let code = match error {
+        crate::fleet::SecretsError::File(_) => ErrorCode::Internal,
+        crate::fleet::SecretsError::Parse { .. } | crate::fleet::SecretsError::Entry { .. } => {
+            ErrorCode::Conflict
+        }
+    };
+    WireError::new(code, error.to_string())
 }
