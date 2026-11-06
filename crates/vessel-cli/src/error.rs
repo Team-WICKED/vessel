@@ -136,12 +136,6 @@ pub(crate) enum CliError {
     /// `vessel init`: the profiles to add would not load; nothing was written.
     #[error("the profiles to add would not load ({0}); nothing was written")]
     ProfilesAfterAdd(String),
-    /// `vessel init --join` before fleet sync exists (plan F2).
-    #[error(
-        "`vessel init --join` needs fleet sync, which this build does not have yet; \
-         nothing was changed. Run `vessel init` without --join"
-    )]
-    JoinNotYet,
     /// `vessel mcp` stopped (ADR 0013).
     #[error(transparent)]
     Mcp(#[from] vessel_mcp::McpError),

@@ -6,8 +6,9 @@
 //! Steps, in order: the data directory and node identity; the harnesses
 //! found; install offers for what is missing; profiles for other accounts'
 //! homes found beside the default ones; a login check per profile; with
-//! `--service`, the node as a per-user service. `--join` (pairing with a
-//! fleet's home) needs fleet sync (F2) and refuses until then.
+//! `--join`, membership of a fleet (a link read from stdin); with
+//! `--service`, the node as a per-user service, last, so the node it
+//! starts follows the fleet at once.
 //!
 //! [Decision Log]
 //! - Purpose: a new machine becomes a working node in minutes, and running
@@ -30,6 +31,7 @@
 
 mod harnesses;
 mod identity;
+mod join;
 mod profiles;
 mod service;
 
@@ -81,15 +83,10 @@ impl Consent {
 /// Run every step.
 ///
 /// # Errors
-/// `--join` (not available yet), or a step that could not even look (the
-/// data directory cannot be prepared, a file cannot be written).
+/// A step that could not even look (the data directory cannot be
+/// prepared, a file cannot be written), or `--join` failing (a link that
+/// does not parse, a home that cannot be reached).
 pub(crate) async fn run(data_dir: DataDir, options: Options) -> Result<(), CliError> {
-    if options.join {
-        // F2: replace this refusal with pairing to the fleet's home (the
-        // link read from stdin, never argv), pulling and applying the
-        // bundle, and taking the fleet's relays.
-        return Err(CliError::JoinNotYet);
-    }
     let mut init = Init {
         data_dir,
         lookup: Lookup::from_env(),
@@ -101,6 +98,9 @@ pub(crate) async fn run(data_dir: DataDir, options: Options) -> Result<(), CliEr
     identity::run(&mut init).await?;
     harnesses::run(&mut init).await?;
     profiles::run(&mut init).await?;
+    if init.options.join {
+        join::run(&mut init).await?;
+    }
     if init.options.service {
         service::run(&mut init).await?;
     }
@@ -180,13 +180,18 @@ struct Answers(Option<mpsc::Receiver<String>>);
 
 impl Answers {
     async fn next(&mut self) -> std::io::Result<Option<String>> {
+        Ok(self.lines()?.recv().await)
+    }
+
+    /// The lines themselves, for a step that reads more than an answer (a
+    /// pairing link): one reader of stdin for the whole run.
+    fn lines(&mut self) -> std::io::Result<&mut mpsc::Receiver<String>> {
         if self.0.is_none() {
             self.0 = Some(io::input_lines()?);
         }
-        Ok(match &mut self.0 {
-            Some(lines) => lines.recv().await,
-            None => None,
-        })
+        self.0
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("standard input is not being read"))
     }
 }
 

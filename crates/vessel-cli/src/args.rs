@@ -140,8 +140,8 @@ pub(crate) struct InitArgs {
     /// Linux, launchd agent on macOS) and start it.
     #[arg(long)]
     pub(crate) service: bool,
-    /// Join a fleet with a pairing link read from standard input (never
-    /// the command line). Needs fleet sync, which is not built yet.
+    /// Join a fleet: paste the link `vessel fleet invite` printed on the
+    /// fleet's home (read from standard input, never the command line).
     #[arg(long)]
     pub(crate) join: bool,
     /// Answer yes to every question, except installs.

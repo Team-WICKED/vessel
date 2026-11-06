@@ -108,11 +108,7 @@ async fn init(
 async fn join(files: FleetFiles, yes: bool) -> Result<(), CliError> {
     let offer =
         pair::offer_from_stdin(yes, "vessel fleet invite", "join this node's fleet?").await?;
-    let device_name = hostname::get()
-        .ok()
-        .and_then(|name| name.into_string().ok())
-        .unwrap_or_else(|| "node".to_owned());
-    let joined = fleet::join(&files, &offer, &device_name).await?;
+    let joined = fleet::join(&files, &offer, &node_name()).await?;
     io::note(&format!(
         "joined the fleet of {} ({}) via {}; this node follows it within a few seconds \
          (once it runs: `vessel node start`)\n",
@@ -120,6 +116,14 @@ async fn join(files: FleetFiles, yes: bool) -> Result<(), CliError> {
     ))
     .await?;
     Ok(())
+}
+
+/// What this node calls itself on its fleet's home: the host's name.
+pub(crate) fn node_name() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|name| name.into_string().ok())
+        .unwrap_or_else(|| "node".to_owned())
 }
 
 /// `path` made absolute against the current directory.

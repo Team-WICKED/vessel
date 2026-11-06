@@ -108,12 +108,25 @@ pub(crate) async fn offer_from_stdin(
 ) -> Result<PairingOffer, CliError> {
     let at_terminal = std::io::stdin().is_terminal();
     if !at_terminal && !yes {
-        return Err(CliError::Usage(
-            "with the link piped in there is no terminal to confirm the node; check its key \
-             fingerprint and pass --yes",
-        ));
+        return Err(no_terminal());
     }
     let mut lines = io::input_lines()?;
+    offer_from_lines(&mut lines, yes, from, question).await
+}
+
+/// [`offer_from_stdin`] on stdin lines the caller already reads (`vessel
+/// init` asks other questions on the same input: a second reader would
+/// wait behind the first one forever).
+pub(crate) async fn offer_from_lines(
+    lines: &mut tokio::sync::mpsc::Receiver<String>,
+    yes: bool,
+    from: &str,
+    question: &str,
+) -> Result<PairingOffer, CliError> {
+    let at_terminal = std::io::stdin().is_terminal();
+    if !at_terminal && !yes {
+        return Err(no_terminal());
+    }
     if at_terminal {
         io::note(&format!("paste the pairing link from `{from}`: ")).await?;
     }
@@ -138,6 +151,13 @@ pub(crate) async fn offer_from_stdin(
         }
     }
     Ok(offer)
+}
+
+fn no_terminal() -> CliError {
+    CliError::Usage(
+        "with the link piped in there is no terminal to confirm the node; check its key \
+         fingerprint and pass --yes",
+    )
 }
 
 /// Where credentials go: `<config_dir>/vessel/credentials/`.

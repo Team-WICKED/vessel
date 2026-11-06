@@ -404,14 +404,19 @@ member vesseld                         home vesseld
   is ever shown); `--service`: a systemd user unit (with the `PATH` init ran
   with) or a launchd agent, enabled, with how to undo, left alone if it
   differs; Windows says it is not available yet.
-- **Waiting for F2:** `--join` refuses before changing anything; the
-  pairing, pull and apply come with fleet sync.
+- **`--join` (after F2 landed):** one more step, before `--service`: the
+  link `vessel fleet invite` printed, read from standard input on the same
+  reader as init's other answers, shown and confirmed (`--yes` confirms;
+  piped without it is refused), then `vessel_node::fleet::join`. A member
+  reports "already done: a member of <home>" and reads no link; a home
+  reports it joins none.
 - **Tests** (vessel-cli, the `vessel` binary with a temporary home, made-up
   account names, and `fake-tool` as `npm`, `systemctl` and `launchctl` on a
   `PATH` that holds only fakes): a first run sets up, a second changes no
   file and runs no tool; no answers or "no" install and write nothing, a
-  yes runs that one install, `--install` needs `--yes`; `--join` changes
-  nothing; the service is installed once, an edited file left alone (and
+  yes runs that one install, `--install` needs `--yes`; `--join` pairs
+  with a home behind an in-process relay once, and a second run is
+  already done; the service is installed once, an edited file left alone (and
   Windows reports it unavailable); logged-out profiles get their login
   command and a token in `profiles.toml` never appears. Unit tests for
   discovery, adding a profile, the unit and plist text.
