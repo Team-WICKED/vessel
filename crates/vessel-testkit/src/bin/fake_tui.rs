@@ -18,7 +18,9 @@
 //!    `exit [code]` exits with that code (default 0), `env NAME` prints
 //!    `env NAME=<value>` or `env NAME unset`, `cwd` prints `cwd <dir>`,
 //!    `args` prints `args <JSON array of its arguments>` (after the
-//!    program name),
+//!    program name), `report <path>` writes its arguments and whole
+//!    environment to that file as JSON and prints `reported`
+//!    (`vessel_testkit::write_report`),
 //!    `modes on` / `modes off` switch the terminal modes a full-screen TUI
 //!    sets (alternate screen, hidden cursor, bracketed paste, kitty
 //!    keyboard flags, as Codex's TUI does) and print `modes on` / `modes
@@ -135,6 +137,11 @@ fn handle(line: &str) -> Option<ExitCode> {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         say(&format!("args {}", serde_json::Value::from(args)));
+    } else if let Some(path) = line.strip_prefix("report ") {
+        match vessel_testkit::write_report(std::path::Path::new(path.trim()), None) {
+            Ok(()) => say("reported"),
+            Err(error) => say(&format!("error: no report: {error}")),
+        }
     } else if line == "cwd" {
         match std::env::current_dir() {
             Ok(dir) => say(&format!("cwd {}", dir.display())),

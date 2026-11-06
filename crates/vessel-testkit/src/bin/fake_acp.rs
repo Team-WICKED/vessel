@@ -34,6 +34,10 @@
 //!   - `cwd`: one message chunk `cwd <path>`, the working directory of the
 //!     last `session/new` or `session/load`;
 //!   - `args`: one message chunk `args <JSON array of its arguments>`;
+//!   - `report <path>`: writes its arguments, its whole environment and
+//!     the MCP servers of the last `session/new` or `session/load` to that
+//!     file as JSON (`vessel_testkit::write_report`), then one message
+//!     chunk `reported`;
 //!   - `exit`, `garbage`: a message chunk and a permission request, then,
 //!     with both still open, the connection fails: `exit` exits with code
 //!     9, `garbage` writes a line that is not UTF-8 and stays up;
@@ -113,8 +117,17 @@ struct State {
 }
 
 /// The answer to a prompt that reports what the fake was given, if it is
-/// one (`env NAME`, `mcp`, `loaded`, `cwd`, `args`).
+/// one (`env NAME`, `mcp`, `loaded`, `cwd`, `args`, `report <path>`).
 fn report(prompt: &str, state: &State) -> Option<String> {
+    if let Some(path) = prompt.strip_prefix("report ") {
+        let mcp = serde_json::to_value(&state.mcp_servers).ok();
+        return Some(
+            match vessel_testkit::write_report(std::path::Path::new(path.trim()), mcp) {
+                Ok(()) => "reported".to_owned(),
+                Err(error) => format!("error: no report: {error}"),
+            },
+        );
+    }
     if let Some(name) = prompt.strip_prefix("env ") {
         return Some(match std::env::var_os(name) {
             Some(value) => format!("env {name}={}", value.to_string_lossy()),
