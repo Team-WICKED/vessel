@@ -349,10 +349,14 @@ It is idempotent: running it again fills gaps and changes nothing else.
   read a value back out. Protocol 6's `secret.set`, `secret.list` and
   `secret.delete` (admin) call the same functions. `secret.copy` (`vessel
   fleet secret copy NAME --to NODE_ID`, a whole node id: never a name
-  or a prefix, which could match a node it was not meant for) reads the value here and sends it as `secret.set` through the
-  envelope as the caller, so it lands only where the target granted the
-  home `admin`, which the default grant leaves out; the refusal says to
-  join again with `--grant read,operate,admin`. The home grants its
+  or a prefix, which could match a node it was not meant for) reads the
+  value here and sends it as `secret.set` through the envelope as the
+  caller, so it lands only where the target granted the home `admin`,
+  which the default grant leaves out; the refusal says to join again with
+  `--grant read,operate,admin`. The target is asked a value-free
+  `secret.list` the same way first, and the value goes only if that
+  passes: a refused `secret.set` would already have carried it there
+  (found by the security review, 2026-11-06). The home grants its
   members only `sync` and `relay`, so a secret is set there directly.
 - **MCP servers at launch (F3).** The node's `McpSource` is the fleet's
   (`fleet::FleetMcp`): a snapshot of the definitions of the manifest this

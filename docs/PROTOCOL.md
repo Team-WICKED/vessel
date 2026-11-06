@@ -96,7 +96,10 @@ yet", after the scope check like every method.)
   `admin` is `forbidden`, the message saying how to (`vessel fleet join
   --grant read,operate,admin` there), and the home itself, which grants
   its members only `sync` and `relay`, is `forbidden` with a pointer to
-  `vessel fleet secret set` there. No error carries a value.
+  `vessel fleet secret set` there. No error carries a value. The target
+  is asked `secret.list` through the envelope first (forwardable for
+  this, names only), and `secret.set` carrying the value goes only if that
+  passes, so a target that would refuse the value never receives it.
 - `session.read` takes `wait?` (seconds, capped at 60, protocol 6): with
   nothing at `from` yet, the node answers as soon as a record lands there
   or the session ends, or when the wait ends (an empty page). An ended or

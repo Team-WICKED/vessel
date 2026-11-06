@@ -15,21 +15,26 @@
 //!   `vessel mcp` with an agent's credential, and refused without the right
 //!   session.
 //! - Captured: the nodes' tracing at debug level; every CLI command's
-//!   output, with debug logging on; what the fakes report of their
-//!   arguments, and of their environment where a value must not be; and
-//!   every file of both data directories (the event store, the bundle's
-//!   manifest and blobs, the fleet's state, the harness homes), except the
-//!   few files a value belongs in.
-//! - Then each canary is shown to reach its intended place (the harness's
-//!   environment, the owner-only MCP file, the agent over ACP, the
-//!   member's `secrets.toml`, the credential files), so the test cannot
-//!   pass by planting nothing. Those checks come last: a fake asked to
-//!   print a value puts it in the session's log, which is data the person
-//!   asked for, so the files are scanned before.
+//!   output, with debug logging on; the fakes' arguments; the sessions'
+//!   logs; and every file of both data directories (the event store, the
+//!   bundle's manifest and blobs, the fleet's state, the harness homes),
+//!   except the few files a value belongs in. Every session's agent
+//!   credential is a canary too.
+//! - Non-vacuous: each canary is shown in its intended place, and only
+//!   there: the harness's environment (a profile's value in every one; the
+//!   servers' values and the agent's credential in Codex's terminal, which
+//!   reads them from there), a structured agent's MCP servers over ACP,
+//!   the owner-only MCP file of Claude Code's terminal, the member's
+//!   `secrets.toml` and the credential files. The fakes report their
+//!   arguments, whole environment and ACP servers to a file outside every
+//!   searched directory (`report <path>`, `vessel_testkit::write_report`),
+//!   so no value passes through a session's log and the scan can come
+//!   last, over everything.
 //!
 //! Only named profiles with temporary homes are used; the nodes' default
 //! profiles live under the fixtures' temporary user homes.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -237,12 +242,15 @@ fn fakes(bin: &Path) {
     }
 }
 
-/// A node linked to `relay` with the fakes in `bin`, fleet files written
+/// A node named `name` linked to `relay` with the fakes in `bin`, fleet files written
 /// into `<data>/fleet-claude`, `vessel mcp` as its agents' tools, and
 /// `prepare` run on its data directory first.
-async fn node(relay: &RouteUrl, bin: &Path, prepare: impl FnOnce(&Path)) -> Fixture {
+async fn node(name: &str, relay: &RouteUrl, bin: &Path, prepare: impl FnOnce(&Path)) -> Fixture {
     let fixture = Fixture::start_with(|config, data| {
         prepare(data);
+        // Named: a home refuses a member named as itself or another member,
+        // and both would otherwise take this machine's hostname.
+        config.name = Some(name.to_owned());
         let token = data.join("relay-token");
         std::fs::write(&token, "canary-relay\n").unwrap();
         config.relays = vec![relay.clone()];
@@ -374,41 +382,61 @@ impl Session {
     }
 }
 
-/// Ask a fake `question` (`args`, `env NAME`, `mcp`) and return its answer
-/// line: the first whole line after the question that starts with one of
-/// `answers` (a terminal echoes the question itself, so the answers are
-/// what only the reply can start with).
-async fn ask(client: &NodeClient, session: Session, question: &str, answers: &[&str]) -> String {
-    let before = session_text(client, session.id).await.len();
-    client
-        .send(session.id, session.input(question))
-        .await
-        .unwrap();
-    let mut found = String::new();
-    until(&format!("an answer to {question:?}"), async || {
-        let text = session_text(client, session.id).await;
-        let Some(after) = text.get(before..) else {
-            return false;
-        };
-        let Some(at) = answers.iter().filter_map(|answer| after.find(answer)).min() else {
-            return false;
-        };
-        let rest = after.get(at..).unwrap_or_default();
-        // A terminal's line is whole once its end arrived; an agent's
-        // message comes in one chunk.
-        if session.terminal && !rest.contains('\n') {
-            return false;
-        }
-        found = rest.lines().next().unwrap_or_default().trim().to_owned();
-        true
-    })
-    .await;
-    found
+/// What a fake was started with (`report <path>`): its arguments, its
+/// whole environment and, for an ACP fake, the MCP servers it was given,
+/// values included. The fake writes it to a file outside every directory
+/// this test searches, so no value passes through the session's log.
+struct Report {
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    mcp: Option<Value>,
 }
 
-/// What `env NAME` can answer.
-fn env_answers(name: &str) -> [String; 2] {
-    [format!("env {name}="), format!("env {name} unset")]
+async fn report(client: &NodeClient, session: Session, dir: &Path) -> Report {
+    let path = dir.join(format!("{}.json", session.id));
+    let question = format!("report {}", path.display());
+    client
+        .send(session.id, session.input(&question))
+        .await
+        .unwrap();
+    until(&format!("session {}'s report", session.id), async || {
+        path.is_file()
+    })
+    .await;
+    let report: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let strings = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    Report {
+        args: report["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(strings)
+            .collect(),
+        env: report["env"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| (name.clone(), strings(value)))
+            .collect(),
+        mcp: report.get("mcp").cloned(),
+    }
+}
+
+/// The value of the variable `name` given to an MCP server in an ACP
+/// server list (`env: [{name, value}]`), wherever it is.
+fn mcp_variable(servers: &Value, name: &str) -> Option<String> {
+    match servers {
+        Value::Object(fields) => {
+            if fields.get("name").and_then(Value::as_str) == Some(name)
+                && let Some(value) = fields.get("value").and_then(Value::as_str)
+            {
+                return Some(value.to_owned());
+            }
+            fields.values().find_map(|field| mcp_variable(field, name))
+        }
+        Value::Array(items) => items.iter().find_map(|item| mcp_variable(item, name)),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
+    }
 }
 
 /// `vessel run <harness> --profile <profile> [--structured] --detach`.
@@ -491,19 +519,21 @@ async fn make_home(home: &Fixture, planted: &Planted, captured: &mut Captured) {
     assert!(listed.stdout.contains("WEB_TOKEN"), "{}", listed.stdout);
 }
 
-/// The member joins, granting the home `admin`, and applies the bundle
-/// with its MCP servers.
-async fn join(home: &Fixture, member: &Fixture, client: &NodeClient, captured: &mut Captured) {
-    let invited = vessel(
-        home,
-        captured,
-        &["fleet", "invite", "--label", "member"],
-        b"",
-    )
-    .await;
+/// A member joins, granting the home `grant`, and applies the bundle with
+/// its MCP servers.
+async fn join(
+    home: &Fixture,
+    member: &Fixture,
+    grant: &str,
+    client: &NodeClient,
+    captured: &mut Captured,
+) {
+    let label = member.node().info().name;
+    let args = ["fleet", "invite", "--label", label.as_str()];
+    let invited = vessel(home, captured, &args, b"").await;
     assert!(invited.ok, "{}", invited.stderr);
     let link = format!("{}\n", invited.stdout.trim());
-    let args = ["fleet", "join", "--yes", "--grant", "read,operate,admin"];
+    let args = ["fleet", "join", "--yes", "--grant", grant];
     let joined = vessel(member, captured, &args, link.as_bytes()).await;
     assert!(joined.ok, "{}", joined.stderr);
     let id = member.node().info().id;
@@ -530,7 +560,7 @@ async fn join(home: &Fixture, member: &Fixture, client: &NodeClient, captured: &
 /// `secret.copy` to the member, and its refusals.
 async fn copy_secrets(
     home: &Fixture,
-    member: &Fixture,
+    [member, plain]: [&Fixture; 2],
     planted: &Planted,
     captured: &mut Captured,
 ) {
@@ -556,6 +586,21 @@ async fn copy_secrets(
         let refused = vessel(home, captured, &args, b"").await;
         assert!(!refused.ok, "{args:?}");
     }
+    // A member that did not grant the home `admin`: refused, saying how to
+    // grant it, and asked first, so the value never went there.
+    let plain_id = plain.node().info().id.to_string();
+    let args = ["fleet", "secret", "copy", "WEB_TOKEN", "--to", &plain_id];
+    let refused = vessel(home, captured, &args, b"").await;
+    assert!(!refused.ok);
+    assert!(
+        refused.stderr.contains("--grant read,operate,admin"),
+        "{}",
+        refused.stderr
+    );
+    assert!(
+        !plain.data().join("secrets.toml").exists(),
+        "nothing reached it"
+    );
     let stored = std::fs::read_to_string(member.data().join("secrets.toml")).unwrap();
     assert!(
         stored.contains(&planted.docs),
@@ -613,38 +658,64 @@ async fn profiles(home: &Fixture, planted: &Planted, captured: &mut Captured) {
     assert!(!unknown.ok);
 }
 
-/// The home's sessions: what each fake reports of its arguments, and of
-/// its environment where a value must not be. Returns them, and the
-/// Claude Code terminal session's MCP file.
+/// The home's sessions, Claude Code and Codex, terminal and structured,
+/// and what each fake reports: its arguments hold no value; a value is in
+/// its environment only where it belongs (a profile's in every one; the
+/// servers' and the agent's credential in Codex's terminal, which reads
+/// them from there); a structured agent gets the servers' values over
+/// ACP; the Claude Code terminal's are in its owner-only MCP file. Returns
+/// the sessions, that MCP file, and every session's agent credential.
 async fn sessions(
     home: &Fixture,
     client: &NodeClient,
     planted: &Planted,
+    reports: &Path,
     captured: &mut Captured,
-) -> (Vec<Session>, PathBuf) {
+) -> (Vec<Session>, PathBuf, Vec<String>) {
     let mut started = Vec::new();
+    let mut agents = Vec::new();
     for (harness, profile) in [("claude", "claude-one"), ("codex", "codex-one")] {
         for terminal in [true, false] {
             let session = run(home, captured, harness, profile, terminal).await;
-            let args = ask(client, session, "args", &["args ["]).await;
-            captured.text(format!("{harness} {profile} arguments"), &args);
-            // Where a secret must not be: the harness's environment.
-            // Codex's terminal is the exception: it reads its servers'
-            // values, the `vessel` server's credential included, from
-            // there (checked with the intended places, at the end).
-            let absent: &[&str] = if terminal && harness == "codex" {
-                &[]
-            } else {
-                &["VESSEL_AGENT_SECRET", "DOCS_TOKEN"]
-            };
-            for &name in absent {
-                let answers = env_answers(name);
-                let answers = [answers[0].as_str(), answers[1].as_str()];
-                let answer = ask(client, session, &format!("env {name}"), &answers).await;
-                assert_eq!(
-                    answer.trim(),
-                    format!("env {name} unset"),
-                    "{harness} {terminal}"
+            let report = report(client, session, reports).await;
+            let what = format!("{harness} {profile} (terminal: {terminal})");
+            captured.text(format!("{what} arguments"), &report.args.join(" "));
+            assert_eq!(
+                report.env.get("CANARY_PROFILE"),
+                Some(&planted.profile),
+                "{what}: the profile's value"
+            );
+            let codex_terminal = terminal && harness == "codex";
+            for (name, value) in &report.env {
+                let allowed = name == "CANARY_PROFILE"
+                    || (codex_terminal
+                        && (name == "DOCS_TOKEN"
+                            || name == "VESSEL_AGENT_SECRET"
+                            || name.starts_with("VESSEL_MCP_")));
+                if !allowed {
+                    for secret in [&planted.profile, &planted.docs, &planted.web] {
+                        assert!(!value.contains(secret.as_str()), "{what}: {name}");
+                    }
+                    assert_ne!(name, "VESSEL_AGENT_SECRET", "{what}");
+                }
+            }
+            if codex_terminal {
+                assert_eq!(report.env.get("DOCS_TOKEN"), Some(&planted.docs));
+                assert!(
+                    report.env.iter().any(|(name, value)| {
+                        name.starts_with("VESSEL_MCP_") && *value == planted.web
+                    }),
+                    "Codex reads the header's value from its environment"
+                );
+                agents.push(report.env["VESSEL_AGENT_SECRET"].clone());
+            }
+            if let Some(servers) = &report.mcp {
+                let text = servers.to_string();
+                for value in [&planted.docs, &planted.web] {
+                    assert!(text.contains(value.as_str()), "{what}: over ACP");
+                }
+                agents.push(
+                    mcp_variable(servers, "VESSEL_AGENT_SECRET").expect("the agent's credential"),
                 );
             }
             started.push(session);
@@ -659,7 +730,7 @@ async fn sessions(
         );
     }
     assert_owner_only(&mcp);
-    (started, mcp)
+    (started, mcp, agents)
 }
 
 /// The owner-only MCP file of the Claude Code terminal session.
@@ -839,7 +910,6 @@ async fn transfers(
 // ---------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "its fleet setup predates the grant binding rules (375ae31, 2dfd93a): the home never reaches the member; Track F is adapting it, with reports read from files for Windows"]
 async fn no_secret_value_appears_where_it_does_not_belong() {
     let _log = tracing_log();
     within(async {
@@ -851,7 +921,7 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         let bin = tempfile::tempdir().unwrap();
         fakes(bin.path());
         let relay = relay().await;
-        let home = node(&relay.url, bin.path(), |data| {
+        let home = node("canary-home", &relay.url, bin.path(), |data| {
             std::fs::write(
                 DataDir::new(data).profiles_path(),
                 profiles_toml(data, &planted.profile),
@@ -859,15 +929,19 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
             .unwrap();
         })
         .await;
-        let member = node(&relay.url, bin.path(), |_data| {}).await;
+        let member = node("canary-member", &relay.url, bin.path(), |_data| {}).await;
+        let plain = node("canary-plain", &relay.url, bin.path(), |_data| {}).await;
         let client = owner(&home).await;
         let mut captured = Captured::default();
 
         make_home(&home, &planted, &mut captured).await;
-        join(&home, &member, &client, &mut captured).await;
-        copy_secrets(&home, &member, &planted, &mut captured).await;
+        join(&home, &member, "read,operate,admin", &client, &mut captured).await;
+        join(&home, &plain, "read,operate", &client, &mut captured).await;
+        copy_secrets(&home, [&member, &plain], &planted, &mut captured).await;
         profiles(&home, &planted, &mut captured).await;
-        let (started, mcp) = sessions(&home, &client, &planted, &mut captured).await;
+        let reports = tempfile::tempdir().unwrap();
+        let (started, mcp, mut agents) =
+            sessions(&home, &client, &planted, reports.path(), &mut captured).await;
         let agent = agent_env(&mcp);
         agent_tools(&agent, &mut captured).await;
         transfers(&home, &member, &client, started[1], &mut captured).await;
@@ -893,11 +967,14 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
             })
             .expect("the home's credential on the member");
         let grant = credential_secret(&grant_file);
-        let agent_secret = agent
-            .iter()
-            .find(|(name, _)| name == "VESSEL_AGENT_SECRET")
-            .map(|(_, value)| value.clone())
-            .unwrap();
+        agents.push(
+            agent
+                .iter()
+                .find(|(name, _)| name == "VESSEL_AGENT_SECRET")
+                .map(|(_, value)| value.clone())
+                .unwrap(),
+        );
+        assert_eq!(agents.len(), 4, "every session's agent credential");
 
         // Everything captured so far, and every file but the few a value
         // belongs in.
@@ -915,81 +992,32 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         captured.tree(home.data(), &intended(home.data(), grant_file.clone()));
         let member_credential = member.data().join("fleet/member.credential");
         captured.tree(member.data(), &intended(member.data(), member_credential));
+        let plain_credential = plain.data().join("fleet/member.credential");
+        captured.tree(plain.data(), &intended(plain.data(), plain_credential));
         captured.text("the nodes' tracing", &String::from_utf8_lossy(&traced()));
-        let canaries = [
+        let mut canaries = vec![
             ("profile", planted.profile.as_str()),
             ("DOCS_TOKEN", planted.docs.as_str()),
             ("WEB_TOKEN", planted.web.as_str()),
             ("member credential", device.as_str()),
             ("home credential", grant.as_str()),
-            ("agent credential", agent_secret.as_str()),
         ];
+        canaries.extend(
+            agents
+                .iter()
+                .map(|agent| ("agent credential", agent.as_str())),
+        );
         captured.assert_clean(&canaries);
         assert!(
             contains(&traced(), b"client connected"),
             "the nodes' tracing was captured"
         );
 
-        // Each canary reaches its intended place.
-        intended_places(&client, &started, &planted).await;
-        let traced = traced();
-        for (name, value) in canaries {
-            assert!(
-                !contains(&traced, value.as_bytes()),
-                "the {name} canary was traced"
-            );
-        }
-
         home.stop().await;
         member.stop().await;
+        plain.stop().await;
         relay.shutdown.cancel();
         relay.serving.await.unwrap().unwrap();
     })
     .await;
-}
-
-/// The profile's value is in its harnesses' environment; Codex's terminal
-/// has the stdio server's value and its agent's credential in its
-/// environment; a structured agent gets every server's value over ACP. (The MCP file, the member's
-/// `secrets.toml` and the credential files were checked on the way.)
-async fn intended_places(client: &NodeClient, started: &[Session], planted: &Planted) {
-    let [
-        claude_terminal,
-        claude_structured,
-        codex_terminal,
-        codex_structured,
-    ] = started
-    else {
-        panic!("four sessions");
-    };
-    for session in [
-        claude_terminal,
-        claude_structured,
-        codex_terminal,
-        codex_structured,
-    ] {
-        let answers = env_answers("CANARY_PROFILE");
-        let answers = [answers[0].as_str(), answers[1].as_str()];
-        let answer = ask(client, *session, "env CANARY_PROFILE", &answers).await;
-        assert_eq!(
-            answer.trim(),
-            format!("env CANARY_PROFILE={}", planted.profile)
-        );
-    }
-    let answers = env_answers("DOCS_TOKEN");
-    let answers = [answers[0].as_str(), answers[1].as_str()];
-    let answer = ask(client, *codex_terminal, "env DOCS_TOKEN", &answers).await;
-    assert_eq!(answer.trim(), format!("env DOCS_TOKEN={}", planted.docs));
-    let answers = env_answers("VESSEL_AGENT_SECRET");
-    let answers = [answers[0].as_str(), answers[1].as_str()];
-    let answer = ask(client, *codex_terminal, "env VESSEL_AGENT_SECRET", &answers).await;
-    assert!(answer.starts_with("env VESSEL_AGENT_SECRET="), "{answer}");
-    let servers = ask(client, *claude_structured, "mcp", &["mcp ["]).await;
-    for value in [&planted.docs, &planted.web] {
-        assert!(
-            servers.contains(value.as_str()),
-            "the agent gets the values over ACP"
-        );
-    }
-    assert!(servers.contains("VESSEL_AGENT_SECRET"), "{servers}");
 }
