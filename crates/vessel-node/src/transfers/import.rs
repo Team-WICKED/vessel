@@ -8,9 +8,14 @@
 //!   source only snapshots and serves.
 //! - [`Source`] is the one seam between "this node" and "another node":
 //!   [`Local`] calls this node's own export, read and close for the
-//!   caller (ownership checked as `session.export` would be); Track X's
-//!   envelope implements the same four calls with `fleet.forward`. The
-//!   import does not know which it has.
+//!   caller (ownership checked as `session.export` would be); [`Remote`]
+//!   sends the same four calls to another fleet node through the envelope
+//!   (`NodeService::pass_on`, the route `fleet.forward` takes), as the
+//!   caller: the source node sees the caller's origin, so its own
+//!   ownership rules and its grant to the home apply there, and the
+//!   transfer it opens belongs to that delivery (`Holder::Delegated`), so
+//!   only this import reads and closes it. The import does not know which
+//!   source it has ([`Pull`]).
 //! - Order: export there; check the manifest against the limits before
 //!   fetching anything; fetch every file into an incoming staging store,
 //!   each checked against its hash; rename each path for the target's
@@ -31,19 +36,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use vessel_fleet::{Incoming, OnConflict, Placed};
-use vessel_harness::rebase;
+use vessel_harness::{Profile, rebase};
 use vessel_proto::{
-    BlobChunk, BundleFile, BundlePath, CloseTransfer, ExportMemory, ExportSession, HarnessKind,
-    ImportMemory, ImportSession, MemoryImported, NodeId, ReadTransfer, SessionImported,
-    SessionMode, SessionOrigin, SessionSpec, TransferDetail, TransferId, TransferManifest,
-    WireError,
+    BlobChunk, BundleFile, BundlePath, CloseTransfer, ErrorCode, ExportMemory, ExportSession,
+    HarnessKind, ImportMemory, ImportSession, MemoryImported, NodeId, ReadTransfer, Request,
+    SessionImported, SessionMode, SessionOrigin, SessionSpec, TransferDetail, TransferId,
+    TransferManifest, WireError,
 };
 
 use super::export::{Exporter, home, named};
 use super::{Holder, TransferError, Transfers, check_limits, discard, wire};
 use crate::error::ServiceError;
 use crate::fleet::FetchError;
+use crate::principal::Principal;
 use crate::profiles::NodeProfiles;
+use crate::service::NodeService;
 
 /// Where an import pulls from: the four calls of protocol 6 a source
 /// answers. See the module's Decision Log.
@@ -90,6 +97,88 @@ impl Source for Local<'_> {
             .close(self.holder, request.transfer)
             .await
             .map_err(|error| wire(&error))
+    }
+}
+
+/// Another fleet node as the source, through the envelope for
+/// `principal` (the caller of the import).
+#[derive(Debug)]
+pub(crate) struct Remote<'a> {
+    pub(crate) service: &'a NodeService,
+    pub(crate) principal: &'a Principal,
+    pub(crate) node: NodeId,
+}
+
+impl Remote<'_> {
+    /// `request` run on the source node for the caller.
+    async fn call<R: Request>(&self, request: R) -> Result<R::Response, WireError> {
+        let forwarded = self
+            .service
+            .pass_on(self.principal, self.node, Box::new(request.into_call()))
+            .await?;
+        R::response_from(*forwarded.reply).map_err(|unexpected| {
+            WireError::new(
+                ErrorCode::Internal,
+                format!("node {} answered out of turn: {unexpected}", self.node),
+            )
+        })
+    }
+}
+
+impl Source for Remote<'_> {
+    async fn export_session(&self, request: ExportSession) -> Result<TransferManifest, WireError> {
+        self.call(request).await
+    }
+
+    async fn export_memory(&self, request: ExportMemory) -> Result<TransferManifest, WireError> {
+        self.call(request).await
+    }
+
+    async fn read(&self, request: ReadTransfer) -> Result<BlobChunk, WireError> {
+        self.call(request).await
+    }
+
+    async fn close(&self, request: CloseTransfer) -> Result<(), WireError> {
+        self.call(request).await.map(drop)
+    }
+}
+
+/// Where an import pulls from: this node or another.
+#[derive(Debug)]
+pub(crate) enum Pull<'a> {
+    /// This node.
+    Local(Local<'a>),
+    /// Another fleet node, through the envelope.
+    Remote(Remote<'a>),
+}
+
+impl Source for Pull<'_> {
+    async fn export_session(&self, request: ExportSession) -> Result<TransferManifest, WireError> {
+        match self {
+            Self::Local(source) => source.export_session(request).await,
+            Self::Remote(source) => source.export_session(request).await,
+        }
+    }
+
+    async fn export_memory(&self, request: ExportMemory) -> Result<TransferManifest, WireError> {
+        match self {
+            Self::Local(source) => source.export_memory(request).await,
+            Self::Remote(source) => source.export_memory(request).await,
+        }
+    }
+
+    async fn read(&self, request: ReadTransfer) -> Result<BlobChunk, WireError> {
+        match self {
+            Self::Local(source) => source.read(request).await,
+            Self::Remote(source) => source.read(request).await,
+        }
+    }
+
+    async fn close(&self, request: CloseTransfer) -> Result<(), WireError> {
+        match self {
+            Self::Local(source) => source.close(request).await,
+            Self::Remote(source) => source.close(request).await,
+        }
     }
 }
 
@@ -175,7 +264,14 @@ impl Importer<'_> {
         let home = home(self.profiles, &profile).map_err(to_wire)?;
         let incoming = renamed(harness, &files, Some((&from_cwd, &to_cwd)))?;
         let placed = self
-            .pull(source, transfer, &files, home, incoming, OnConflict::Refuse)
+            .pull(
+                source,
+                transfer,
+                &files,
+                (&profile, home),
+                incoming,
+                OnConflict::Refuse,
+            )
             .await?;
         let model = match &info.spec.mode {
             SessionMode::Structured { model, .. } => model.clone(),
@@ -264,7 +360,14 @@ impl Importer<'_> {
             same,
             beside,
         } = self
-            .pull(source, transfer, &files, home, incoming, OnConflict::Beside)
+            .pull(
+                source,
+                transfer,
+                &files,
+                (&profile, home),
+                incoming,
+                OnConflict::Beside,
+            )
             .await?;
         tracing::info!(%transfer, written, same, beside = beside.len(), "memory imported");
         Ok(MemoryImported {
@@ -281,11 +384,23 @@ impl Importer<'_> {
         source: &S,
         transfer: TransferId,
         files: &BTreeMap<BundlePath, BundleFile>,
-        home: PathBuf,
+        (profile, home): (&Profile, PathBuf),
         incoming: Vec<Incoming>,
         on_conflict: OnConflict,
     ) -> Result<Placed, WireError> {
         check_limits(files).map_err(to_wire)?;
+        let exists = {
+            let home = home.clone();
+            tokio::task::spawn_blocking(move || home.is_dir())
+                .await
+                .map_err(|error| to_wire(TransferError::Task(error)))?
+        };
+        if !exists {
+            return Err(to_wire(TransferError::NoHome {
+                profile: profile.name().clone(),
+                home,
+            }));
+        }
         let transfers = Arc::clone(self.transfers);
         let staged = tokio::task::spawn_blocking(move || transfers.stage(true))
             .await

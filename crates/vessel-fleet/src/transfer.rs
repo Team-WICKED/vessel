@@ -119,7 +119,7 @@ pub enum SnapshotError {
         limit: u64,
     },
     /// Reading the home or writing the store failed.
-    #[error("{}: {source}", path.display())]
+    #[error("cannot copy {}", path.display())]
     Io {
         /// What was being read or written.
         path: PathBuf,
@@ -282,7 +282,7 @@ pub enum PlaceError {
         found: BlobHash,
     },
     /// Reading or writing failed.
-    #[error("{}: {source}", path.display())]
+    #[error("cannot write {}", path.display())]
     Io {
         /// Where.
         path: PathBuf,

@@ -21,20 +21,20 @@ use crate::secure::{Relay, relayed_with};
 use crate::support::{Fixture, prompt, structured_spec, within};
 
 /// One node of the test fleet.
-struct Member {
-    fixture: Fixture,
-    node: Node,
-    owner: NodeClient,
+pub(crate) struct Member {
+    pub(crate) fixture: Fixture,
+    pub(crate) node: Node,
+    pub(crate) owner: NodeClient,
 }
 
 impl Member {
-    fn id(&self) -> NodeId {
+    pub(crate) fn id(&self) -> NodeId {
         self.node.info().id
     }
 }
 
 /// A home with `fleet.toml`, linked to `relay`.
-async fn home(relay: &Relay, sources: &std::path::Path) -> Member {
+pub(crate) async fn home(relay: &Relay, sources: &std::path::Path) -> Member {
     let agents = sources.join("AGENTS.md");
     write(&agents, "fleet instructions\n");
     std::fs::create_dir_all(sources.join("skills")).unwrap();
@@ -65,6 +65,17 @@ async fn home(relay: &Relay, sources: &std::path::Path) -> Member {
 /// A member that joined `home` with a link of `scopes`, granting the home
 /// the default (`read`, `operate`); returned once the home lists it.
 async fn member(relay: &Relay, home: &Member, label: &str, scopes: Vec<Scope>) -> Member {
+    member_granting(relay, home, label, scopes, DEFAULT_GRANT.to_vec()).await
+}
+
+/// A member as [`member`] makes one, granting the home `grant`.
+pub(crate) async fn member_granting(
+    relay: &Relay,
+    home: &Member,
+    label: &str,
+    scopes: Vec<Scope>,
+    grant: Vec<Scope>,
+) -> Member {
     let fixture = Fixture::new();
     let applied = fixture.cwd().join("member-codex");
     let node = relayed_with(&fixture, &[&relay.url], |config| {
@@ -80,14 +91,9 @@ async fn member(relay: &Relay, home: &Member, label: &str, scopes: Vec<Scope>) -
         .link
         .decode()
         .unwrap();
-    let _joined = fleet::join(
-        &FleetFiles::new(&fixture.data_dir()),
-        &offer,
-        label,
-        DEFAULT_GRANT.to_vec(),
-    )
-    .await
-    .unwrap();
+    let _joined = fleet::join(&FleetFiles::new(&fixture.data_dir()), &offer, label, grant)
+        .await
+        .unwrap();
     let id = node.info().id;
     for _ in 0..800 {
         let peers = home.owner.call(ListPeers).await.unwrap();

@@ -277,7 +277,9 @@ async fn a_conversation_is_copied_to_another_profile_and_resumed_there() {
             node: node_id,
             session: source.id,
         };
-        // Where it already is; from another node (Track X): refused.
+        // Where it already is: refused. From another node, while this one
+        // is in no fleet: nothing to reach it through (across a fleet:
+        // `transfers_across.rs`).
         let here = import(from, "claude-alt", None, true);
         assert_eq!(code(client.import_session(here).await), ErrorCode::Conflict);
         let elsewhere = SessionRef {
@@ -287,7 +289,7 @@ async fn a_conversation_is_copied_to_another_profile_and_resumed_there() {
         let remote = import(elsewhere, "claude-work", None, true);
         assert_eq!(
             code(client.import_session(remote).await),
-            ErrorCode::Unsupported
+            ErrorCode::NotFound
         );
 
         let copy = resumed(&fixture, &client, &work, from, &source.session).await;
