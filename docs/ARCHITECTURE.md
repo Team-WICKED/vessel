@@ -244,7 +244,12 @@ they started.
     `--now` after confirming. End to end through `fake-ssh` and the real
     `vesseld` (`tests/remote.rs`, Unix): fresh install and start, run and
     attach, a changed pinned id refused, update side by side with
-    refuse-then-drain, and an SSH drop during attach resumed.
+    refuse-then-drain, and an SSH drop during attach resumed. Besides
+    `VESSEL_NODE`, `VESSEL_TOKEN` and `VESSEL_DATA_DIR` (milestone 1), the
+    CLI reads `VESSEL_CONFIG_DIR` (where the node book lives),
+    `VESSEL_SSH` (the `ssh` program) and `VESSEL_GH` (the GitHub CLI);
+    tests set all three so they never touch the user's book, the real
+    `ssh`, or GitHub (the README lists them).
 - Milestone 1 is merged on `backend/m1` (draft PR #1).
 - Manual smoke on Linux (2026-11-05) with real binaries:
   - `vesseld` with the `vessel` CLI ran `codex --version` in terminal mode.

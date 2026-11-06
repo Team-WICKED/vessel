@@ -191,6 +191,31 @@ downloaded on the remote.
   is not uploaded again.
 - Signing (`SHA256SUMS.minisig`) waits for the owner's decision on public
   releases. Until then the published SHA-256 is the integrity check.
+- **Update and development builds** (coordinator, 2026-11-06). `vessel
+  node update` leaves a node alone when it already runs this release:
+  nothing new was uploaded, and the node reports the client's version.
+  - A development build (`-dev-<hash>`) shares its version string with
+    every other build of that version, so "already runs it" cannot be told
+    from the version.
+  - For those, `update` always goes through the restart policy above
+    (stop at once without live sessions; otherwise refuse, `--when-idle`
+    or `--now`).
+  - Cost: an `update` with an unchanged dev build restarts the node
+    anyway. The alternative, reporting the running executable over the
+    protocol, is a wire change for a development-only case.
+- **Release builds** (coordinator, 2026-11-06). Both Linux targets
+  (`x86_64` and `aarch64`, static musl) are built on the x86_64 runner
+  with `cargo-zigbuild`. Zig is both the cross linker and the C compiler
+  for the bundled SQLite.
+  - The plan preferred native arm64 runners where GitHub offers them.
+    Hosted arm64 Linux runners are not available to every private
+    repository, and zig needs none.
+  - The aarch64 Linux binary cannot be run on its build runner, so the
+    workflow checks its `version` line only on the targets that run there
+    (x86_64 Linux and arm64 macOS). The remote install checks every
+    target's `version` again before renaming (above).
+  - Both macOS targets build on the arm64 macOS runner; Apple's toolchain
+    cross-compiles to x86_64.
 
 ## Why
 
