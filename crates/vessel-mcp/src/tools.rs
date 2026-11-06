@@ -13,6 +13,10 @@
 //!   `wait`, so one code path serves every node and nothing needs a
 //!   subscription across hops. A wait returns within one round trip of a
 //!   record landing; an empty page means nothing happened in that wait.
+//!   A node answers at once, empty, when too many reads already wait on
+//!   the connection or for this agent (protocol 6); the loop then pauses
+//!   [`EARLY_PAUSE`] before the next, so that is a poll a second, not a
+//!   busy loop.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,6 +54,9 @@ const READ_MAX: u32 = 1000;
 const POLL_SECS: u32 = 30;
 /// Records one poll reads.
 const POLL_PAGE: u32 = 200;
+/// The pause after a wait that came back empty before it could have ended
+/// (the node had no room for it to wait).
+const EARLY_PAUSE: Duration = Duration::from_secs(1);
 
 /// The `vessel` tools over one connection to the agent's node.
 #[derive(Debug, Clone)]
@@ -197,7 +204,9 @@ impl VesselTools {
                     "the session was not ready in time".to_owned(),
                 ));
             }
+            let asked = Instant::now();
             let page = self.poll(node, session, next, left).await?;
+            pause_if_early(&page, asked, deadline).await;
             for record in &page.records {
                 if let SessionEvent::Status { status } = &record.event {
                     if *status == SessionStatus::Running {
@@ -314,7 +323,9 @@ impl VesselTools {
             if left.is_zero() {
                 break json!({ "outcome": "timeout" });
             }
+            let asked = Instant::now();
             let page = self.poll(node, session, next, left).await?;
+            pause_if_early(&page, asked, deadline).await;
             if let Some(outcome) = turn_outcome(&page, &mut reply, &mut next) {
                 break outcome;
             }
@@ -337,6 +348,19 @@ impl VesselTools {
             let _none = object.insert("next".to_owned(), json!(next));
         }
         Ok(result)
+    }
+}
+
+/// After an empty page that came back before a second had passed (the node
+/// had no room for the read to wait), pause until a second has passed, or
+/// until `deadline`.
+async fn pause_if_early(page: &EventPage, asked: Instant, deadline: Instant) {
+    if page.records.is_empty() {
+        let until = asked
+            .checked_add(EARLY_PAUSE)
+            .unwrap_or(deadline)
+            .min(deadline);
+        tokio::time::sleep_until(until).await;
     }
 }
 

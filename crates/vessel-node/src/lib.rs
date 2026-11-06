@@ -81,6 +81,7 @@ mod subscribe;
 mod transfers;
 mod transport;
 mod unbuilt;
+mod waits;
 
 pub use config::{Config, VesselMcp};
 

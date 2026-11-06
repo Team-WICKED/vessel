@@ -94,7 +94,11 @@ built: the envelope, `fleet.grant`, `fleet.peers`, `fleet.nodes` and
 - `session.read` takes `wait?` (seconds, capped at 60, protocol 6): with
   nothing at `from` yet, the node answers as soon as a record lands there
   or the session ends, or when the wait ends (an empty page). An ended or
-  stored session answers at once.
+  stored session answers at once. Waiting reads may hold at most half of a
+  connection's calls (32 of 64), and one origin at most 8 on a node; a
+  read past either answers at once, as without `wait` (passed on to
+  another node, it goes without its wait). A client that gets an empty
+  page before its wait could have ended should pause before asking again.
 - `SessionInfo` takes `via?` (the home a creating call came through) and
   `origin?`: `{"kind":"remote","node","by"}` (`by` owner or `{"kind":
   "device","id"}`) for a session created by a forwarded call, `{"kind":

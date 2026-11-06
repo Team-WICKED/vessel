@@ -533,6 +533,20 @@ reproduced problems, fixed in this order:
   its access back. A member now grants once per join (`granted.json`
   records the join it was made for): after a revocation the home stays
   cut off until the node joins again (`e2e/grants.rs`).
+- **3 (medium): waiting reads filled the one connection between two
+  nodes.** A waiting read holds a call for up to a minute and a connection
+  runs 64; 64 waits through the home's connection to a member (or a
+  member's pull connection, which also carries `fleet.watch`) made every
+  other call on it fail. Now waiting reads hold at most half of a
+  connection's calls and one origin at most 8 on a node (`waits.rs`);
+  past either a read answers at once, and a passed-on read goes without
+  its wait. `vessel mcp` pauses a second after an early empty page, so a
+  waiter past the share polls once a second (`e2e/waiting.rs`: 64 waits
+  from one origin through the home's connection and through a member's,
+  8 wait, the rest answer, other calls pass; it fails without the shares).
+  Considered: a connection or pool of its own for long polls, which keeps
+  one more authenticated link per pair and still leaves the caller's own
+  connection to fill.
 - **4 (medium-low): devices for a home without a record.** A home switch
   could delete the next home's fresh record (`reconcile` deleted the file
   unconditionally), and a grant failing after the home redeemed the link
