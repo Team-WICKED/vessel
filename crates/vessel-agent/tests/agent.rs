@@ -38,6 +38,7 @@ mod support {
             cwd: std::env::temp_dir(),
             model: model.map(ModelId::new),
             resume: None,
+            mcp_servers: vessel_proto::ResolvedMcpServers::new(),
             handshake_timeout: vessel_agent::DEFAULT_HANDSHAKE_TIMEOUT,
         }
     }
@@ -663,6 +664,128 @@ async fn a_permission_request_arriving_after_a_cancel_is_answered_cancelled() {
                 assert!(agent.events.contains(&withdrawn), "{:?}", agent.events);
             }
         }
+    })
+    .await;
+}
+
+#[cfg(test)]
+mod mcp_support {
+    use std::collections::BTreeMap;
+
+    use vessel_proto::{AgentEvent, ContentBlock, McpTransport, ResolvedValue};
+
+    use super::support::{Agent, text};
+    use super::turn_over;
+
+    /// Ask `fake-acp` to report something (`mcp`, `loaded`, `env NAME`); its
+    /// one message chunk.
+    pub(super) async fn report(agent: &mut Agent, prompt: &str) -> String {
+        agent.input.prompt(text(prompt)).await.unwrap();
+        let AgentEvent::MessageChunk {
+            content: ContentBlock::Text { text },
+        } = agent
+            .until(|event| matches!(event, AgentEvent::MessageChunk { .. }))
+            .await
+        else {
+            panic!("expected a text chunk");
+        };
+        drop(agent.until(turn_over).await);
+        text
+    }
+
+    pub(super) fn mcp_servers() -> vessel_proto::ResolvedMcpServers {
+        BTreeMap::from([
+            (
+                "docs".parse().unwrap(),
+                McpTransport::Stdio {
+                    command: std::path::PathBuf::from("/opt/docs-mcp"),
+                    args: vec!["--stdio".to_owned()],
+                    env: BTreeMap::from([(
+                        "DOCS_TOKEN".parse().unwrap(),
+                        ResolvedValue::new("stdio-value".to_owned()),
+                    )]),
+                },
+            ),
+            (
+                "web".parse().unwrap(),
+                McpTransport::Http {
+                    url: "https://mcp.example.invalid/mcp".parse().unwrap(),
+                    headers: BTreeMap::from([(
+                        "Authorization".parse().unwrap(),
+                        ResolvedValue::new("Bearer header-value".to_owned()),
+                    )]),
+                },
+            ),
+        ])
+    }
+}
+
+use mcp_support::{mcp_servers, report};
+
+#[tokio::test]
+async fn mcp_servers_reach_the_agent_in_new_and_load() {
+    within(async {
+        let expected = serde_json::json!([
+            {"name": "docs", "command": "/opt/docs-mcp", "args": ["--stdio"],
+             "env": [{"name": "DOCS_TOKEN", "value": "stdio-value"}]},
+            {"type": "http", "name": "web", "url": "https://mcp.example.invalid/mcp",
+             "headers": [{"name": "Authorization", "value": "Bearer header-value"}]},
+        ]);
+        let mut agent = Agent::start(AgentSetup {
+            mcp_servers: mcp_servers(),
+            ..setup(None)
+        });
+        drop(agent.until(ready).await);
+        let got = report(&mut agent, "mcp").await;
+        let json: serde_json::Value =
+            serde_json::from_str(got.strip_prefix("mcp ").unwrap()).unwrap();
+        assert_eq!(json, expected);
+        assert_eq!(report(&mut agent, "loaded").await, "loaded none");
+        // Values travel in the request, never on the agent's command line.
+        let args = report(&mut agent, "args").await;
+        assert!(!args.contains("value"), "{args}");
+
+        let mut resumed = Agent::start(AgentSetup {
+            mcp_servers: mcp_servers(),
+            resume: Some(HarnessSessionId::new("fake-session-7")),
+            ..setup(None)
+        });
+        drop(resumed.until(ready).await);
+        assert_eq!(
+            report(&mut resumed, "loaded").await,
+            "loaded fake-session-7"
+        );
+        let got = report(&mut resumed, "mcp").await;
+        let json: serde_json::Value =
+            serde_json::from_str(got.strip_prefix("mcp ").unwrap()).unwrap();
+        assert_eq!(json, expected);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn http_servers_are_left_out_for_an_agent_without_http() {
+    within(async {
+        let command = vessel_proc::CommandSpec::new(vessel_testkit::Fake::Acp.path().unwrap())
+            .env("FAKE_ACP_NO_HTTP_MCP", "1");
+        let mut agent = Agent::start_with(
+            &command,
+            AgentSetup {
+                mcp_servers: mcp_servers(),
+                ..setup(None)
+            },
+        );
+        drop(agent.until(ready).await);
+        let got = report(&mut agent, "mcp").await;
+        let json: serde_json::Value =
+            serde_json::from_str(got.strip_prefix("mcp ").unwrap()).unwrap();
+        let names: Vec<_> = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|server| server["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["docs"]);
     })
     .await;
 }

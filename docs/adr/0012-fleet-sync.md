@@ -246,3 +246,31 @@ It is idempotent: running it again fills gaps and changes nothing else.
   directory, all owner-only.
 - The home is a single point for configuration changes, not for running
   agents: members keep working, with the last bundle, while it is away.
+
+
+## As built (Track H, MCP at launch, 2026-11-06)
+
+- **Claude Code** reads the servers from `--mcp-config=<file>`, passed as
+  one argument because the option takes several values and would swallow
+  the session's own arguments after it. The file is JSON, owner-only,
+  created exclusively under a random name in the directory the node gives
+  (`vessel_harness::launch_in`; the system's temporary directory if none),
+  written right before the program starts, and removed when the session
+  ends.
+- **Codex** has no file flag that leaves its home alone, so each server is
+  one `-c mcp_servers.<name>={...}` override that replaces any server of
+  that name whole. Values go into Codex's environment: a stdio server's
+  under its own variable names, forwarded with `env_vars`; a header's under
+  a generated name read with `env_http_headers`. Because that environment
+  is Codex's own, a variable that two servers (or a server and the profile)
+  would set differently, or the home variable, is refused rather than
+  silently changing Codex itself.
+- **Gemini CLI and `OpenCode`**: no launch-time form that leaves the user's
+  own configuration alone was confirmed, so their terminal sessions start
+  without the servers, and the launch reports which servers were left out.
+  Their structured sessions get every server over ACP.
+- **ACP**: stdio servers always; HTTP servers only when the agent advertises
+  `mcp_capabilities.http`, otherwise left out and logged by name.
+- A test asserts that no value appears on any harness command line, in
+  `vessel-harness` (the command) and in `vessel-session` (the arguments the
+  fakes actually received).

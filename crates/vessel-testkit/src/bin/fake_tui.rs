@@ -14,6 +14,8 @@
 //! 4. It prints `ready` and a `> ` prompt, then handles stdin lines:
 //!    `exit [code]` exits with that code (default 0), `env NAME` prints
 //!    `env NAME=<value>` or `env NAME unset`, `cwd` prints `cwd <dir>`,
+//!    `args` prints `args <JSON array of its arguments>` (after the
+//!    program name),
 //!    `modes on` / `modes off` switch the terminal modes a full-screen TUI
 //!    sets (alternate screen, hidden cursor, bracketed paste, kitty
 //!    keyboard flags, as Codex's TUI does) and print `modes on` / `modes
@@ -113,6 +115,12 @@ fn handle(line: &str) -> Option<ExitCode> {
             Ok(pid) => say(&format!("escaped {pid}")),
             Err(error) => say(&format!("error: no escape: {error}")),
         }
+    } else if line == "args" {
+        let args: Vec<String> = std::env::args_os()
+            .skip(1)
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        say(&format!("args {}", serde_json::Value::from(args)));
     } else if line == "cwd" {
         match std::env::current_dir() {
             Ok(dir) => say(&format!("cwd {}", dir.display())),

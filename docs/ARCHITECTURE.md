@@ -31,9 +31,9 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-proto` | Wire contract: ids, sessions, events, agent timeline, errors, typed RPC table; keys, devices, pairing links, relay control (milestone 3); validated names, profiles, creators, agent credentials, fleet manifests and MCP server definitions (milestone 4). No I/O. | - |
 | `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. | proto |
 | `vessel-proc` | Command specs, spawning in a process group, killing the group. | - |
-| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands. | proto, proc |
+| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, and MCP servers for terminal sessions. | proto, proc |
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize. | proc |
-| `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s. | proto, proc |
+| `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
 | `vessel-store` | Data directory (`node.id`, `token`, `vessel.db`), SQLite event log, retention, restart recovery. | proto |
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3). | proto, rpc, harness, session, store, secure, relay |
@@ -42,7 +42,7 @@ Target shape of the backend after milestone 1. Status per crate is in
 | `vessel-secure` | End-to-end secure channel (milestone 3, ADR 0009): Noise NK through `snow`, the node key pair, routing ids and fingerprints, the record layer, `SecureChannel` (a frame transport over any binary-message carrier), the relay's possession proof. | proto |
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (registration with token and possession proof, splicing, limits, close codes), the node's `NodeLink`, the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
 | `vessel-cli` | `vessel` binary: commands, interactive attach. | proto, client, node, remote |
-| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. | - |
+| `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. The fakes report the environment, arguments, MCP servers and loaded session id they got (milestone 4). | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
 that ADR and this table. Test-only edges: `vessel-node`'s end-to-end tests
@@ -58,7 +58,11 @@ they started.
    negotiated version and `NodeInfo`.
 2. `session.create` asks `vessel-harness` for a launch command, and
    `vessel-session` starts an actor in terminal mode (`vessel-pty`) or
-   structured mode (`vessel-agent`).
+   structured mode (`vessel-agent`). The command carries the session's
+   profile (variables set and removed; terminal arguments) and, for a
+   terminal session, its MCP servers in the harness's launch-time form; a
+   structured session gets its MCP servers in `session/new` or
+   `session/load` instead (ADRs 0011, 0012).
 3. The actor turns process output into `SessionEvent`s, numbers them
    (`EventSeq`, gap-free from zero), caches them in a ring, pushes each one
    into the bounded durable channel (the node writes it to the store), and
@@ -347,11 +351,32 @@ they started.
   - `/rpc` without a token returned 401.
 - Harness environment: `vesseld` passes its own environment to harnesses.
   For Claude Code that means the `CLAUDE_CONFIG_DIR` of whoever started the
-  node decides which account a session uses. Choosing this per session is
-  the "harness profiles" item of a later milestone.
+  node decides which account a session uses. Milestone 4 Track H (below)
+  makes this per session.
+- Milestone 4 Track H, the harness side (2026-11-06, branch
+  `backend/m4-profiles`; the node wiring follows the protocol 5 contract):
+  - `vessel-harness`: `profile` (`Profile`, the implicit default profile per
+    harness, `parse_profiles` for `profiles.toml` text, typed errors that
+    name the profile and key and never quote values); `home` (`home`,
+    `login_check`); `sessions` (`session_files` per the descriptor's
+    layout, `link_session`: hard links, never `memory/`, never through a
+    symbolic link, conflicts found before anything is linked); `mcp`
+    (`McpFile`, the owner-only per-session file, `WrittenMcpFile` removes
+    it on drop). `launch(lookup, spec, profile, mcp)` returns `Launch`
+    (command, MCP file, servers the harness cannot take); `launch_in` also
+    takes the directory for the MCP file (the node's own, ADR 0012). Descriptors now
+    carry the default profile name, home, login check, session finder and
+    terminal MCP form. No MCP value is ever an argument: Claude Code reads
+    an owner-only `--mcp-config=` file, Codex gets `-c mcp_servers.<name>`
+    overrides that name variables set in its environment.
+  - `vessel-agent`: `AgentSetup::mcp_servers`, converted to ACP in `mcp`;
+    HTTP servers only when the agent advertises them.
+  - `vessel-session`: `create_with(spec, LaunchOptions { profile,
+    mcp_servers, mcp_dir })`; `create` is the defaults. The terminal actor holds the
+    MCP file until the session ends.
 
 ## Later
 
-Peers, relay, SSH transport and self-update, sync, harness profiles, the
+Peers, relay, SSH transport and self-update, sync, the
 model router and the LSP bridge each get a plan and ADRs when they start. See
 `ROADMAP.md`.

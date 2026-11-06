@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use vessel_proto::HarnessKind;
+use vessel_proto::{HarnessKind, ProfileName};
+
+use crate::mcp::McpError;
 
 /// A session could not be turned into a command.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -40,5 +42,25 @@ pub enum HarnessError {
     NoSuchDirectory {
         /// The rejected directory.
         cwd: PathBuf,
+    },
+    /// The profile extends another harness than the session's.
+    #[error("profile {profile} is for {profile_harness}, not {harness}")]
+    ProfileMismatch {
+        /// The profile.
+        profile: ProfileName,
+        /// The harness it extends.
+        profile_harness: HarnessKind,
+        /// The session's harness.
+        harness: HarnessKind,
+    },
+    /// The MCP servers cannot be given to this harness's terminal session.
+    #[error(transparent)]
+    Mcp(#[from] McpError),
+    /// No name could be chosen for the session's MCP configuration file
+    /// (the system's random source failed).
+    #[error("cannot name an MCP configuration file: {reason}")]
+    McpFile {
+        /// Why.
+        reason: String,
     },
 }

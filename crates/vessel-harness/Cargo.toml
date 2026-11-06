@@ -18,8 +18,12 @@ vessel-proto.workspace = true
 
 dirs.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt", "time"] }
+toml_edit.workspace = true
 tracing.workspace = true
 which.workspace = true
 

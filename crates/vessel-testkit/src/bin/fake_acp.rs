@@ -9,12 +9,15 @@
 //!   `fake-acp starting` to stderr and serves ACP v1 until stdin closes.
 //! - With `FAKE_ACP_HANG` set to `initialize` or `session/new`, that request
 //!   is never answered (an adapter stuck at start).
-//! - `initialize`: protocol v1, `loadSession` supported.
+//! - `initialize`: protocol v1, `loadSession` supported, HTTP MCP servers
+//!   accepted (not with `FAKE_ACP_NO_HTTP_MCP` set).
 //! - `session/new`: session `fake-session-<n>`, with one `model` select
 //!   option (`fake-small`, the default, or `fake-large`).
 //! - `session/load`: replays the conversation as a user message chunk
 //!   `earlier question` and an agent message chunk `replayed <id>`, then
 //!   answers with the same `model` option as `session/new`.
+//! - Both remember the MCP servers they were given, and `session/load` the
+//!   session id it loaded.
 //! - `session/set_config_option`: accepts the two models, rejects others.
 //! - `session/prompt`, by prompt text:
 //!   - `plain`: one message chunk `echo: plain`, then `end_turn`;
@@ -22,6 +25,13 @@
 //!   - `flood`: message chunks `flood`, ten a millisecond (faster than a
 //!     slow client reads) until `session/cancel`, then `cancelled`; it
 //!     gives up with `end_turn` after a minute;
+//!   - `env NAME`: one message chunk `env NAME=<value>` or `env NAME
+//!     unset`, from the fake's own environment, then `end_turn`;
+//!   - `mcp`: one message chunk `mcp <JSON>`, the MCP servers of the last
+//!     `session/new` or `session/load` as ACP sent them (values included);
+//!   - `loaded`: one message chunk `loaded <id>` (the id `session/load`
+//!     got) or `loaded none`;
+//!   - `args`: one message chunk `args <JSON array of its arguments>`;
 //!   - `exit`, `garbage`: a message chunk and a permission request, then,
 //!     with both still open, the connection fails: `exit` exits with code
 //!     9, `garbage` writes a line that is not UTF-8 and stays up;
@@ -40,13 +50,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, Content, ContentBlock, ContentChunk, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
-    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, Plan, PlanEntry,
-    PlanEntryPriority, PlanEntryStatus, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SessionNotification,
-    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason,
-    TextContent, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
-    ToolKind,
+    McpCapabilities, McpServer, NewSessionRequest, NewSessionResponse, PermissionOption,
+    PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptRequest,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallContent,
+    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, ByteStreams, Error};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
@@ -92,6 +102,39 @@ struct State {
     sessions: u32,
     model: Option<String>,
     turn: Option<CancellationToken>,
+    /// From the last `session/new` or `session/load`.
+    mcp_servers: Vec<McpServer>,
+    /// The id the last `session/load` got.
+    loaded: Option<String>,
+}
+
+/// The answer to a prompt that reports what the fake was given, if it is
+/// one (`env NAME`, `mcp`, `loaded`, `args`).
+fn report(prompt: &str, state: &State) -> Option<String> {
+    if let Some(name) = prompt.strip_prefix("env ") {
+        return Some(match std::env::var_os(name) {
+            Some(value) => format!("env {name}={}", value.to_string_lossy()),
+            None => format!("env {name} unset"),
+        });
+    }
+    match prompt {
+        "mcp" => Some(format!(
+            "mcp {}",
+            serde_json::to_string(&state.mcp_servers).unwrap_or_default()
+        )),
+        "loaded" => Some(format!(
+            "loaded {}",
+            state.loaded.as_deref().unwrap_or("none")
+        )),
+        "args" => {
+            let args: Vec<String> = std::env::args_os()
+                .skip(1)
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            Some(format!("args {}", serde_json::Value::from(args)))
+        }
+        _ => None,
+    }
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -109,6 +152,7 @@ async fn serve() -> ExitCode {
     let hang = std::env::var("FAKE_ACP_HANG").unwrap_or_default();
     let hang_at_initialize = hang == "initialize";
     let hang_at_new = hang == "session/new";
+    let http_mcp = std::env::var_os("FAKE_ACP_NO_HTTP_MCP").is_none();
     let state = Shared::default();
     let transport = ByteStreams::new(
         tokio::io::stdout().compat_write(),
@@ -124,7 +168,11 @@ async fn serve() -> ExitCode {
                 }
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new().load_session(true))
+                        .agent_capabilities(
+                            AgentCapabilities::new()
+                                .load_session(true)
+                                .mcp_capabilities(McpCapabilities::new().http(http_mcp)),
+                        )
                         .agent_info(Implementation::new("fake-acp", env!("CARGO_PKG_VERSION"))),
                 )
             },
@@ -133,12 +181,13 @@ async fn serve() -> ExitCode {
         .on_receive_request(
             {
                 let state = Arc::clone(&state);
-                async move |_request: NewSessionRequest, responder, _cx| {
+                async move |request: NewSessionRequest, responder, _cx| {
                     if hang_at_new {
                         std::future::pending::<()>().await;
                     }
                     let (id, model) = {
                         let mut state = lock(&state);
+                        state.mcp_servers = request.mcp_servers;
                         state.sessions = state.sessions.saturating_add(1);
                         let id = format!("fake-session-{}", state.sessions);
                         let model = state.model.get_or_insert_with(|| MODELS[0].to_owned());
@@ -167,10 +216,15 @@ async fn serve() -> ExitCode {
                     say(SessionUpdate::AgentMessageChunk(ContentChunk::new(text(
                         &format!("replayed {}", request.session_id.0),
                     ))))?;
-                    let model = lock(&state)
-                        .model
-                        .get_or_insert_with(|| MODELS[0].to_owned())
-                        .clone();
+                    let model = {
+                        let mut state = lock(&state);
+                        state.mcp_servers.clone_from(&request.mcp_servers);
+                        state.loaded = Some(request.session_id.0.to_string());
+                        state
+                            .model
+                            .get_or_insert_with(|| MODELS[0].to_owned())
+                            .clone()
+                    };
                     responder.respond(
                         LoadSessionResponse::new().config_options(vec![model_option(&model)]),
                     )
@@ -202,12 +256,20 @@ async fn serve() -> ExitCode {
                 let state = Arc::clone(&state);
                 async move |request: PromptRequest, responder, cx| {
                     let turn = CancellationToken::new();
-                    let model = {
+                    let prompt = prompt_text(&request.prompt);
+                    let (model, report) = {
                         let mut state = lock(&state);
                         state.turn = Some(turn.clone());
-                        state.model.clone().unwrap_or_default()
+                        let report = report(&prompt, &state);
+                        (state.model.clone().unwrap_or_default(), report)
                     };
-                    let prompt = prompt_text(&request.prompt);
+                    if let Some(report) = report {
+                        cx.send_notification(SessionNotification::new(
+                            request.session_id.clone(),
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(text(&report))),
+                        ))?;
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
                     // The turn waits for a permission answer, so it runs off
                     // the dispatch loop.
                     cx.spawn({
