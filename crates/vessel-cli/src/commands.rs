@@ -29,6 +29,18 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Node {
             command: NodeCommand::Install(install),
         } => remote::install(target, install).await,
+        Command::Node {
+            command: NodeCommand::Update(update),
+        } => remote::update(target, update).await,
+        Command::Node {
+            command: NodeCommand::Status,
+        } => {
+            let client = connect(target).await?.client;
+            let node = client.node_info().await?;
+            let sessions = client.sessions().await?;
+            let text = render::node_status(&node, &sessions, env!("CARGO_PKG_VERSION"));
+            Ok(io::out(text.as_bytes()).await?)
+        }
         Command::Nodes { command } => nodes::command(target, command).await,
         Command::Status => {
             let client = connect(target).await?.client;

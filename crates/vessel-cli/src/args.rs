@@ -111,6 +111,32 @@ pub(crate) enum NodeCommand {
     /// default node). Nothing is restarted: a running node keeps its
     /// version until `vessel node update`.
     Install(Install),
+    /// Install this client's vesseld on an SSH node and restart the node
+    /// into it, as its live sessions allow.
+    Update(Update),
+    /// Show the node: version, state (serving or draining), live sessions.
+    Status,
+}
+
+/// `vessel node update`.
+#[derive(Debug, Args)]
+pub(crate) struct Update {
+    /// With live sessions: stop once the last one has ended (the node
+    /// refuses new sessions meanwhile).
+    #[arg(long, conflicts_with = "now")]
+    pub(crate) when_idle: bool,
+    /// With live sessions: stop now; they end interrupted (asks first).
+    #[arg(long)]
+    pub(crate) now: bool,
+    /// Do not ask before `--now` interrupts sessions.
+    #[arg(long, requires = "now")]
+    pub(crate) yes: bool,
+    /// Where vesseld comes from (see `vessel node install`).
+    #[arg(long, value_enum, default_value_t = Source::Auto)]
+    pub(crate) from: Source,
+    /// The local vesseld build to upload (implies `--from local`).
+    #[arg(long)]
+    pub(crate) vesseld: Option<PathBuf>,
 }
 
 /// `vessel node install`.

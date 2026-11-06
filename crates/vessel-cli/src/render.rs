@@ -3,7 +3,9 @@
 
 use std::fmt::Write as _;
 
-use vessel_proto::{Harness, NodeInfo, SessionInfo, SessionMode, SessionStatus, StructuredSupport};
+use vessel_proto::{
+    Harness, NodeInfo, NodeState, SessionInfo, SessionMode, SessionStatus, StructuredSupport,
+};
 
 /// A session's status in a few words.
 pub(crate) fn status(status: &SessionStatus) -> String {
@@ -42,6 +44,29 @@ pub(crate) fn node(node: &NodeInfo) -> String {
         node.protocol.max,
         node.started_at.to_rfc3339(),
     )
+}
+
+/// `vessel node status`: the node, whether it takes new sessions, how many
+/// are live, and whether it runs this client's version.
+pub(crate) fn node_status(node: &NodeInfo, sessions: &[SessionInfo], client: &str) -> String {
+    let state = match node.state {
+        NodeState::Serving => "serving",
+        NodeState::Draining => "draining (refuses new sessions; stops when the last one ends)",
+    };
+    let live = sessions
+        .iter()
+        .filter(|session| session.status.is_live())
+        .count();
+    let mut text = self::node(node);
+    let _infallible = writeln!(text, "state     {state}");
+    let _infallible = writeln!(text, "sessions  {live} live, {} in all", sessions.len());
+    if node.version != client {
+        let _infallible = writeln!(
+            text,
+            "update    this client is {client}; `vessel node update` installs it there"
+        );
+    }
+    text
 }
 
 pub(crate) fn harnesses(harnesses: &[Harness]) -> String {
