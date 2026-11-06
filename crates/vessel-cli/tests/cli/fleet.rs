@@ -183,12 +183,17 @@ async fn init_home(fixture: &Fixture, sources: &Path, home_claude: &Path) {
     assert!(made.ok, "{}", made.stderr);
     let toml = std::fs::read_to_string(fixture.data().join("fleet.toml")).unwrap();
     assert!(toml.contains("skip = [\"paseo*\"]"), "{toml}");
+    // The state is written after the files it records: wait for it.
+    let files = vessel_node::fleet::FleetFiles::new(&vessel_node::DataDir::new(fixture.data()));
     for _ in 0..400 {
-        if home_claude.join("CLAUDE.md").is_file() {
+        let applied = vessel_node::fleet::status(&files)
+            .is_ok_and(|status| status.state.generation.is_some());
+        if applied {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+    assert!(home_claude.join("CLAUDE.md").is_file());
     let status = vessel_in(fixture.data(), &["fleet", "status"], &[]).await;
     assert!(status.ok, "{}", status.stderr);
     assert!(

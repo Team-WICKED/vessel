@@ -115,7 +115,15 @@ async fn a_member_joins_through_a_relay_and_follows_its_home() {
             read(&member_codex.join("AGENTS.md")) == "instructions v2, edited on the home\n"
         })
         .await;
-        let members = owner.fleet_members().await.unwrap();
+        // The report follows the files: wait for it.
+        let mut members = Vec::new();
+        for _ in 0..800 {
+            members = owner.fleet_members().await.unwrap();
+            if members[0].applied.map(vessel_proto::Generation::get) == Some(2) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].label, "laptop");
         assert_eq!(
