@@ -30,10 +30,10 @@ pub(crate) enum Place {
     /// Here.
     At(PathBuf),
     /// The harness keeps no such file (Gemini CLI has no skills
-    /// directory): nothing to write, nothing to report.
+    /// directory), or the bundle path is one this version does not know:
+    /// nothing to write, nothing to report.
     Unused,
-    /// The target's names are not plain relative paths, or the bundle path
-    /// is neither the instructions nor a skill.
+    /// The target's names are not plain relative paths.
     Invalid,
 }
 
@@ -86,7 +86,9 @@ impl Target {
         }
         let mut segments = path.segments();
         if segments.next() != Some(crate::SKILLS) {
-            return Place::Invalid;
+            // Other top-level paths are reserved for later versions: a
+            // member ignores what it does not know (PROTOCOL.md, 5).
+            return Place::Unused;
         }
         let Some(skills) = &self.skills else {
             return Place::Unused;
@@ -246,7 +248,11 @@ mod tests {
             target.place(&path("skills/review/SKILL.md")),
             Some(PathBuf::from("/home/u/.claude/skills/review/SKILL.md"))
         );
-        assert_eq!(target.place(&path("other/file")), None);
+        assert_eq!(
+            target.placement(&path("other/file")),
+            Place::Unused,
+            "reserved, ignored"
+        );
         let escaping = Target {
             skills: Some(PathBuf::from("../elsewhere")),
             ..target

@@ -1,10 +1,11 @@
 //! A member materialising the home's bundle: first copy, updates, local
-//! edits kept with the incoming version beside them, removals, and files
-//! Vessel never wrote left alone.
+//! edits kept with the incoming version beside them, local deletions kept
+//! until restored, removals, files Vessel never wrote left alone, and bundle
+//! paths from later versions ignored.
 
 use std::fs;
 
-use vessel_fleet::{INCOMING_SUFFIX, Managed, Step};
+use vessel_fleet::{ConflictKind, INCOMING_SUFFIX, Managed, Step};
 
 use crate::support::{Home, Member, read, skill_md, write};
 
@@ -86,6 +87,7 @@ fn a_local_edit_is_kept_with_the_incoming_version_beside_it() {
     );
     let incoming = claude.root.join(format!("CLAUDE.md{INCOMING_SUFFIX}"));
     assert_eq!(read(&incoming), "instructions v2\n");
+    assert_eq!(applied.conflicts[0].kind, ConflictKind::Edited);
     assert_eq!(applied.conflicted().len(), 1);
     assert_eq!(applied.conflicted()[0].as_str(), "instructions.md");
     assert_eq!(
@@ -126,6 +128,7 @@ fn files_vessel_did_not_write_are_never_touched() {
     );
     let conflict = &applied.conflicts[0];
     assert_eq!(conflict.bundle.as_str(), "instructions.md");
+    assert_eq!(conflict.kind, ConflictKind::NotWritten);
     assert_eq!(conflict.incoming, None, "nowhere to put it");
     assert_eq!(
         read(&claude.root.join("skills/mine/SKILL.md")),
@@ -137,6 +140,91 @@ fn files_vessel_did_not_write_are_never_touched() {
             .file(&claude.root.join("CLAUDE.md"))
             .is_none()
     );
+}
+
+#[test]
+fn a_deleted_file_stays_deleted_until_restored() {
+    let mut home = Home::new();
+    let first = home.publish().manifest;
+    let mut member = Member::new();
+    let _fetched = member.fetch(&first, &home.blobs);
+    let claude = member.claude();
+    let _applied = member.apply(&first, std::slice::from_ref(&claude));
+    let deleted = claude.root.join("skills/review/notes/how.md");
+    let recorded = member.managed.file(&deleted).copied();
+    assert!(recorded.is_some());
+    fs::remove_file(&deleted).unwrap();
+
+    // The home changes the file too: still not brought back.
+    write(
+        &home.codex().join("skills/review/notes/how.md"),
+        "how to review, v2\n",
+    );
+    let second = home.publish().manifest;
+    let _fetched = member.fetch(&second, &home.blobs);
+    for _ in 0..2 {
+        let applied = member.apply(&second, std::slice::from_ref(&claude));
+        assert!(applied.failures.is_empty(), "{:?}", applied.failures);
+        assert_eq!(applied.written, 0);
+        assert!(!deleted.exists(), "a deleted file does not come back");
+        let conflict = &applied.conflicts[0];
+        assert_eq!(applied.conflicts.len(), 1);
+        assert_eq!(conflict.kind, ConflictKind::Deleted);
+        assert_eq!(conflict.bundle.as_str(), "skills/review/notes/how.md");
+        assert_eq!(conflict.incoming, None);
+        assert_eq!(applied.conflicted().len(), 1);
+        assert!(
+            !claude
+                .root
+                .join(format!("skills/review/notes/how.md{INCOMING_SUFFIX}"))
+                .exists(),
+            "nothing beside it"
+        );
+        assert_eq!(
+            member.managed.file(&deleted).copied(),
+            recorded,
+            "the record is kept"
+        );
+    }
+
+    // Restoring only settles a recorded file that is missing.
+    let present = claude.root.join("CLAUDE.md");
+    assert!(!member.managed.restore(&present), "a file that is there");
+    assert!(!member.managed.restore(&claude.root.join("unrecorded.md")));
+    assert!(member.managed.restore(&deleted));
+    let restored = member.apply(&second, std::slice::from_ref(&claude));
+    assert!(restored.conflicts.is_empty(), "{:?}", restored.conflicts);
+    assert_eq!(restored.written, 1);
+    assert_eq!(read(&deleted), "how to review, v2\n");
+}
+
+#[test]
+fn bundle_paths_a_member_does_not_know_are_ignored() {
+    let mut home = Home::new();
+    let mut manifest = home.publish().manifest;
+    let known = manifest.files.len();
+    let some_file = manifest.files.values().next().unwrap().clone();
+    for later in ["future/x.md", "settings.json"] {
+        let _none = manifest
+            .files
+            .insert(later.parse().unwrap(), some_file.clone());
+    }
+    let mut member = Member::new();
+    let _fetched = member.fetch(&manifest, &home.blobs);
+    let claude = member.claude();
+    let plan = vessel_fleet::plan(
+        &manifest,
+        std::slice::from_ref(&claude),
+        &member.managed,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(plan.steps.len(), known, "{:?}", plan.steps);
+    assert!(plan.skips.is_empty(), "{:?}", plan.skips);
+    let applied = vessel_fleet::apply(&plan, &member.blobs, &mut member.managed, &[]);
+    assert!(applied.failures.is_empty() && applied.conflicts.is_empty());
+    assert!(!claude.root.join("future").exists());
+    assert!(!claude.root.join("settings.json").exists());
 }
 
 #[test]

@@ -274,3 +274,20 @@ It is idempotent: running it again fills gaps and changes nothing else.
 - A test asserts that no value appears on any harness command line, in
   `vessel-harness` (the command) and in `vessel-session` (the arguments the
   fakes actually received).
+
+## As built (Track F, materialiser, 2026-11-06)
+
+- **Deleted stays deleted.** A file Vessel wrote that is missing on the
+  node is not written again, even when the bundle changes it: deleting is
+  a local edit. It is listed as a conflict of its own kind ("deleted
+  locally"), `managed.json` keeps its record, and nothing is written beside
+  it. `vessel fleet restore <path>` settles it: the record is dropped and
+  the next apply writes the file again. Settling by removing the record by
+  hand was not chosen, because it asks people to edit `managed.json`.
+- **Unknown bundle paths are ignored.** Only `instructions.md` and
+  `skills/<name>/...` are placed (PROTOCOL.md, version 5); a member skips
+  any other top-level path without a failure, so a newer home does not
+  stop an older member.
+- **`OpenCode`** also reads `~/.claude/CLAUDE.md` and `~/.claude/skills`,
+  so on a node whose default Claude Code home is a target it would see the
+  fleet's files twice; the node leaves `OpenCode` out there.

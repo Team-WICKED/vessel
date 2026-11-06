@@ -131,6 +131,17 @@ impl Managed {
         self.incoming.get(path)
     }
 
+    /// Settle a file deleted here: forget its record, so the next apply
+    /// writes it again. Only a recorded file that is missing is restored;
+    /// `false` otherwise (a file that is there is settled by editing it).
+    pub fn restore(&mut self, path: &Path) -> bool {
+        let missing = matches!(
+            std::fs::symlink_metadata(path),
+            Err(error) if error.kind() == io::ErrorKind::NotFound
+        );
+        missing && self.files.remove(path).is_some()
+    }
+
     pub(crate) fn record(&mut self, path: PathBuf, hash: BlobHash) {
         let _previous = self.files.insert(path, hash);
     }

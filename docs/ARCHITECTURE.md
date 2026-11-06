@@ -389,9 +389,13 @@ they started.
     instruction file and skills directory names, from
     `vessel_harness::layout`; Gemini CLI takes no skills): write, adopt identical
     content, keep a local edit (or a file Vessel never wrote) with the
-    incoming version beside it (`.vessel-incoming`) as a conflict, remove
-    what left the bundle if unchanged, skip places in or linked to the
-    sources and symlinks below the root (never followed). `apply` checks
+    incoming version beside it (`.vessel-incoming`) as a conflict, leave a
+    file Vessel wrote and someone deleted deleted (a conflict of its own
+    kind, the record kept, nothing beside it) until `Managed::restore`
+    (`vessel fleet restore <path>`), remove what left the bundle if
+    unchanged, ignore bundle paths it does not know (reserved for later
+    versions), skip places in or linked to the sources and symlinks below
+    the root (never followed). `apply` checks
     each place again, creates directories without crossing symlinks,
     writes atomically and records hashes in `Managed` (`managed.json`).
     `resolve` fills secret references and names every missing secret.
