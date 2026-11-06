@@ -39,7 +39,9 @@ use vessel_secure::MAX_RECORD;
 pub use self::balance::Unbalanced;
 use self::rate::RateLimiter;
 use self::throttle::{Refusal, RefusalLog};
-use crate::address::{Block, BlockCounts, TrustedProxy, blocks};
+use crate::address::{
+    BadAddressHeader, Block, BlockCounts, Client, ClientAddress, TrustedProxy, blocks,
+};
 use crate::carrier::Keepalive;
 use crate::{ACCEPT_PATH, CONNECT_PATH, HEALTH_PATH, NODE_PATH};
 
@@ -286,26 +288,22 @@ pub async fn serve(
     config: RelayConfig,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
-    if config.client_address_header.is_some() && config.trusted_proxies.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a client address header is believed only from trusted proxies: name at least one \
-             (--trusted-proxy)",
-        ));
-    }
+    let clients = ClientAddress::new(
+        config.client_address_header.clone(),
+        config.trusted_proxies.clone(),
+    )
+    .map_err(|missing| io::Error::new(io::ErrorKind::InvalidInput, missing))?;
     if config.check_limits
         && let Err(unbalanced) = config.limits.check()
     {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, unbalanced));
     }
-    let mut config = config;
     if config.client_address_header.is_none() && !config.trusted_proxies.is_empty() {
         // Without the header a proxy cannot say who its clients are: it is
-        // counted as any peer is.
+        // counted as any peer is (`ClientAddress::new`).
         tracing::warn!("trusted proxies are ignored without a client address header");
-        config.trusted_proxies.clear();
     }
-    let relay = Arc::new(Relay::new(config, shutdown.clone()));
+    let relay = Arc::new(Relay::new(config, clients, shutdown.clone()));
     let app = Router::new()
         .route(HEALTH_PATH, get(|| async { "ok" }))
         .route(NODE_PATH, get(control::upgrade))
@@ -319,8 +317,8 @@ pub async fn serve(
 pub(crate) struct Relay {
     token: RelayToken,
     limits: Limits,
-    client_address_header: Option<HeaderName>,
-    trusted_proxies: Vec<TrustedProxy>,
+    /// Where a request counts (`client_address_header`, `trusted_proxies`).
+    clients: ClientAddress,
     shutdown: CancellationToken,
     /// Registered nodes by routing id.
     nodes: Mutex<HashMap<RoutingId, Registration>>,
@@ -535,28 +533,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A trusted proxy's client address header that is not one bare address
-/// (`Relay::client_address`).
-#[derive(Debug)]
-pub(crate) struct BadAddressHeader;
-
-/// Where a request counts: the client's address, and whether it came
-/// through a trusted proxy, by its header or as the proxy itself
-/// (`Relay::client_address`).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Client {
-    pub(crate) address: IpAddr,
-    pub(crate) proxied: bool,
-}
-
 impl Relay {
-    fn new(config: RelayConfig, shutdown: CancellationToken) -> Self {
+    fn new(config: RelayConfig, clients: ClientAddress, shutdown: CancellationToken) -> Self {
         let rate = RateLimiter::new(config.limits.connect_burst, config.limits.connect_refill);
         Self {
             token: config.token,
             limits: config.limits,
-            client_address_header: config.client_address_header,
-            trusted_proxies: config.trusted_proxies,
+            clients,
             shutdown,
             nodes: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
@@ -568,13 +551,6 @@ impl Relay {
         }
     }
 
-    /// Whether `peer` is one of the trusted proxies.
-    fn is_trusted_proxy(&self, peer: IpAddr) -> bool {
-        self.trusted_proxies
-            .iter()
-            .any(|proxy| proxy.contains(peer))
-    }
-
     /// A place for a socket just accepted from `peer`, or `None`. A trusted
     /// proxy's sockets are not limited per address (the proxy's own limits
     /// stand in, and the client's address is known only from the request);
@@ -584,7 +560,7 @@ impl Relay {
     /// `max_unauthenticated` until it authenticates
     /// (`accept::Authenticated::promote`), and against `max_connections`.
     fn connection(self: &Arc<Self>, peer: IpAddr) -> Option<accept::ConnectionPlace> {
-        let counted = (!self.is_trusted_proxy(peer)).then(|| blocks(peer));
+        let counted = (!self.clients.is_trusted_proxy(peer)).then(|| blocks(peer));
         let refusal = 'refuse: {
             let limits = &self.limits;
             if counted.is_some() && !lock(&self.rate).admit(peer, tokio::time::Instant::now()) {
@@ -648,45 +624,15 @@ impl Relay {
         }
     }
 
-    /// Where a request counts: the trusted proxy's header when the peer is
-    /// one and the header holds an address, else the peer itself.
-    ///
-    /// From a trusted proxy the header must hold one bare address, IPv4
-    /// (`192.0.2.7`) or IPv6 (`2001:db8::7`), with spaces around it at
-    /// most: anything else (a list, a port, brackets, the header twice) is
-    /// refused (`BadAddressHeader`, answered `400`), since guessing which
-    /// part the proxy wrote would let a client choose. A request from a
-    /// trusted proxy without the header counts as the proxy itself, rate
-    /// included (`admit`).
+    /// Where a request counts ([`ClientAddress::of`]): through a trusted
+    /// proxy, its header's one bare address, or the proxy itself without
+    /// the header; otherwise the peer.
     fn client_address(
         &self,
         peer: SocketAddr,
         headers: &HeaderMap,
     ) -> Result<Client, BadAddressHeader> {
-        let Some(name) = self
-            .client_address_header
-            .as_ref()
-            .filter(|_name| self.is_trusted_proxy(peer.ip()))
-        else {
-            return Ok(Client {
-                address: peer.ip(),
-                proxied: false,
-            });
-        };
-        let mut values = headers.get_all(name).iter();
-        let address = match (values.next(), values.next()) {
-            (None, _) => peer.ip(),
-            (Some(value), None) => value
-                .to_str()
-                .ok()
-                .and_then(|text| text.trim().parse::<IpAddr>().ok())
-                .ok_or(BadAddressHeader)?,
-            (Some(_first), Some(_second)) => return Err(BadAddressHeader),
-        };
-        Ok(Client {
-            address,
-            proxied: true,
-        })
+        self.clients.of(peer.ip(), headers)
     }
 
     /// The answer to a request whose trusted proxy sent a client address

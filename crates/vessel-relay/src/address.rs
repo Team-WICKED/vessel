@@ -1,8 +1,9 @@
 //! Where a peer counts for the per-address limits ([`blocks`],
 //! [`BlockCounts`]), and which peers may say where a client really is
-//! ([`TrustedProxy`]). Public because a node counts its direct route's
-//! unadmitted channels the same way (`vessel-node`'s secure gateway, the
-//! review's round 10): one layering, one set of multipliers.
+//! ([`TrustedProxy`], [`ClientAddress`]). Public because a node counts
+//! its direct route's unadmitted channels the same way, behind a reverse
+//! proxy too (`vessel-node`'s secure gateway, the review's rounds 10 and
+//! 11): one layering, one set of multipliers, one header parser.
 //!
 //! [Decision Log] (the security review, rounds 7 and 8)
 //! - Purpose: one host, or one IPv6 `/48` (what a single customer is
@@ -24,6 +25,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
+
+use axum::http::{HeaderMap, HeaderName};
 
 /// How many times a per-address limit one IPv6 `/48` may hold: the most
 /// any block may. The counting ([`V6_LAYERS`]) and the startup check that
@@ -216,6 +219,107 @@ impl fmt::Display for TrustedProxy {
     }
 }
 
+/// Who may say where a client really is: the header a reverse proxy
+/// writes the client's address in, believed only from the proxies named.
+/// The relay and a node's direct route both read clients through it.
+#[derive(Debug, Clone, Default)]
+pub struct ClientAddress {
+    header: Option<HeaderName>,
+    trusted: Vec<TrustedProxy>,
+}
+
+/// A client address header set with no proxy to believe it from: anyone
+/// could pick their address and slip every per-address limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "a client address header is believed only from trusted proxies: name at least one \
+     (--trusted-proxy)"
+)]
+pub struct NoTrustedProxy;
+
+/// A trusted proxy's client address header that is not one bare address
+/// ([`ClientAddress::of`]): answered `400`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the client address header is not one address")]
+pub struct BadAddressHeader;
+
+/// Where a request counts: the client's address, and whether it came
+/// through a trusted proxy (by its header, or as the proxy itself).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Client {
+    /// The address the per-address limits count.
+    pub address: IpAddr,
+    /// It came through a trusted proxy, whose own socket is not the
+    /// client's.
+    pub proxied: bool,
+}
+
+impl ClientAddress {
+    /// `header` believed from `trusted`. A header needs a trusted proxy;
+    /// trusted proxies without a header are ignored (a proxy that cannot
+    /// say who its clients are is counted as any peer is).
+    ///
+    /// # Errors
+    /// A header and no trusted proxy.
+    pub fn new(
+        header: Option<HeaderName>,
+        trusted: Vec<TrustedProxy>,
+    ) -> Result<Self, NoTrustedProxy> {
+        match header {
+            Some(_) if trusted.is_empty() => Err(NoTrustedProxy),
+            Some(header) => Ok(Self {
+                header: Some(header),
+                trusted,
+            }),
+            None => Ok(Self::default()),
+        }
+    }
+
+    /// Whether `peer` is a trusted proxy (never, without a header).
+    #[must_use]
+    pub fn is_trusted_proxy(&self, peer: IpAddr) -> bool {
+        self.header.is_some() && self.trusted.iter().any(|proxy| proxy.contains(peer))
+    }
+
+    /// Where a request from `peer` with `headers` counts.
+    ///
+    /// From a trusted proxy the header must hold one bare address, IPv4
+    /// (`192.0.2.7`) or IPv6 (`2001:db8::7`), with spaces around it at
+    /// most: anything else (a list, a port, brackets, the header twice) is
+    /// refused, since guessing which part the proxy wrote would let a
+    /// client choose. A request from a trusted proxy without the header
+    /// counts as the proxy itself. From anyone else the header is ignored.
+    ///
+    /// # Errors
+    /// The trusted proxy's header is not one bare address.
+    pub fn of(&self, peer: IpAddr, headers: &HeaderMap) -> Result<Client, BadAddressHeader> {
+        let Some(name) = self
+            .header
+            .as_ref()
+            .filter(|_name| self.is_trusted_proxy(peer))
+        else {
+            return Ok(Client {
+                address: peer,
+                proxied: false,
+            });
+        };
+        let mut values = headers.get_all(name).iter();
+        let address = match (values.next(), values.next()) {
+            (None, _) => peer,
+            (Some(value), None) => value
+                .to_str()
+                .ok()
+                .and_then(|text| text.trim().parse::<IpAddr>().ok())
+                .ok_or(BadAddressHeader)?,
+            (Some(_first), Some(_second)) => return Err(BadAddressHeader),
+        };
+        Ok(Client {
+            address,
+            proxied: true,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +415,71 @@ mod tests {
             counts.remove(&blocks(ip(text)));
         }
         assert!(counts.is_empty());
+    }
+
+    #[test]
+    fn a_trusted_proxys_header_is_one_bare_address() {
+        let proxy = ip("127.0.0.1");
+        let clients = ClientAddress::new(
+            Some(HeaderName::from_static("x-real-ip")),
+            vec!["127.0.0.1".parse().unwrap()],
+        )
+        .unwrap();
+        let with = |values: &[&str]| {
+            let mut headers = HeaderMap::new();
+            for value in values {
+                let _added = headers.append("x-real-ip", value.parse().unwrap());
+            }
+            headers
+        };
+        let client = |address: &str| Client {
+            address: ip(address),
+            proxied: true,
+        };
+        for good in ["203.0.113.1", " 2001:db8::1 ", "::ffff:192.0.2.1"] {
+            assert_eq!(
+                clients.of(proxy, &with(&[good])),
+                Ok(client(good.trim())),
+                "{good:?}"
+            );
+        }
+        for bad in [
+            "203.0.113.1, 10.0.0.1",
+            "[2001:db8::1]:443",
+            "203.0.113.1:443",
+            "[2001:db8::1]",
+            "",
+        ] {
+            assert_eq!(
+                clients.of(proxy, &with(&[bad])),
+                Err(BadAddressHeader),
+                "{bad:?}"
+            );
+        }
+        let twice = with(&["203.0.113.1", "203.0.113.2"]);
+        assert_eq!(clients.of(proxy, &twice), Err(BadAddressHeader));
+        // Without the header: the proxy itself, still proxied.
+        assert_eq!(
+            clients.of(proxy, &HeaderMap::new()),
+            Ok(client("127.0.0.1"))
+        );
+        // From anyone else the header means nothing.
+        let stranger = ip("198.51.100.9");
+        assert_eq!(
+            clients.of(stranger, &with(&["203.0.113.1"])),
+            Ok(Client {
+                address: stranger,
+                proxied: false
+            })
+        );
+        // A header needs a proxy; proxies without a header are ignored.
+        let header = Some(HeaderName::from_static("x-real-ip"));
+        assert_eq!(
+            ClientAddress::new(header, Vec::new()).unwrap_err(),
+            NoTrustedProxy
+        );
+        let ignored = ClientAddress::new(None, vec!["127.0.0.1".parse().unwrap()]).unwrap();
+        assert!(!ignored.is_trusted_proxy(proxy));
     }
 
     #[test]
