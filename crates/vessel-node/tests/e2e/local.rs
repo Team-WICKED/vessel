@@ -28,11 +28,18 @@ async fn open(endpoint: &Path) -> LocalStream {
     tokio::net::UnixStream::connect(endpoint).await.unwrap()
 }
 
+/// Retries `ERROR_PIPE_BUSY` (231), as the node's own `attach` does: every
+/// pipe instance is briefly busy while the node creates the next one.
 #[cfg(windows)]
 async fn open(endpoint: &Path) -> LocalStream {
-    tokio::net::windows::named_pipe::ClientOptions::new()
-        .open(endpoint)
-        .unwrap()
+    loop {
+        match tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint) {
+            Err(error) if error.raw_os_error() == Some(231) => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            opened => return opened.unwrap(),
+        }
+    }
 }
 
 /// A connection to the node's local endpoint that presented `token`.
@@ -90,7 +97,9 @@ async fn the_local_socket_serves_the_token_holder_and_node_stop_ends_the_node() 
             panic!("expected a refusal, got {answer}");
         };
         assert_eq!(error.code, ErrorCode::Unauthorized);
-        assert!(refused.next().await.is_none());
+        // Nothing follows: the end of the stream, or (Windows pipes) a
+        // broken-pipe error.
+        assert!(!matches!(refused.next().await, Some(Ok(_))));
 
         // `node.stop{now}` is answered, then the node stops on its own.
         let stopped = connection

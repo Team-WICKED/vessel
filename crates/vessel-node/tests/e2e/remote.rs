@@ -114,8 +114,19 @@ impl Remote {
 
 impl Drop for Remote {
     /// If a test failed before stopping its node, end it, so it does not
-    /// keep running on a deleted home.
+    /// keep running on a deleted home. A failing test also prints the
+    /// node's log, which is otherwise deleted with the home.
+    #[expect(
+        clippy::print_stderr,
+        reason = "the node's log is the only clue to a failure on CI"
+    )]
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            let log = self.data_dir().log_dir().join("vesseld.log");
+            if let Ok(text) = std::fs::read_to_string(&log) {
+                eprintln!("--- {} ---\n{text}--- end of node log ---", log.display());
+            }
+        }
         if let Ok(Some(owner)) = NodeLock::holder(&self.data_dir()) {
             drop(
                 std::process::Command::new("kill")

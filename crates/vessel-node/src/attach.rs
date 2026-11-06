@@ -247,11 +247,8 @@ fn node_command(executable: &Path, root: &Path) -> tokio::process::Command {
     }
     #[cfg(not(unix))]
     {
-        let (program, args) = node_args
-            .split_first()
-            .unwrap_or((&executable.as_os_str(), &[]));
-        let mut command = tokio::process::Command::new(program);
-        let _ = command.args(args);
+        let mut command = tokio::process::Command::new(executable);
+        let _ = command.args(node_args.iter().skip(1));
         command
     }
 }
