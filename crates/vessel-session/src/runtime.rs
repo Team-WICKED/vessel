@@ -13,7 +13,7 @@ use tracing::Instrument as _;
 use vessel_agent::{AgentProcess, AgentSetup};
 use vessel_harness::{McpFile, Profile};
 use vessel_proto::{
-    EventRecord, HarnessSessionId, ModelId, ResolvedMcpServers, SessionId, SessionInfo,
+    Creator, EventRecord, HarnessSessionId, ModelId, ResolvedMcpServers, SessionId, SessionInfo,
     SessionMode, SessionSpec, TerminalSize,
 };
 use vessel_pty::{PtyProcess, WindowSize};
@@ -75,10 +75,13 @@ pub struct LaunchOptions {
     /// terminal ones in the harness's launch-time form, when it has one.
     pub mcp_servers: ResolvedMcpServers,
     /// Where a terminal session's MCP configuration file goes: an
-    /// owner-only directory of the node's (ADR 0012); `None` is the
-    /// system's temporary directory. The file itself is owner-only and
-    /// created exclusively either way.
+    /// owner-only directory of the node's (ADR 0012). There is no shared
+    /// fallback: without one, a terminal session whose harness reads its
+    /// servers from a file is refused.
     pub mcp_dir: Option<PathBuf>,
+    /// Who asks for the session (ADR 0013), recorded in its
+    /// `SessionInfo::created_by`; the owner by default.
+    pub created_by: Creator,
 }
 
 /// The process-independent parts of a new session.
@@ -91,7 +94,7 @@ struct Parts {
 /// A terminal session's MCP servers and where their file goes.
 struct TerminalMcp {
     servers: ResolvedMcpServers,
-    dir: PathBuf,
+    dir: Option<PathBuf>,
 }
 
 /// What a structured session starts with besides its process.
@@ -167,15 +170,17 @@ impl SessionRuntime {
             profile,
             mcp_servers,
             mcp_dir,
+            created_by,
         } = options;
         let profile = profile.unwrap_or_else(|| Profile::default_for(spec.harness));
         match spec.mode.clone() {
             SessionMode::Terminal { size, .. } => {
                 let mcp = TerminalMcp {
                     servers: mcp_servers,
-                    dir: mcp_dir.unwrap_or_else(std::env::temp_dir),
+                    dir: mcp_dir,
                 };
-                self.create_terminal(spec, size, profile, mcp).await
+                self.create_terminal(spec, size, profile, mcp, created_by)
+                    .await
             }
             SessionMode::Structured { model, resume } => {
                 let start = AgentStart {
@@ -183,7 +188,8 @@ impl SessionRuntime {
                     resume,
                     mcp_servers,
                 };
-                self.create_structured(spec, profile, start).await
+                self.create_structured(spec, profile, start, created_by)
+                    .await
             }
         }
     }
@@ -194,6 +200,7 @@ impl SessionRuntime {
         size: TerminalSize,
         profile: Profile,
         mcp: TerminalMcp,
+        created_by: Creator,
     ) -> Result<Created, SessionError> {
         let lookup = self.config.harness_lookup.clone();
         let launch_spec = spec.clone();
@@ -203,12 +210,12 @@ impl SessionRuntime {
         };
         // Lookup, file writes, `fork`/`exec` and thread creation all block.
         let (pty, output, mcp_file) = tokio::task::spawn_blocking(move || {
-            let launch = vessel_harness::launch_in(
+            let launch = vessel_harness::launch(
                 &lookup,
                 &launch_spec,
                 &profile,
                 &mcp.servers,
-                &mcp.dir,
+                mcp.dir.as_deref(),
             )?;
             if !launch.unattached.is_empty() {
                 tracing::warn!(
@@ -236,7 +243,7 @@ impl SessionRuntime {
             return Err(SessionError::ShuttingDown);
         }
 
-        let parts = self.parts(spec, Input::Terminal(pty.input()));
+        let parts = self.parts(spec, created_by, Input::Terminal(pty.input()));
         let actor = TerminalActor {
             pty,
             output,
@@ -251,6 +258,7 @@ impl SessionRuntime {
         spec: SessionSpec,
         profile: Profile,
         start: AgentStart,
+        created_by: Creator,
     ) -> Result<Created, SessionError> {
         let lookup = self.config.harness_lookup.clone();
         let launch_spec = spec.clone();
@@ -258,7 +266,8 @@ impl SessionRuntime {
         let (command, cwd) = tokio::task::spawn_blocking(move || {
             // Structured sessions get their MCP servers over ACP, not here.
             let none = ResolvedMcpServers::new();
-            let command = vessel_harness::launch(&lookup, &launch_spec, &profile, &none)?.command;
+            let command =
+                vessel_harness::launch(&lookup, &launch_spec, &profile, &none, None)?.command;
             // ACP needs an explicit directory; the launch defaults it to
             // the home directory, and the node's own is the last resort.
             let cwd = command
@@ -288,7 +297,7 @@ impl SessionRuntime {
             return Err(SessionError::ShuttingDown);
         }
 
-        let parts = self.parts(spec, Input::Structured(input));
+        let parts = self.parts(spec, created_by, Input::Structured(input));
         let actor = StructuredActor {
             agent,
             outputs,
@@ -301,8 +310,8 @@ impl SessionRuntime {
     }
 
     /// Everything a new session needs besides its process.
-    fn parts(&self, spec: SessionSpec, input: Input) -> Parts {
-        let (info, kill, shared) = self.shared(spec, input);
+    fn parts(&self, spec: SessionSpec, created_by: Creator, input: Input) -> Parts {
+        let (info, kill, shared) = self.shared(spec, created_by, input);
         let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         Parts {
             life: Lifecycle {
@@ -318,10 +327,12 @@ impl SessionRuntime {
     fn shared(
         &self,
         spec: SessionSpec,
+        created_by: Creator,
         input: Input,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
         let id = SessionId::random();
-        let (info, info_receiver) = watch::channel(SessionInfo::new(id, spec, Utc::now()));
+        let (info, info_receiver) =
+            watch::channel(SessionInfo::new(id, spec, Utc::now()).with_creator(created_by));
         let kill = self.shutdown.child_token();
         let shared = Arc::new(Shared {
             id,

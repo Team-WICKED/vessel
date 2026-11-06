@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use vessel_client::book::NodeName;
 use vessel_client::{BearerToken, RemotePath};
-use vessel_proto::{EventSeq, HarnessKind};
+use vessel_proto::{EventSeq, HarnessKind, ProfileName};
 
 use crate::selector::SessionSelector;
 
@@ -62,6 +62,16 @@ pub(crate) enum Command {
     Status,
     /// List the harnesses installed on the node.
     Harnesses,
+    /// List the node's harness profiles (`--profile` for `run`).
+    Profiles {
+        /// Only this harness's profiles.
+        #[arg(long)]
+        harness: Option<HarnessKind>,
+        /// Have the node read its `profiles.toml` again first (needs the
+        /// `admin` scope). A file that does not parse changes nothing.
+        #[arg(long)]
+        reload: bool,
+    },
     /// List sessions, newest first.
     Sessions,
     /// Start a session and attach to it.
@@ -313,6 +323,10 @@ pub(crate) struct Run {
     /// Resume this harness session (structured mode).
     #[arg(long, requires = "structured")]
     pub(crate) resume: Option<String>,
+    /// Run under this profile of the node (`vessel profiles` lists them);
+    /// the harness's default when absent.
+    #[arg(long)]
+    pub(crate) profile: Option<ProfileName>,
     /// Working directory on the node (defaults to the node user's home). A
     /// relative path is taken from the current directory when the node is
     /// on this machine, and refused for a remote node.
@@ -335,6 +349,28 @@ mod tests {
     use clap::Parser as _;
 
     use super::*;
+
+    #[test]
+    fn run_takes_a_profile_and_profiles_a_harness() {
+        let Cli {
+            command: Command::Run(run),
+            ..
+        } = Cli::try_parse_from(["vessel", "run", "claude", "--profile", "claude-alt"]).unwrap()
+        else {
+            panic!("expected run");
+        };
+        assert_eq!(run.profile.unwrap().as_str(), "claude-alt");
+        assert!(Cli::try_parse_from(["vessel", "run", "claude", "--profile", "bad name"]).is_err());
+        let Cli {
+            command: Command::Profiles { harness, reload },
+            ..
+        } = Cli::try_parse_from(["vessel", "profiles", "--harness", "codex", "--reload"]).unwrap()
+        else {
+            panic!("expected profiles");
+        };
+        assert_eq!(harness, Some(HarnessKind::Codex));
+        assert!(reload);
+    }
 
     /// Review item 3: a pairing link never comes from the command line,
     /// where other users and the shell's history see it.

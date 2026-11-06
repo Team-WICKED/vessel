@@ -5,8 +5,8 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension as _, params};
 use vessel_proto::{
-    AgentEvent, EventRecord, EventSeq, HarnessSessionId, SessionEvent, SessionId, SessionInfo,
-    SessionStatus,
+    AgentEvent, EventRecord, EventSeq, HarnessSessionId, ProfileName, SessionEvent, SessionId,
+    SessionInfo, SessionStatus,
 };
 
 use crate::codec::{
@@ -18,7 +18,8 @@ use crate::error::StoreError;
 
 /// Store a new session with an empty log.
 ///
-/// Only the session's identity and spec come from `info`. Its status is
+/// Only the session's identity, spec, profile and creator come from
+/// `info`. Its status is
 /// stored as `Starting` and live, and everything else is derived from the
 /// records appended later: `info` is a snapshot the runtime took after the
 /// process started, and a session that ends within milliseconds would
@@ -32,8 +33,8 @@ pub(crate) fn create_session(
         .prepare_cached(
             "INSERT INTO sessions
                  (id, spec, status, live, created_at, ended_at, next_seq, first_seq,
-                  retained_bytes, harness_session)
-             VALUES (?1, ?2, ?3, 1, ?4, NULL, 0, 0, 0, NULL)
+                  retained_bytes, harness_session, profile, created_by)
+             VALUES (?1, ?2, ?3, 1, ?4, NULL, 0, 0, 0, NULL, ?5, ?6)
              ON CONFLICT (id) DO NOTHING",
         )?
         .execute(params![
@@ -41,6 +42,8 @@ pub(crate) fn create_session(
             encode(&info.spec)?,
             encode(&SessionStatus::Starting)?,
             time_to_sql(info.created_at)?,
+            info.profile.as_ref().map(ProfileName::as_str),
+            encode(&info.created_by)?,
         ])?;
     if inserted == 0 {
         return Err(StoreError::SessionExists(info.id));
@@ -55,12 +58,24 @@ pub(crate) struct Appended {
     pub(crate) ended: bool,
 }
 
+/// Whether a run of records moved the session to another profile.
+#[derive(Default)]
+enum ProfileMove {
+    /// No `ProfileChanged` in the run.
+    #[default]
+    Unchanged,
+    /// Moved; `None` is the harness's default profile.
+    To(Option<ProfileName>),
+}
+
 /// The `sessions` columns a run of records changes.
 #[derive(Default)]
 struct Projection {
     status: Option<SessionStatus>,
     ended_at: Option<DateTime<Utc>>,
     harness_session: Option<HarnessSessionId>,
+    /// The last profile change, if any.
+    profile: ProfileMove,
     bytes: u64,
 }
 
@@ -78,12 +93,10 @@ impl Projection {
             SessionEvent::Agent {
                 event: AgentEvent::Ready { harness_session },
             } => self.harness_session = Some(harness_session.clone()),
-            // The current profile is projected once the sessions table has
-            // a column for it (schema 3, milestone 4 Track H); no node emits
-            // `ProfileChanged` before then.
-            SessionEvent::Agent { .. }
-            | SessionEvent::Terminal(_)
-            | SessionEvent::ProfileChanged { .. } => {}
+            SessionEvent::ProfileChanged { to, .. } => {
+                self.profile = ProfileMove::To(to.clone());
+            }
+            SessionEvent::Agent { .. } | SessionEvent::Terminal(_) => {}
         }
     }
 }
@@ -140,7 +153,8 @@ pub(crate) fn append<'a>(
                  status = COALESCE(?4, status),
                  live = COALESCE(?5, live),
                  ended_at = COALESCE(?6, ended_at),
-                 harness_session = COALESCE(?7, harness_session)
+                 harness_session = COALESCE(?7, harness_session),
+                 profile = CASE WHEN ?8 THEN ?9 ELSE profile END
              WHERE id = ?1",
         )?
         .execute(params![
@@ -154,6 +168,11 @@ pub(crate) fn append<'a>(
                 .harness_session
                 .as_ref()
                 .map(HarnessSessionId::as_str),
+            matches!(projection.profile, ProfileMove::To(_)),
+            match &projection.profile {
+                ProfileMove::To(Some(name)) => Some(name.as_str()),
+                ProfileMove::To(None) | ProfileMove::Unchanged => None,
+            },
         ])?;
     Ok(Appended { ended })
 }

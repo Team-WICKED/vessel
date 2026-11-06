@@ -3,6 +3,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use vessel_proc::CommandSpec;
 use vessel_proto::{McpServerName, ResolvedMcpServers, SessionMode, SessionSpec};
@@ -11,7 +12,7 @@ use crate::error::HarnessError;
 use crate::harnesses::{Structured, descriptor};
 use crate::lookup::Lookup;
 use crate::mcp::{McpError, McpFile, TerminalMcp};
-use crate::profile::Profile;
+use crate::profile::{Profile, same_variable};
 
 /// What [`launch`] decided: the command, and what it needs around it.
 /// `Debug` shows no value: `CommandSpec` and `McpFile` hide them.
@@ -45,6 +46,11 @@ pub struct Launch {
 /// `mcp` is not used, and neither are the profile's arguments. In both
 /// modes the profile's variables are set and its `unset` ones removed.
 ///
+/// A terminal session's MCP configuration file goes in `mcp_dir`, an
+/// owner-only directory of the node's (ADR 0012); there is no fallback to
+/// a shared directory, so without one a harness that needs the file is
+/// refused.
+///
 /// The working directory defaults to the node user's home directory, is
 /// made absolute, and must exist: running an agent in a different directory
 /// than asked is worse than refusing.
@@ -59,29 +65,14 @@ pub struct Launch {
 /// when the program is missing; [`HarnessError::RelativeDirectory`] or
 /// [`HarnessError::NoSuchDirectory`] for a bad working directory;
 /// [`HarnessError::Mcp`] when the servers cannot be given to this harness
-/// (two values for one variable).
+/// (two values for one variable); [`HarnessError::NoMcpDirectory`] when the
+/// harness needs a file and `mcp_dir` is `None`.
 pub fn launch(
     lookup: &Lookup,
     spec: &SessionSpec,
     profile: &Profile,
     mcp: &ResolvedMcpServers,
-) -> Result<Launch, HarnessError> {
-    launch_in(lookup, spec, profile, mcp, &std::env::temp_dir())
-}
-
-/// [`launch`], with a terminal session's MCP configuration file in
-/// `mcp_dir` rather than the system's temporary directory. The node passes
-/// an owner-only directory of its own (ADR 0012); the file is owner-only
-/// and created exclusively either way.
-///
-/// # Errors
-/// As [`launch`].
-pub fn launch_in(
-    lookup: &Lookup,
-    spec: &SessionSpec,
-    profile: &Profile,
-    mcp: &ResolvedMcpServers,
-    mcp_dir: &Path,
+    mcp_dir: Option<&Path>,
 ) -> Result<Launch, HarnessError> {
     let harness = spec.harness;
     if profile.harness() != harness {
@@ -116,7 +107,9 @@ pub fn launch_in(
                 Some(_) if mcp.is_empty() => {}
                 Some(render) => {
                     let rendered = render(mcp)?;
-                    check_environment(&rendered, profile, descriptor.home.variable)?;
+                    check_environment(&rendered, profile, descriptor.home.variable, &|name| {
+                        std::env::var_os(name)
+                    })?;
                     let (with_servers, file) = attach(command, rendered, mcp_dir)?;
                     command = with_servers;
                     mcp_file = file;
@@ -164,24 +157,49 @@ pub(crate) fn with_profile(command: CommandSpec, profile: &Profile) -> CommandSp
     })
 }
 
-/// An MCP variable must not change what the profile decides, nor move the
-/// harness's home: in Codex's environment it applies to Codex itself too.
-fn check_environment(
+/// An MCP variable goes into the harness's own environment (Codex), so it
+/// must not change the harness itself: no variable that steers it (its
+/// home, search path, loader, proxies, credentials), and no variable the
+/// harness would otherwise get with another value, from the profile or
+/// from the environment it inherits (`inherited`, the node's own). A
+/// variable the profile removes may not come back either.
+pub(crate) fn check_environment(
     rendered: &TerminalMcp,
     profile: &Profile,
     home_variable: Option<&str>,
+    inherited: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<(), McpError> {
     for (name, value) in &rendered.env {
-        let same = |other: &str| other.eq_ignore_ascii_case(name.as_str());
-        let set_differently = profile
+        let same = |other: &str| same_variable(other, name.as_str());
+        if protected(name.as_str()) || home_variable.is_some_and(same) {
+            return Err(McpError::ProtectedVariable { name: name.clone() });
+        }
+        let profile_value = profile
             .env()
-            .any(|(key, set)| same(key.as_str()) && set != value.expose());
+            .find(|(key, _)| same(key.as_str()))
+            .map(|(_, set)| OsString::from(set));
         let removed = profile.unset().any(|key| same(key.as_str()));
-        if set_differently || removed || home_variable.is_some_and(same) {
+        let current = profile_value.or_else(|| inherited(name.as_str()));
+        let differs = current.is_some_and(|current| current != value.expose());
+        if removed || differs {
             return Err(McpError::SharedVariable { name: name.clone() });
         }
     }
     Ok(())
+}
+
+/// Variables that steer a harness rather than configure an MCP server.
+/// Compared ignoring case everywhere: `http_proxy` is as live as
+/// `HTTP_PROXY`.
+fn protected(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    matches!(
+        name.as_str(),
+        "PATH" | "PATHEXT" | "HOME" | "USERPROFILE" | "NODE_OPTIONS"
+    ) || ["LD_", "DYLD_", "OPENAI_", "CODEX_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || name.ends_with("_PROXY")
 }
 
 /// The rendered form on the command: its arguments, its variables, and the
@@ -189,7 +207,7 @@ fn check_environment(
 fn attach(
     command: CommandSpec,
     rendered: TerminalMcp,
-    dir: &Path,
+    dir: Option<&Path>,
 ) -> Result<(CommandSpec, Option<McpFile>), HarnessError> {
     let mut command = command.args(rendered.args);
     for (name, value) in rendered.env {
@@ -198,10 +216,9 @@ fn attach(
     let Some(form) = rendered.file else {
         return Ok((command, None));
     };
+    let dir = dir.ok_or(HarnessError::NoMcpDirectory)?;
     let mut argument = OsString::from(form.flag);
-    let file = McpFile::new(form, dir).map_err(|error| HarnessError::McpFile {
-        reason: error.to_string(),
-    })?;
+    let file = McpFile::new(form, dir).map_err(|error| HarnessError::McpFile(Arc::new(error)))?;
     argument.push(file.path());
     Ok((command.arg(argument), Some(file)))
 }
@@ -237,5 +254,154 @@ fn working_dir(spec: &SessionSpec) -> Result<Option<PathBuf>, HarnessError> {
         Ok(Some(cwd))
     } else {
         Err(HarnessError::NoSuchDirectory { cwd })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use vessel_proto::{EnvName, ResolvedValue};
+
+    use super::*;
+    use crate::profile::parse_profiles;
+
+    fn rendered(pairs: &[(&str, &str)]) -> TerminalMcp {
+        TerminalMcp {
+            env: pairs
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.parse::<EnvName>().unwrap(),
+                        ResolvedValue::new((*value).to_owned()),
+                    )
+                })
+                .collect(),
+            ..TerminalMcp::default()
+        }
+    }
+
+    fn profile(text: &str) -> Profile {
+        let file = format!("[profiles.p]\nharness = \"codex\"\n{text}\n");
+        parse_profiles(&file, Some(Path::new("/h")))
+            .unwrap()
+            .get(&"p".parse().unwrap())
+            .cloned()
+            .unwrap()
+    }
+
+    /// The node's environment, for these tests.
+    fn node_env(name: &str) -> Option<OsString> {
+        match name {
+            "DOCS_TOKEN" => Some("inherited".into()),
+            "SAME" => Some("same".into()),
+            _ => None,
+        }
+    }
+
+    fn check(pairs: &[(&str, &str)], profile: &Profile) -> Result<(), McpError> {
+        check_environment(&rendered(pairs), profile, Some("CODEX_HOME"), &node_env)
+    }
+
+    fn shared(name: &str) -> McpError {
+        McpError::SharedVariable {
+            name: name.parse().unwrap(),
+        }
+    }
+
+    fn protected_name(name: &str) -> McpError {
+        McpError::ProtectedVariable {
+            name: name.parse().unwrap(),
+        }
+    }
+
+    /// Review finding 2: a server's variable must not override what Codex
+    /// inherits.
+    #[test]
+    fn a_variable_the_harness_inherits_keeps_its_value() {
+        let plain = Profile::default_for(vessel_proto::HarnessKind::Codex);
+        assert_eq!(
+            check(&[("DOCS_TOKEN", "mine")], &plain),
+            Err(shared("DOCS_TOKEN"))
+        );
+        assert_eq!(check(&[("SAME", "same")], &plain), Ok(()));
+        assert_eq!(check(&[("FRESH", "x")], &plain), Ok(()));
+        // The profile decides first: its value, or its removal.
+        let sets = profile("env = { DOCS_TOKEN = \"mine\" }");
+        assert_eq!(check(&[("DOCS_TOKEN", "mine")], &sets), Ok(()));
+        assert_eq!(
+            check(&[("DOCS_TOKEN", "other")], &sets),
+            Err(shared("DOCS_TOKEN"))
+        );
+        let removes = profile("unset = [\"FRESH\"]");
+        assert_eq!(check(&[("FRESH", "x")], &removes), Err(shared("FRESH")));
+    }
+
+    #[test]
+    fn variables_that_steer_the_harness_are_refused() {
+        let plain = Profile::default_for(vessel_proto::HarnessKind::Codex);
+        for name in [
+            "PATH",
+            "Path",
+            "HOME",
+            "USERPROFILE",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "NODE_OPTIONS",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "OPENAI_API_KEY",
+            "CODEX_HOME",
+            "CODEX_SANDBOX",
+        ] {
+            assert_eq!(
+                check(&[(name, "x")], &plain),
+                Err(protected_name(name)),
+                "{name}"
+            );
+        }
+        assert_eq!(check(&[("PROXYLESS", "x")], &plain), Ok(()));
+    }
+
+    /// Review finding 7: the I/O error stays the source, and encoding
+    /// problems are typed.
+    #[test]
+    fn errors_keep_their_cause_and_type() {
+        let io = std::io::Error::other("no randomness");
+        let error = HarnessError::McpFile(Arc::new(io));
+        assert!(std::error::Error::source(&error).is_some());
+
+        #[cfg(unix)]
+        {
+            use std::collections::BTreeMap;
+            use std::os::unix::ffi::OsStrExt as _;
+
+            use vessel_proto::McpTransport;
+
+            use crate::harnesses::descriptor;
+            use crate::mcp::EncodeProblem;
+
+            let servers = BTreeMap::from([(
+                "odd".parse().unwrap(),
+                McpTransport::Stdio {
+                    command: PathBuf::from(std::ffi::OsStr::from_bytes(b"/opt/\xff")),
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                },
+            )]);
+            for harness in [
+                vessel_proto::HarnessKind::ClaudeCode,
+                vessel_proto::HarnessKind::Codex,
+            ] {
+                let render = descriptor(harness).terminal_mcp.unwrap();
+                assert_eq!(
+                    render(&servers).unwrap_err(),
+                    McpError::Encode {
+                        server: "odd".parse().unwrap(),
+                        problem: EncodeProblem::CommandNotUtf8,
+                    }
+                );
+            }
+        }
     }
 }

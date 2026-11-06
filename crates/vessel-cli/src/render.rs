@@ -4,8 +4,8 @@
 use std::fmt::Write as _;
 
 use vessel_proto::{
-    Harness, NodeInfo, NodeState, ProfileName, SessionInfo, SessionMode, SessionStatus,
-    StructuredSupport,
+    EnvName, Harness, NodeInfo, NodeState, ProfileInfo, ProfileName, SessionInfo, SessionMode,
+    SessionStatus, StructuredSupport,
 };
 
 /// A session's status in a few words.
@@ -102,6 +102,36 @@ pub(crate) fn harnesses(harnesses: &[Harness]) -> String {
     text
 }
 
+/// One profile per line: name, harness, the variables it sets (names only;
+/// the node never sends values), and its label.
+pub(crate) fn profiles(profiles: &[ProfileInfo]) -> String {
+    if profiles.is_empty() {
+        return "no profiles\n".to_owned();
+    }
+    let mut text = String::new();
+    for profile in profiles {
+        let sets = if profile.sets.is_empty() {
+            "-".to_owned()
+        } else {
+            profile
+                .sets
+                .iter()
+                .map(EnvName::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let _infallible = writeln!(
+            text,
+            "{:<20} {:<12} {:<32} {}",
+            profile.name,
+            profile.harness,
+            sets,
+            profile.label.as_deref().unwrap_or(""),
+        );
+    }
+    text
+}
+
 pub(crate) fn sessions(sessions: &[SessionInfo]) -> String {
     if sessions.is_empty() {
         return "no sessions\n".to_owned();
@@ -127,6 +157,44 @@ mod tests {
     use vessel_proto::{HarnessKind, SessionId, SessionSpec, TerminalSize};
 
     use super::*;
+
+    #[test]
+    fn profiles_show_variable_names_and_labels() {
+        let profiles = [
+            ProfileInfo {
+                name: "claude".parse().unwrap(),
+                label: None,
+                harness: HarnessKind::ClaudeCode,
+                sets: Vec::new(),
+            },
+            ProfileInfo {
+                name: "claude-alt".parse().unwrap(),
+                label: Some("second account".to_owned()),
+                harness: HarnessKind::ClaudeCode,
+                sets: vec![
+                    "CLAUDE_CONFIG_DIR".parse().unwrap(),
+                    "ANTHROPIC_BASE_URL".parse().unwrap(),
+                ],
+            },
+        ];
+        let text = profiles_text(&profiles);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0].starts_with("claude ") && lines[0].contains(" - "),
+            "{text}"
+        );
+        assert!(
+            lines[1].contains("CLAUDE_CONFIG_DIR,ANTHROPIC_BASE_URL")
+                && lines[1].ends_with("second account"),
+            "{text}"
+        );
+        assert_eq!(profiles_text(&[]), "no profiles\n");
+    }
+
+    fn profiles_text(profiles: &[ProfileInfo]) -> String {
+        super::profiles(profiles)
+    }
 
     #[test]
     fn sessions_render_one_line_each() {

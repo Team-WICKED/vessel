@@ -356,4 +356,115 @@ fn codex_rollouts_are_found_by_id() {
         matches!(missing, Err(SessionFilesError::NotFound { .. })),
         "{missing:?}"
     );
+
+    // Review finding 4: a suffix of the id is another session, not this
+    // one.
+    let tail = ID.rsplit('-').next().unwrap();
+    for partial in [tail, ID.get(9..).unwrap()] {
+        let found = session_files(HarnessKind::Codex, home.path(), home.path(), &id(partial));
+        assert!(
+            matches!(found, Err(SessionFilesError::NotFound { .. })),
+            "{partial}: {found:?}"
+        );
+    }
+    // A name not in a rollout's shape is not a match either.
+    write(&day.join(format!("rollout-today-{ID}.jsonl")), "{}\n");
+    let files = session_files(HarnessKind::Codex, home.path(), home.path(), &id(ID)).unwrap();
+    assert_eq!(files.entries().len(), 1);
+    // Two rollouts for one id: an error, not the first one found.
+    let other_day = home
+        .path()
+        .join("sessions")
+        .join("2026")
+        .join("11")
+        .join("07");
+    write(
+        &other_day.join(format!("rollout-2026-11-07T08-00-00-{ID}.jsonl")),
+        "{}\n",
+    );
+    let twice = session_files(HarnessKind::Codex, home.path(), home.path(), &id(ID));
+    assert!(
+        matches!(twice, Err(SessionFilesError::Ambiguous { count: 2, .. })),
+        "{twice:?}"
+    );
+}
+
+/// Review finding 8: a failure partway through linking takes back what was
+/// already linked. The target's history directory refuses new entries
+/// (read-only), so the transcript and the session's directory link first
+/// and the history file fails last.
+#[cfg(unix)]
+#[test]
+fn a_failure_partway_takes_back_the_links_already_made() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let cwd = TempDir::new();
+    let from = ClaudeHome::new(cwd.path());
+    let to = TempDir::new();
+    let files = session_files(HarnessKind::ClaudeCode, from.path(), cwd.path(), &id(ID)).unwrap();
+    let history = to.path().join("file-history").join(ID);
+    fs::create_dir_all(&history).unwrap();
+    fs::set_permissions(&history, fs::Permissions::from_mode(0o500)).unwrap();
+    // A user who may write anyway (root) cannot see the failure.
+    if fs::write(history.join("probe"), "x").is_ok() {
+        fs::set_permissions(&history, fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+
+    let error = link_session(&files, from.path(), to.path()).unwrap_err();
+    assert!(matches!(error, LinkError::Io { .. }), "{error:?}");
+    assert!(
+        !to.path().join("projects").exists(),
+        "links were left behind"
+    );
+    assert!(history.is_dir(), "a directory that was there stays");
+    // The source is untouched: one link each, as before.
+    let transcript = from.path().join(files.transcript());
+    assert_eq!(fs::metadata(transcript).unwrap().nlink(), 1);
+    fs::set_permissions(&history, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// Review finding 8: `Memory` is `memory` on a case-insensitive file
+/// system, so it is refused and skipped in any case.
+#[test]
+fn memory_is_recognised_in_any_case() {
+    let cwd = TempDir::new();
+    let home = ClaudeHome::new(cwd.path());
+    write(&home.path().join(&home.project).join("MEMORY.jsonl"), "x\n");
+    let files = session_files(
+        HarnessKind::ClaudeCode,
+        home.path(),
+        cwd.path(),
+        &id("MEMORY"),
+    )
+    .unwrap();
+    // Its directory is named like the project's memory: refused.
+    fs::create_dir_all(home.path().join(&home.project).join("MEMORY")).unwrap();
+    let files_with_dir = session_files(
+        HarnessKind::ClaudeCode,
+        home.path(),
+        cwd.path(),
+        &id("MEMORY"),
+    )
+    .unwrap();
+    let to = TempDir::new();
+    let error = link_session(&files_with_dir, home.path(), to.path()).unwrap_err();
+    assert!(matches!(error, LinkError::Refused { .. }), "{error:?}");
+    drop(files);
+
+    // Inside a session's directory, a `Memory` directory is skipped.
+    let from = ClaudeHome::new(cwd.path());
+    let nested = from.path().join(&from.project).join(ID).join("Memory");
+    write(&nested.join("note.md"), "per profile\n");
+    let files = session_files(HarnessKind::ClaudeCode, from.path(), cwd.path(), &id(ID)).unwrap();
+    let to = TempDir::new();
+    let linked = link_session(&files, from.path(), to.path()).unwrap();
+    assert_eq!(linked.skipped, [from.project.join(ID).join("Memory")]);
+    assert!(
+        !to.path()
+            .join(&from.project)
+            .join(ID)
+            .join("Memory")
+            .exists()
+    );
 }

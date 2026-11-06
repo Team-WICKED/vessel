@@ -24,6 +24,9 @@ axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
+# The node user's home, for `~/` in profiles.toml (ADR 0011); already in
+# the workspace through vessel-harness.
+dirs.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
 # Device credentials and invitation secrets (ADR 0010); already in the
 # workspace through vessel-store.

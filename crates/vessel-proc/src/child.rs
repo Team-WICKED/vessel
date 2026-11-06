@@ -137,9 +137,11 @@ impl Child {
     /// The group refused a signal (`EPERM`). macOS answers that when every
     /// member of the group has exited but is not reaped yet, which for our
     /// leader means it is already gone: if it has exited, reap it now (its
-    /// code is kept for [`wait`](Self::wait)), sweep, and count the signal
-    /// as delivered. Otherwise the refusal is real (a member runs as
-    /// another user) and is returned.
+    /// code is kept for [`wait`](Self::wait)) and signal the group again,
+    /// as the sweep would. `ESRCH` then means everything is gone; another
+    /// refusal is real (a member still runs as another user, a setuid
+    /// helper or `sudo`) and is returned, as is the first when the leader
+    /// still runs.
     ///
     /// [Decision Log]
     /// - Seen on CI (macOS): an agent that exited by itself between the
@@ -149,13 +151,13 @@ impl Child {
     ///   does not reap it: `waitid` with `WNOWAIT` is missing on macOS).
     /// - Choice: `try_wait`, which never blocks and only succeeds for an
     ///   exited leader; reaping it here is what `wait` would do next anyway.
+    ///   The signal after it is the sweep `wait` does, so it is `SIGKILL`.
     #[cfg(unix)]
     fn exited_already(&mut self, refused: SignalError) -> Result<(), SignalError> {
         match self.inner.try_wait() {
             Ok(Some(status)) => {
                 self.state = State::Reaped(status.code());
-                self.sweep();
-                Ok(())
+                self.group.signal(Signal::Kill)
             }
             Ok(None) | Err(_) => Err(refused),
         }

@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use fixtures::{at, data_dir, new_session, open, output, plain, record, status};
 use vessel_proto::{
-    AgentEvent, EventRecord, EventSeq, HarnessSessionId, SessionEvent, SessionId, SessionStatus,
+    AgentEvent, Creator, DeviceId, EventRecord, EventSeq, HarnessSessionId, ProfileName,
+    SessionEvent, SessionId, SessionInfo, SessionStatus,
 };
 use vessel_store::{ByteCount, Retention, Store, StoreConfig, StoreError};
 
@@ -517,4 +518,96 @@ async fn a_zero_limit_still_makes_progress() {
         .unwrap();
     assert_eq!(page.records.len(), 1);
     assert_eq!((page.next, page.at_end), (EventSeq::new(1), false));
+}
+
+/// Schema 3: a session's profile and creator are stored, and the profile
+/// follows `ProfileChanged` records (back to the default included).
+#[tokio::test]
+async fn profile_and_creator_are_stored_and_moves_projected() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let alt: ProfileName = "claude-alt".parse().unwrap();
+    let work: ProfileName = "claude-work".parse().unwrap();
+    let device = Creator::Device {
+        id: DeviceId::random(),
+    };
+    let base = new_session(0);
+    let session = SessionInfo::new(
+        base.id,
+        base.spec.with_profile(alt.clone()),
+        base.created_at,
+    )
+    .with_creator(device.clone());
+    store.create_session(session.clone()).await.unwrap();
+    let stored = store.session(session.id).await.unwrap().unwrap();
+    assert_eq!(stored.profile, Some(alt.clone()));
+    assert_eq!(stored.created_by, device);
+
+    let moved = |seq, from: Option<&ProfileName>, to: Option<&ProfileName>| {
+        record(
+            seq,
+            SessionEvent::ProfileChanged {
+                from: from.cloned(),
+                to: to.cloned(),
+            },
+        )
+    };
+    store
+        .append(
+            session.id,
+            vec![
+                status(0, SessionStatus::Starting),
+                moved(1, Some(&alt), Some(&work)),
+            ],
+        )
+        .await
+        .unwrap();
+    let stored = store.session(session.id).await.unwrap().unwrap();
+    assert_eq!(stored.profile, Some(work.clone()));
+    // The spec keeps what was asked for.
+    assert_eq!(stored.spec.profile, Some(alt));
+
+    // Records without a move leave it; a move to the default clears it.
+    store
+        .append(session.id, vec![status(2, SessionStatus::Running)])
+        .await
+        .unwrap();
+    assert_eq!(
+        store.session(session.id).await.unwrap().unwrap().profile,
+        Some(work.clone())
+    );
+    store
+        .append(session.id, vec![moved(3, Some(&work), None)])
+        .await
+        .unwrap();
+    let stored = store.session(session.id).await.unwrap().unwrap();
+    assert_eq!(stored.profile, None);
+    assert_eq!(stored.created_by, device);
+}
+
+/// Sessions stored before schema 3 read as the owner's, on the default
+/// profile: all a node could do then.
+#[tokio::test]
+async fn sessions_from_schema_2_read_as_the_owners_on_the_default() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let session = new_session(0);
+    store.create_session(session.clone()).await.unwrap();
+    store.close().await;
+    drop(store);
+    let connection = rusqlite::Connection::open(dir.database_path()).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE sessions DROP COLUMN profile;
+             ALTER TABLE sessions DROP COLUMN created_by;",
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
+    drop(connection);
+
+    let store = open(&dir, StoreConfig::default()).await;
+    let stored = store.session(session.id).await.unwrap().unwrap();
+    assert_eq!(stored.profile, None);
+    assert_eq!(stored.created_by, Creator::Owner);
+    assert_eq!(stored.spec, session.spec);
 }

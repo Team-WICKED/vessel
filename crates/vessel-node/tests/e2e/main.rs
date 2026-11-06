@@ -8,6 +8,8 @@
 #[cfg(test)]
 mod local;
 #[cfg(test)]
+mod profiles;
+#[cfg(test)]
 #[cfg(unix)]
 mod remote;
 #[cfg(test)]

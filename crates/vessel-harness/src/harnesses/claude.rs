@@ -36,11 +36,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use vessel_proto::{McpTransport, ResolvedMcpServers};
+use vessel_proto::{HarnessSessionId, McpTransport, ResolvedMcpServers};
 
 use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
-use crate::mcp::{FileForm, McpError, TerminalMcp};
+use crate::mcp::{EncodeProblem, FileForm, McpError, TerminalMcp};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -131,8 +131,9 @@ fn canonical(_cwd: &Path) -> Option<PathBuf> {
 fn session_files(
     home: &Path,
     cwd: &Path,
-    id: &str,
+    id: &HarnessSessionId,
 ) -> Result<Option<SessionFiles>, SessionFilesError> {
+    let id = id.as_str();
     let mut found = None;
     for directory in directories(cwd) {
         let slug = slug(&directory).ok_or_else(|| SessionFilesError::InvalidDirectory {
@@ -159,7 +160,14 @@ fn session_files(
     Ok(Some(SessionFiles::new(transcript, extras)))
 }
 
-/// One server in `--mcp-config`'s file, `{"mcpServers": {"<name>": ...}}`.
+/// `--mcp-config`'s file: `{"mcpServers": {"<name>": {...}}}`.
+#[derive(Serialize)]
+struct McpConfig<'a> {
+    #[serde(rename = "mcpServers")]
+    servers: BTreeMap<&'a str, Server<'a>>,
+}
+
+/// One server in that file.
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Server<'a> {
@@ -174,19 +182,22 @@ enum Server<'a> {
     },
 }
 
-/// The servers, values included, in a file only the user can read.
+/// The servers, values included, in a file only the user can read. The
+/// file's text is the only copy made of the values.
 fn terminal_mcp(servers: &ResolvedMcpServers) -> Result<TerminalMcp, McpError> {
-    let mut encoded = serde_json::Map::new();
+    let Some(first) = servers.keys().next() else {
+        return Ok(TerminalMcp::default());
+    };
+    let mut config = McpConfig {
+        servers: BTreeMap::new(),
+    };
     for (name, transport) in servers {
-        let encode = |reason: String| McpError::Encode {
-            server: name.clone(),
-            reason,
-        };
         let server = match transport {
             McpTransport::Stdio { command, args, env } => Server::Stdio {
-                command: command
-                    .to_str()
-                    .ok_or_else(|| encode("its command is not valid UTF-8".to_owned()))?,
+                command: command.to_str().ok_or_else(|| McpError::Encode {
+                    server: name.clone(),
+                    problem: EncodeProblem::CommandNotUtf8,
+                })?,
                 args,
                 env: env
                     .iter()
@@ -201,15 +212,18 @@ fn terminal_mcp(servers: &ResolvedMcpServers) -> Result<TerminalMcp, McpError> {
                     .collect(),
             },
         };
-        let value = serde_json::to_value(server).map_err(|error| encode(error.to_string()))?;
-        let _old = encoded.insert(name.as_str().to_owned(), value);
+        let _old = config.servers.insert(name.as_str(), server);
     }
-    let mut config = serde_json::Map::new();
-    let _old = config.insert("mcpServers".to_owned(), serde_json::Value::Object(encoded));
+    // About the whole file, so it names the first server; it cannot happen
+    // (text and maps keyed by text only).
+    let contents = serde_json::to_string(&config).map_err(|_unserialisable| McpError::Encode {
+        server: first.clone(),
+        problem: EncodeProblem::Unserialisable,
+    })?;
     Ok(TerminalMcp {
         file: Some(FileForm {
             flag: "--mcp-config=",
-            contents: serde_json::Value::Object(config).to_string(),
+            contents,
             extension: ".json",
         }),
         ..TerminalMcp::default()

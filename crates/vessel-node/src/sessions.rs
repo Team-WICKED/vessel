@@ -30,7 +30,7 @@ use tokio_util::task::TaskTracker;
 use vessel_proto::{
     EventPage, EventRecord, EventSeq, SessionId, SessionInfo, SessionInput, SessionSpec,
 };
-use vessel_session::{Created, FollowError, SessionHandle, SessionRuntime};
+use vessel_session::{Created, FollowError, LaunchOptions, SessionHandle, SessionRuntime};
 use vessel_store::Store;
 
 use crate::error::ServiceError;
@@ -84,16 +84,21 @@ impl Sessions {
     pub(crate) async fn create(
         self: &Arc<Self>,
         spec: SessionSpec,
+        options: LaunchOptions,
     ) -> Result<SessionInfo, ServiceError> {
         let sessions = Arc::clone(self);
         self.tasks
-            .spawn(async move { sessions.start(spec).await })
+            .spawn(async move { sessions.start(spec, options).await })
             .await
             .map_err(ServiceError::Task)?
     }
 
-    async fn start(self: &Arc<Self>, spec: SessionSpec) -> Result<SessionInfo, ServiceError> {
-        let Created { handle, durable } = self.runtime.create(spec).await?;
+    async fn start(
+        self: &Arc<Self>,
+        spec: SessionSpec,
+        options: LaunchOptions,
+    ) -> Result<SessionInfo, ServiceError> {
+        let Created { handle, durable } = self.runtime.create_with(spec, options).await?;
         let id = handle.id();
         // Visible from here on (see the module docs). Readers that need the
         // log wait on the watch until persistence starts below.

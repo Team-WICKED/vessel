@@ -40,9 +40,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use vessel_proto::{
     Call, ClientFrame, ClientInfo, CreateSession, GetNode, GetSession, Hello, InviteDevice,
-    KillSession, ListDevices, ListHarnesses, ListSessions, Outcome, ProtocolRange, ReadEvents,
-    Request, RequestId, RevokeDevice, SendInput, ServerFrame, StopNode, Subscribe, Unsubscribe,
-    Welcome, WireError,
+    KillSession, ListDevices, ListHarnesses, ListProfiles, ListSessions, MoveProfile, Outcome,
+    ProtocolRange, ReadEvents, ReloadProfiles, Request, RequestId, RevokeDevice, SendInput,
+    ServerFrame, StopNode, Subscribe, Unsubscribe, Welcome, WireError,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -69,6 +69,9 @@ impl Unary for StopNode {}
 impl Unary for InviteDevice {}
 impl Unary for ListDevices {}
 impl Unary for RevokeDevice {}
+impl Unary for ListProfiles {}
+impl Unary for ReloadProfiles {}
+impl Unary for MoveProfile {}
 
 /// `n` as a `NonZeroUsize` for constants.
 const fn at_least_one(n: usize) -> NonZeroUsize {

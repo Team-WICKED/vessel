@@ -4,8 +4,8 @@
 use chrono::{DateTime, Utc};
 use rusqlite::Row;
 use vessel_proto::{
-    EventRecord, EventSeq, HarnessSessionId, SessionEvent, SessionId, SessionInfo, SessionSpec,
-    SessionStatus,
+    EventRecord, EventSeq, HarnessSessionId, ProfileName, SessionEvent, SessionId, SessionInfo,
+    SessionSpec, SessionStatus,
 };
 
 use crate::config::ByteCount;
@@ -65,21 +65,37 @@ fn decode<T: serde::de::DeserializeOwned>(
 
 /// The columns [`session_from_row`] expects, in order.
 pub(crate) const SESSION_COLUMNS: &str =
-    "id, spec, status, created_at, ended_at, next_seq, harness_session";
+    "id, spec, status, created_at, ended_at, next_seq, harness_session, profile, created_by";
 
 pub(crate) fn session_from_row(row: &Row<'_>) -> Result<SessionInfo, StoreError> {
     let id = session_id_from_sql(&row.get::<_, String>(0)?)?;
     let spec: SessionSpec = decode(id, Column::Spec, &row.get::<_, String>(1)?)?;
     let status: SessionStatus = decode(id, Column::Status, &row.get::<_, String>(2)?)?;
-    // `profile` and `created_by` are not stored yet: until schema 3
-    // (milestone 4 Track H) a stored session reads as running the profile it
-    // asked for and created by the owner, which is all a node could do
-    // before protocol 5.
     let mut info = SessionInfo::new(id, spec, time_from_sql(row.get(3)?));
     info.status = status;
     info.ended_at = row.get::<_, Option<i64>>(4)?.map(time_from_sql);
     info.next_seq = seq_from_sql(row.get(5)?)?;
     info.harness_session = row.get::<_, Option<String>>(6)?.map(HarnessSessionId::new);
+    // Schema 3. The current profile is the column, not the spec's: a move
+    // changes it (`NULL` is the harness's default). A session stored before
+    // schema 3 has neither column set, and neither a profile in its spec
+    // nor another creator than the owner.
+    info.profile = row
+        .get::<_, Option<String>>(7)?
+        .map(|name| {
+            // Stored as the bare name; the name rule is the serde one.
+            serde_json::from_value::<ProfileName>(serde_json::Value::String(name)).map_err(
+                |source| StoreError::Corrupt {
+                    session: id,
+                    column: Column::Profile,
+                    source,
+                },
+            )
+        })
+        .transpose()?;
+    if let Some(creator) = row.get::<_, Option<String>>(8)? {
+        info.created_by = decode(id, Column::CreatedBy, &creator)?;
+    }
     Ok(info)
 }
 

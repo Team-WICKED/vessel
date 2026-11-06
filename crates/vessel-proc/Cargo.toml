@@ -22,5 +22,10 @@ process-wrap.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
 vessel-testkit.workspace = true
 
+# The macOS-only test watches a child's exit without reaping it (kqueue's
+# NOTE_EXIT); nix is already a dependency on Unix.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+nix = { workspace = true, features = ["event"] }
+
 [lints]
 workspace = true
