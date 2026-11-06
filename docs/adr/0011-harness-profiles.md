@@ -174,3 +174,62 @@ env = { CODEX_HOME = "~/.codex-work" }
 - Switching accounts at a usage limit becomes a node operation any client
   can trigger (the CLI, the web UI later, or an agent with the scope),
   instead of a plugin bound to one product.
+
+
+## As built (Track H, harness side, 2026-11-06)
+
+Refinements found while building `vessel-harness`; the decision above
+stands.
+
+- **Names.** A harness's default profile is named after its command
+  (`claude`, `codex`, `gemini`, `opencode`). A profile name that parses as a
+  harness (`claude`, `Claude-Code`, ...) is reserved, so `--profile claude`
+  always means the default. Duplicate profile names are refused ignoring
+  case. Variable names in `env` and `unset` are compared ignoring ASCII
+  case (Windows treats them as one variable), so `Path` beside `PATH`, or a
+  variable both set and removed, is an error on every system.
+- **Errors never quote the file.** `profiles.toml` errors name the profile
+  and the key, and give line and column without the source excerpt the
+  TOML library would print, since a line of `env` may hold a secret and
+  `profile.reload` returns the error to a client.
+- **`~`** expands in `env` values and in `args`, only as `~` or a leading
+  `~/` (as a shell would). A value using it on a node user without a home
+  is an error.
+- **`args` refusal.** Each harness descriptor says whether a profile may add
+  terminal arguments; all four may today, so the refusal exists but has no
+  case yet.
+- **Home.** `home(profile, user_home, inherited)` also takes the node's own
+  environment: a profile that neither sets nor removes the home variable
+  (the default one included) runs in whatever home the node was started
+  with, as the harness itself would. A relative value is reported as
+  unknown. Gemini CLI and `OpenCode` have no confirmed variable that moves
+  their whole home; their homes are the defaults (`~/.gemini`,
+  `~/.config/opencode`).
+- **Login check.** `login_check(lookup, profile)` runs with the profile's
+  environment, so it checks that profile's account (`claude auth status`,
+  `codex login status`; none for Gemini CLI and `OpenCode` yet). The
+  commands come from `--help` only; whether a logged-out check exits
+  non-zero was not tried, since that would touch an account.
+- **Session files.** Claude Code's project name is its working directory
+  with every UTF-16 unit other than an ASCII letter or digit replaced by
+  `-`, cut at 200 characters with `-` and a base-36 hash appended when
+  longer (checked against Claude Code 2.1.318's own function). Claude Code
+  names the project after its resolved working directory, so on Unix the
+  canonical directory is tried too. Codex's rollouts are found by id under
+  `sessions/YYYY/MM/DD/`.
+- **Linking.** `link_session` checks everything before linking anything: a
+  path that is not plain and relative, or names `memory`, is refused; a
+  symbolic link in either home's path is refused; symbolic links, special
+  files and `memory` directories inside the session's directories are
+  skipped and reported; a different file already in the target is a
+  conflict. On Windows an existing target file is always a conflict, since
+  `std` exposes no file id there to tell it is the same file.
+- **Launch checks the profile.** The node resolves `spec.profile` (protocol
+  5); `launch` refuses a profile of another harness (`ProfileMismatch`, the
+  client's error) and a profile other than the one the spec names, or than
+  the harness's default when it names none (`ProfileNotRequested`, the
+  node's bug), so a session never runs as another account than recorded.
+- **Launch result.** `launch` returns `Launch { command, mcp_file,
+  unattached }` rather than a bare command: the caller has to write the MCP
+  file and keep it for the session's life, and to know which servers a
+  terminal harness could not take.

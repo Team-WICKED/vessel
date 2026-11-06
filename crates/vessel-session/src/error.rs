@@ -16,6 +16,9 @@ pub enum SessionError {
     /// The program could not be started in a PTY.
     #[error("cannot start the session")]
     Spawn(#[source] vessel_pty::PtyError),
+    /// A terminal session's MCP configuration file could not be written.
+    #[error("cannot write the session's MCP configuration file")]
+    McpFile(#[source] std::io::Error),
     /// The ACP agent could not be started.
     #[error("cannot start the agent")]
     StartAgent(#[source] vessel_agent::AgentError),
@@ -71,20 +74,27 @@ impl SessionError {
                 ErrorCode::Unsupported
             }
             Self::Launch(
-                HarnessError::NoSuchDirectory { .. } | HarnessError::RelativeDirectory { .. },
+                HarnessError::NoSuchDirectory { .. }
+                | HarnessError::RelativeDirectory { .. }
+                | HarnessError::ProfileMismatch { .. }
+                | HarnessError::Mcp(_),
             )
             | Self::NoWorkingDirectory
             | Self::Input(InputError::InvalidContent(_) | InputError::UnknownOption { .. }) => {
                 ErrorCode::InvalidRequest
             }
-            Self::Spawn(_) | Self::StartAgent(_) => ErrorCode::SpawnFailed,
+            Self::Spawn(_) | Self::StartAgent(_) | Self::McpFile(_) => ErrorCode::SpawnFailed,
             Self::Input(InputError::PermissionNotFound(_)) => ErrorCode::NotFound,
             Self::Ended
             | Self::Input(
                 InputError::Closed | InputError::TurnInProgress | InputError::PermissionSettled(_),
             ) => ErrorCode::Conflict,
             Self::ShuttingDown => ErrorCode::Unavailable,
-            Self::Internal(_) => ErrorCode::Internal,
+            // The node resolves `spec.profile`; another profile is its bug.
+            Self::Internal(_)
+            | Self::Launch(
+                HarnessError::McpFile { .. } | HarnessError::ProfileNotRequested { .. },
+            ) => ErrorCode::Internal,
         }
     }
 }
