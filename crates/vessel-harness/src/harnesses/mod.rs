@@ -46,6 +46,17 @@ pub(crate) struct Descriptor {
     /// harness has no launch-time form (structured sessions still get them
     /// over ACP).
     pub(crate) terminal_mcp: Option<RenderMcp>,
+    /// The vendor's documented install command (`vessel init` offers it,
+    /// and runs it only when the person says yes).
+    pub(crate) install: &'static str,
+    /// Arguments after the binary that log a person in; printed for them
+    /// to run, never run by Vessel. `None` when logging in happens inside
+    /// the harness's own interface.
+    pub(crate) login_command: Option<&'static [&'static str]>,
+    /// Files whose presence in a directory beside the default home (`.claude`
+    /// next to `.claude-<name>`) marks it as another account's home; only
+    /// names are looked at. Empty: no per-account homes to find.
+    pub(crate) account_files: &'static [&'static str],
     /// Whether a profile may add arguments to its terminal command line.
     /// Every harness so far takes them; a harness whose terminal command
     /// must stay fixed would say `false`, and its profiles with `args` are

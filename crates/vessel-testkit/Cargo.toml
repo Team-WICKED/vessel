@@ -1,6 +1,6 @@
 [package]
 name = "vessel-testkit"
-description = "Fake harness binaries (fake-tui, fake-acp, fake-ssh) for Vessel's process-level tests; never shipped"
+description = "Fake harness binaries (fake-tui, fake-acp, fake-ssh, fake-tool) for Vessel's process-level tests; never shipped"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,6 +19,10 @@ path = "src/bin/fake_acp.rs"
 [[bin]]
 name = "fake-ssh"
 path = "src/bin/fake_ssh.rs"
+
+[[bin]]
+name = "fake-tool"
+path = "src/bin/fake_tool.rs"
 
 [features]
 # The misbehaving relay (`relay` module): a websocket proxy, so only tests

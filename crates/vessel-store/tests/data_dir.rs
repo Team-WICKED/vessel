@@ -210,6 +210,27 @@ fn profiles_are_read_as_written_and_flagged_when_shared() {
 }
 
 #[test]
+fn written_profiles_replace_the_file_owner_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = DataDir::new(temp.path());
+    dir.prepare().unwrap();
+    std::fs::write(dir.profiles_path(), "# old\n").unwrap();
+    let text = "# old\n[profiles.alt]\nharness = \"claude\"\n";
+    dir.write_profiles(text).unwrap();
+    let read = dir.read_profiles().unwrap().unwrap();
+    assert_eq!(read.text, text);
+    assert!(!read.readable_by_others);
+    // Nothing is left beside it.
+    assert_eq!(
+        std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name() != "profiles.toml")
+            .count(),
+        0
+    );
+}
+
+#[test]
 fn the_mcp_directory_is_owner_only_and_starts_empty() {
     let temp = tempfile::tempdir().unwrap();
     let dir = DataDir::new(temp.path());
