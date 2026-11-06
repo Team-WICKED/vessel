@@ -47,6 +47,7 @@ use vessel_secure::{Carrier, NodeKeypair, SecureChannel, SecureError};
 
 use crate::devices::Devices;
 use crate::devices::preamble::{self, Admitted, NotAdmitted};
+use crate::error::chain;
 use crate::guard::Guarded;
 use crate::lifecycle::Lifecycle;
 use crate::service::Connection;
@@ -130,7 +131,7 @@ impl SecureGateway {
     /// failure is logged, since nobody waits for it.
     pub(crate) async fn accept_logged<C: NodeCarrier>(&self, carrier: C, via: &'static str) {
         if let Err(error) = self.accept(carrier).await {
-            tracing::info!(via, error = %error, "a secure handshake failed");
+            tracing::info!(via, error = %chain(&error), "a secure handshake failed");
         }
     }
 
@@ -180,7 +181,7 @@ impl SecureGateway {
             .serve(channel, move |peer| Connection::new(peer, principal))
             .await
         {
-            tracing::info!(%error, "a device connection ended abnormally");
+            tracing::info!(error = %chain(&error), "a device connection ended abnormally");
         }
         drop(registration);
     }
