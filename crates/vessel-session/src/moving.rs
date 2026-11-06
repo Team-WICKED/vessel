@@ -61,6 +61,9 @@ pub struct ProfileMove {
     pub to_home: PathBuf,
     /// MCP servers for the new agent.
     pub mcp_servers: ResolvedMcpServers,
+    /// Lines for the log once the session has moved, as
+    /// `LaunchOptions::notices`.
+    pub notices: Vec<String>,
     /// Move even mid-turn, cancelling the turn.
     pub force: bool,
 }
@@ -127,6 +130,7 @@ pub(crate) struct MoveOrder {
     pub(crate) files: SessionFiles,
     pub(crate) from_home: PathBuf,
     pub(crate) to_home: PathBuf,
+    pub(crate) notices: Vec<String>,
     pub(crate) force: bool,
     pub(crate) reply: oneshot::Sender<Result<(), MoveError>>,
 }
@@ -149,6 +153,7 @@ impl StructuredActor {
             files,
             from_home,
             to_home,
+            notices,
             force,
             reply,
         } = order;
@@ -163,6 +168,9 @@ impl StructuredActor {
             )
             .await;
         self.move_state.active = false;
+        if outcome.is_ok() {
+            self.life.notices(&mut self.agent, notices).await;
+        }
         let _none = self.route.send_replace(Some(self.input.clone()));
         if let Err(error) = &outcome {
             tracing::info!(%error, "the session did not move to another profile");

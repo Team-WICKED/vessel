@@ -322,7 +322,13 @@ member vesseld                         home vesseld
   start falls back; terminal sessions, missing transcripts, unknown,
   other-harness and logged-out profiles refused unchanged; the moved
   profile survives a restart. Details in ADR 0011, "As built".
-- **Next:** H3's node side (with Track F's resolve), H4.
+- **H3, node side (done):** `McpSource` in `vessel-node`
+  (`profiles/launch.rs`), asked per launch and per move; `NoMcpServers`
+  until fleet sync replaces it in `node.rs` with a source over its
+  definitions and secrets (`vessel_fleet::resolve`). Missing secrets are
+  named in the session's log (`LaunchOptions::notices`, `vessel:` log
+  lines after `starting`, and after a move) and in the node's log.
+- **Next:** H4.
 
 ## Track F: fleet and first run
 

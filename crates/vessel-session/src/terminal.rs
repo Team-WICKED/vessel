@@ -21,9 +21,7 @@ impl TerminalActor {
     /// Run until the program has exited and its final status is published.
     pub(crate) async fn run(mut self) {
         // The program is already running when the actor starts.
-        self.life
-            .status(&mut self.pty, SessionStatus::Starting)
-            .await;
+        self.life.starting(&mut self.pty).await;
         self.life
             .status(&mut self.pty, SessionStatus::Running)
             .await;

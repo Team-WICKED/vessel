@@ -26,7 +26,7 @@ use crate::identity;
 use crate::ipc::{self, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
 use crate::profiles::NodeProfiles;
-use crate::profiles::launch::Launcher;
+use crate::profiles::launch::{Launcher, NoMcpServers};
 use crate::secure::{MAX_UNADMITTED, SecureGateway};
 use crate::server::{self, Gateway};
 use crate::service::{NodeService, Parts};
@@ -90,7 +90,8 @@ impl Node {
         let store = open_store(&config).await?;
         let session_setup = SessionSetup {
             profiles: Arc::new(profiles),
-            launcher: Launcher { mcp_dir },
+            // Fleet sync's source replaces `NoMcpServers` (ADR 0012).
+            launcher: Launcher::new(mcp_dir, Arc::new(NoMcpServers)),
         };
 
         let Core {

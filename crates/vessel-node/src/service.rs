@@ -329,10 +329,11 @@ impl NodeService {
         request: MoveProfile,
     ) -> Result<SessionInfo, WireError> {
         let profiles = &self.profiles;
+        let launcher = &self.launcher;
         let lookup = &self.lookup;
         self.sessions
             .move_profile(request.session, async |info: &SessionInfo| {
-                moving::plan(profiles, lookup, info, &request).await
+                moving::plan(profiles, launcher, lookup, info, &request).await
             })
             .await
             .map_err(|error| wire(&error))

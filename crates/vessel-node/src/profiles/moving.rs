@@ -21,7 +21,7 @@ use vessel_proto::{MoveProfile, SessionInfo, SessionMode};
 use vessel_session::{MoveError, ProfileMove, SessionError};
 
 use super::NodeProfiles;
-use super::launch::mcp_servers;
+use super::launch::Launcher;
 use crate::error::ServiceError;
 
 /// The longest a login check may take.
@@ -35,6 +35,7 @@ pub(crate) const LOGIN_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// logged in.
 pub(crate) async fn plan(
     profiles: &NodeProfiles,
+    launcher: &Launcher,
     lookup: &Lookup,
     info: &SessionInfo,
     request: &MoveProfile,
@@ -69,8 +70,10 @@ pub(crate) async fn plan(
     let to_home = home(&target, user_home, |name| std::env::var_os(name))
         .ok_or_else(|| ServiceError::HomeUnknown(target.name().clone()))?;
     logged_in(lookup, &target).await?;
+    let (mcp_servers, notices) = launcher.mcp_servers(&info.spec);
     Ok(ProfileMove {
-        mcp_servers: mcp_servers(&info.spec),
+        mcp_servers,
+        notices,
         profile: target,
         from_home,
         to_home,

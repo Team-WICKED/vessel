@@ -83,6 +83,17 @@ pub struct LaunchOptions {
     /// Who asks for the session (ADR 0013), recorded in its
     /// `SessionInfo::created_by`; the owner by default.
     pub created_by: Creator,
+    /// Lines Vessel adds to the session's log right after
+    /// `Status{Starting}`, each a `HarnessLog` record (in either mode),
+    /// starting with `vessel:` by convention: for example MCP servers left
+    /// out because a secret is missing (ADR 0012).
+    pub notices: Vec<String>,
+}
+
+/// What a session records about its start besides its spec.
+struct Record {
+    created_by: Creator,
+    notices: Vec<String>,
 }
 
 /// The process-independent parts of a new session.
@@ -172,7 +183,12 @@ impl SessionRuntime {
             mcp_servers,
             mcp_dir,
             created_by,
+            notices,
         } = options;
+        let record = Record {
+            created_by,
+            notices,
+        };
         let profile = profile.unwrap_or_else(|| Profile::default_for(spec.harness));
         match spec.mode.clone() {
             SessionMode::Terminal { size, .. } => {
@@ -180,8 +196,7 @@ impl SessionRuntime {
                     servers: mcp_servers,
                     dir: mcp_dir,
                 };
-                self.create_terminal(spec, size, profile, mcp, created_by)
-                    .await
+                self.create_terminal(spec, size, profile, mcp, record).await
             }
             SessionMode::Structured { model, resume } => {
                 let start = AgentStart {
@@ -189,8 +204,7 @@ impl SessionRuntime {
                     resume,
                     mcp_servers,
                 };
-                self.create_structured(spec, profile, start, created_by)
-                    .await
+                self.create_structured(spec, profile, start, record).await
             }
         }
     }
@@ -201,7 +215,7 @@ impl SessionRuntime {
         size: TerminalSize,
         profile: Profile,
         mcp: TerminalMcp,
-        created_by: Creator,
+        record: Record,
     ) -> Result<Created, SessionError> {
         let lookup = self.config.harness_lookup.clone();
         let launch_spec = spec.clone();
@@ -244,7 +258,7 @@ impl SessionRuntime {
             return Err(SessionError::ShuttingDown);
         }
 
-        let parts = self.parts(spec, created_by, Input::Terminal(pty.input()), None);
+        let parts = self.parts(spec, record, Input::Terminal(pty.input()), None);
         let actor = TerminalActor {
             pty,
             output,
@@ -259,7 +273,7 @@ impl SessionRuntime {
         spec: SessionSpec,
         profile: Profile,
         start: AgentStart,
-        created_by: Creator,
+        record: Record,
     ) -> Result<Created, SessionError> {
         let lookup = self.config.harness_lookup.clone();
         let launch_spec = spec.clone();
@@ -300,7 +314,7 @@ impl SessionRuntime {
         let (route, routed) = watch::channel(Some(input.clone()));
         // One move at a time; a second waits for the first's answer.
         let (control, orders) = mpsc::channel(1);
-        let parts = self.parts(spec, created_by, Input::Structured(routed), Some(control));
+        let parts = self.parts(spec, record, Input::Structured(routed), Some(control));
         let actor = StructuredActor {
             agent,
             outputs,
@@ -350,6 +364,7 @@ impl SessionRuntime {
             from_home,
             to_home,
             mcp_servers,
+            notices,
             force,
         } = request;
         let to = (!profile.is_default()).then(|| profile.name().clone());
@@ -386,6 +401,7 @@ impl SessionRuntime {
             files,
             from_home,
             to_home,
+            notices,
             force,
             reply,
         };
@@ -400,16 +416,21 @@ impl SessionRuntime {
     fn parts(
         &self,
         spec: SessionSpec,
-        created_by: Creator,
+        record: Record,
         input: Input,
         control: Option<mpsc::Sender<Control>>,
     ) -> Parts {
+        let Record {
+            created_by,
+            notices,
+        } = record;
         let (info, kill, shared) = self.shared(spec, created_by, input, control);
         let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         Parts {
             life: Lifecycle {
                 out: Publisher::new(Arc::clone(&shared), durable_sender, info),
                 stop: Stopper::new(kill, self.shutdown.clone()),
+                notices,
             },
             shared,
             durable,
