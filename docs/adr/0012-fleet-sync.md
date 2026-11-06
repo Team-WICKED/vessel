@@ -13,7 +13,7 @@ productive in minutes (`vessel init`).
 
 On one machine, five agent configurations (Codex and four Claude Code
 logins) share one set of global instructions and one set of skills
-(`~/.claude/CLAUDE.md` section 8; `teamwicked-infra/agent-config-sync`):
+(the operator's global instructions and their `agent-config-sync` script):
 
 - **One source, links everywhere.** Instructions live in `~/.codex/AGENTS.md`;
   `~/.claude/CLAUDE.md` is a symlink to it. Skills live in

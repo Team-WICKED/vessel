@@ -4,7 +4,7 @@ description = "Vessel command-line client: run, attach to and inspect harness se
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 repository.workspace = true
 
 [[bin]]
