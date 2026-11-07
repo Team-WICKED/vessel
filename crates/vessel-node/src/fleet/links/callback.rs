@@ -7,7 +7,7 @@
 //! - Purpose: the home reaches a member through the routes its grant's
 //!   link names; a member started plainly named none, so the home refused
 //!   its grant and never reached it (Track S's fresh-machine smoke).
-//! - First built (103d765) by handing members the home's relay token. The
+//! - First built (1c1ae14) by handing members the home's relay token. The
 //!   review's round 6: any `sync` device got it (a stranger, a forgotten
 //!   node), it kept working after the device was revoked, it registered any
 //!   key (a free general relay), members never refreshed it (a rotated

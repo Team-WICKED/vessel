@@ -492,7 +492,7 @@ mod tests {
         assert!(!after.forgotten_for(node, Some("desktop"), new, None));
     }
 
-    /// Round 4: a record 5dd51d3 wrote has no names, so a revoked member's
+    /// Round 4: a record 34be5d7 wrote has no names, so a revoked member's
     /// name was not reserved. Reading fills them from the kept grants
     /// (revoked devices' included), and `upgrade` saves that.
     #[test]
@@ -518,7 +518,7 @@ mod tests {
         assert!(!upgrade(&files).unwrap(), "once");
     }
 
-    /// A forget recorded before devices were (f3ca416) is decided by time.
+    /// A forget recorded before devices were (803ca61) is decided by time.
     #[test]
     fn a_forget_from_before_devices_were_recorded_goes_by_time() {
         let (node, at) = (NodeId::random(), Utc::now());

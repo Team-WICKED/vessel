@@ -15,7 +15,7 @@
 //!   relay registers a node with its token or a ticket for the node's key;
 //!   and the link tasks need the secure gateway, which needs the node's
 //!   service, which holds the fleet's links that ask for the relays.
-//! - First built (103d765) with the home's relay token handed to members
+//! - First built (1c1ae14) with the home's relay token handed to members
 //!   and the home's relays added to every pairing link; the review's round
 //!   6 showed any `sync` device got the token, kept it after revocation,
 //!   and could register any key, and that a member moving homes kept the

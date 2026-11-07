@@ -3,7 +3,7 @@
 Status: built on `backend/m3` (2026-11-06; "State" and "Smoke on one
 machine" below); its last manual smoke, the relay on a public host behind
 an HTTPS proxy, passed on 2026-11-07. Drafted the same day, to start once milestone 2 was merged
-and green on all three CI platforms (`backend/m2` at 2cd316b). Owner:
+and green on all three CI platforms (`backend/m2` at 5474891). Owner:
 coordinator. Two implementation tracks, as in M1 and M2.
 
 Read first: `AGENTS.md`, `docs/VISION.md` section 2 (the change of
@@ -54,7 +54,7 @@ file references.
     `nodes add --pair` from a piped link, then `run` through the relay.
   - Track R's review of Track P (items 1 to 10) is addressed, including
     the 64 KiB frame limit until the preamble is answered
-    (`SecureChannel::set_max_frame`, 00caafa).
+    (`SecureChannel::set_max_frame`, 5118f8c).
 - **Keepalive on direct routes (`backend/m3-ping`):** a node pings its own
   `/secure` connections every 10 s and drops one silent for 30 s, and a
   client's direct carrier gives up after 30 s of silence, as relays and
@@ -687,7 +687,7 @@ Paths are in `getpaseo/paseo`.
 
 ## Smoke on one machine (coordinator, 2026-11-06, protocol 5 build)
 
-Release binaries of `backend/m4` (8e1c250), everything in a temporary
+Release binaries of `backend/m4` (53c9aa9), everything in a temporary
 directory, a testkit fake under `codex`; no real harness or account.
 
 - `vesseld relay` with a token file; a node with `--relay ws://...` and no
@@ -702,7 +702,7 @@ directory, a testkit fake under `codex`; no real harness or account.
   without scopes.
 - `node devices revoke` closed the device's connections; the next command
   from it got "this device was revoked on the node".
-- Over `wss://` on a public host (2026-11-07, `f27793b` built for that
+- Over `wss://` on a public host (2026-11-07, `39951b0` built for that
   host, aarch64, musl): the relay listens on loopback behind Cloudflare's
   proxy (a Cloudflare Tunnel to it, TLS at Cloudflare's edge), run as its
   own unprivileged service account with the token passed as a credential,
