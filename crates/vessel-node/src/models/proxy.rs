@@ -29,13 +29,45 @@
 //!   its built-in `openai` provider, which a routed session does not use)
 //!   are refused; `count_tokens` is answered with an estimate (a quarter
 //!   of the request's bytes) rather than a provider call.
+//!
+//! [Decision Log] (the security review of milestone 5)
+//! - Finding 4, admission before the body: every check that needs only
+//!   the headers runs before a byte of the body is read (`Origin`,
+//!   `Content-Encoding`, the token, then `Host`, the route, the limits),
+//!   and the body is then read under [`super::MAX_REQUEST`] and
+//!   [`BODY_DEADLINE`]; the places in the limits are held from admission
+//!   to the call's record. Connections and header reads are bounded by
+//!   the accept loop (`listen`).
+//! - `Host` (defence in depth against DNS rebinding): only
+//!   `127.0.0.1:<port>` and `localhost:<port>`, checked after the token,
+//!   so a request without one learns nothing more than 401.
+//! - Finding 2, the key in a 200 answer: a translated answer's failures
+//!   are redacted before they are written ([`Pump`]); a same-API stream is
+//!   decoded event by event and each event written again, its data
+//!   redacted, an error event's JSON strings decoded to find the key
+//!   however escaped ([`relay`]); a whole same-API answer is redacted the
+//!   same way. Writing events again (rather than the provider's chunks)
+//!   is what makes a key cut across two chunks whole before anything is
+//!   released; it loses only `id:` and `retry:`, which neither API uses.
+//! - Finding 5, a bounded answer: every answer the proxy reads as a
+//!   stream counts its bytes against [`Bounds::answer`] (the client's
+//!   body bound, 32 MiB), translated or not, streamed to the harness or
+//!   collected: past it the provider is cut off and the harness gets a
+//!   classified failure. Everything a translation keeps (collected
+//!   messages, tool arguments, signatures, the Responses front's final
+//!   snapshot) grows from those bytes, so it is bounded with them.
+//! - Downstream stalls: every write toward the harness has the client's
+//!   idle timeout ([`Bounds::send`]); a harness that stops reading is
+//!   treated as gone, and the provider cut off. A same-API stream Vessel
+//!   cannot decode is a classified failure, not passed on unread.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{Request, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::{get, post};
@@ -44,7 +76,7 @@ use serde::Serialize;
 use tokio::net::TcpListener;
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio_util::sync::CancellationToken;
-use vessel_llm::client::{Answer, Api, Endpoint};
+use vessel_llm::client::{Answer, Api, Endpoint, Redactor};
 use vessel_llm::sse::{SseDecoder, SseEvent, SseFrame, encode_comment, encode_event};
 use vessel_llm::wire::{anthropic, responses};
 use vessel_llm::{front, ir, passthrough, upstream};
@@ -63,6 +95,9 @@ const KEEPALIVE: Duration = Duration::from_secs(15);
 /// Bytes waiting between the task reading the provider and the response.
 const PIPE: usize = 32;
 
+/// How long a request's body may take to arrive once it is admitted.
+const BODY_DEADLINE: Duration = Duration::from_secs(30);
+
 /// Serve the proxy on `listener` until `stop`.
 pub(crate) async fn serve(models: Arc<Models>, listener: TcpListener, stop: CancellationToken) {
     let app = Router::new()
@@ -74,13 +109,26 @@ pub(crate) async fn serve(models: Arc<Models>, listener: TcpListener, stop: Canc
         // A GET with `Upgrade: websocket` on `/v1/responses` is Codex's
         // WebSocket transport: it must get the fallback's 426, not 405.
         .method_not_allowed_fallback(fallback)
-        .layer(DefaultBodyLimit::max(super::MAX_REQUEST))
         .with_state(models);
-    let served = axum::serve(listener, app)
-        .with_graceful_shutdown(async move { stop.cancelled().await })
-        .await;
-    if let Err(error) = served {
-        tracing::warn!(%error, "the model proxy stopped");
+    super::listen::run(listener, app, stop).await;
+}
+
+/// The bounds on what one call reads and writes.
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    /// The provider's answer, as it arrives (finding 5).
+    answer: usize,
+    /// One write toward the harness (a harness that stops reading).
+    send: Duration,
+}
+
+impl Bounds {
+    fn of(models: &Models) -> Self {
+        let limits = models.client().limits();
+        Self {
+            answer: limits.max_body,
+            send: limits.idle,
+        }
     }
 }
 
@@ -110,6 +158,8 @@ enum Refusal {
     Invalid,
     Busy,
     Upgrade,
+    TooLarge,
+    Slow,
 }
 
 impl Refusal {
@@ -122,6 +172,8 @@ impl Refusal {
             Self::Invalid => StatusCode::BAD_REQUEST,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
             Self::Upgrade => StatusCode::UPGRADE_REQUIRED,
+            Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::Slow => StatusCode::REQUEST_TIMEOUT,
         }
     }
 }
@@ -135,6 +187,8 @@ fn refuse(front: Front, refusal: Refusal, message: &str) -> Response {
                 Refusal::Forbidden => anthropic::ErrorKind::Permission,
                 Refusal::NotFound => anthropic::ErrorKind::NotFound,
                 Refusal::Busy => anthropic::ErrorKind::RateLimit,
+                Refusal::TooLarge => anthropic::ErrorKind::RequestTooLarge,
+                Refusal::Slow => anthropic::ErrorKind::Timeout,
                 Refusal::Unsupported | Refusal::Invalid | Refusal::Upgrade => {
                     anthropic::ErrorKind::InvalidRequest
                 }
@@ -156,7 +210,9 @@ fn refuse(front: Front, refusal: Refusal, message: &str) -> Response {
                 | Refusal::NotFound
                 | Refusal::Unsupported
                 | Refusal::Invalid
-                | Refusal::Upgrade => responses::ErrorType::InvalidRequest,
+                | Refusal::Upgrade
+                | Refusal::TooLarge
+                | Refusal::Slow => responses::ErrorType::InvalidRequest,
             });
             json(&body)
         }
@@ -190,10 +246,11 @@ struct Admitted {
 /// its record is written.
 type Slots = (OwnedSemaphorePermit, OwnedSemaphorePermit);
 
-/// The checks every model call passes, in order: no `Origin`, no
-/// compressed body, a live session's token, a route still defined, room in
-/// the limits.
-fn admit(models: &Models, headers: &HeaderMap, front: Front) -> Result<Admitted, Box<Response>> {
+/// The checks every model call passes before its body is read, in order:
+/// no `Origin`, no compressed body, a live session's token, the proxy's
+/// own address as `Host`, a route still defined, room in the limits.
+fn admit(models: &Models, parts: &Parts, front: Front) -> Result<Admitted, Box<Response>> {
+    let headers = &parts.headers;
     if headers.contains_key(header::ORIGIN) {
         tracing::info!("refused a model call with an Origin header");
         return Err(Box::new(refuse(
@@ -221,6 +278,14 @@ fn admit(models: &Models, headers: &HeaderMap, front: Front) -> Result<Admitted,
             "this proxy takes a running Vessel session's model token",
         )));
     };
+    if !own_host(models, parts) {
+        tracing::info!("refused a model call naming another host");
+        return Err(Box::new(refuse(
+            front,
+            Refusal::Forbidden,
+            "this proxy answers only requests to 127.0.0.1 or localhost at its own port",
+        )));
+    }
     let Some((route, provider)) = models.route(&holder.route) else {
         return Err(Box::new(refuse(
             front,
@@ -245,6 +310,79 @@ fn admit(models: &Models, headers: &HeaderMap, front: Front) -> Result<Admitted,
         provider,
         slots,
     })
+}
+
+/// Whether the request names the proxy itself: `Host` (or, without one,
+/// the request target's authority) is `127.0.0.1:<port>` or
+/// `localhost:<port>`. A page that reached the port through DNS rebinding
+/// names its own host.
+fn own_host(models: &Models, parts: &Parts) -> bool {
+    let Some(port) = models.port() else {
+        return false;
+    };
+    let named = parts
+        .headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| {
+            parts
+                .uri
+                .authority()
+                .map(axum::http::uri::Authority::as_str)
+        });
+    let Some((host, named_port)) = named.and_then(|named| named.rsplit_once(':')) else {
+        return false;
+    };
+    named_port.parse::<u16>().ok() == Some(port)
+        && (host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost"))
+}
+
+/// A request's body, read once it is admitted: at most
+/// [`super::MAX_REQUEST`] bytes within [`BODY_DEADLINE`].
+async fn read_body(body: Body, front: Front) -> Result<Bytes, Box<Response>> {
+    let limit = super::MAX_REQUEST;
+    let reading = async {
+        let mut stream = body.into_data_stream();
+        let mut read = bytes::BytesMut::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_broken| Refusal::Invalid)?;
+            if read.len().saturating_add(chunk.len()) > limit {
+                return Err(Refusal::TooLarge);
+            }
+            read.extend_from_slice(&chunk);
+        }
+        Ok(read.freeze())
+    };
+    match tokio::time::timeout(BODY_DEADLINE, reading).await {
+        Ok(Ok(body)) => Ok(body),
+        Ok(Err(Refusal::TooLarge)) => Err(Box::new(refuse(
+            front,
+            Refusal::TooLarge,
+            &format!("request bodies are limited to {limit} bytes"),
+        ))),
+        Ok(Err(_broken)) => Err(Box::new(refuse(
+            front,
+            Refusal::Invalid,
+            "the request's body could not be read",
+        ))),
+        Err(_elapsed) => Err(Box::new(refuse(
+            front,
+            Refusal::Slow,
+            "the request's body did not arrive in time",
+        ))),
+    }
+}
+
+/// Admit a request, then read its body.
+async fn admit_and_read(
+    models: &Models,
+    request: Request,
+    front: Front,
+) -> Result<(Admitted, Parts, Bytes), Box<Response>> {
+    let (parts, body) = request.into_parts();
+    let admitted = admit(models, &parts, front)?;
+    let body = read_body(body, front).await?;
+    Ok((admitted, parts, body))
 }
 
 /// The token a request presents: `Authorization: Bearer`, or `x-api-key`.
@@ -277,9 +415,9 @@ fn check_model(front: Front, route: &Route, asked: &str) -> Result<(), Box<Respo
 }
 
 /// `POST /v1/messages`: the Anthropic front (Claude Code).
-async fn messages(State(models): State<Arc<Models>>, headers: HeaderMap, body: Bytes) -> Response {
-    let admitted = match admit(&models, &headers, Front::Anthropic) {
-        Ok(admitted) => admitted,
+async fn messages(State(models): State<Arc<Models>>, request: Request) -> Response {
+    let (admitted, parts, body) = match admit_and_read(&models, request, Front::Anthropic).await {
+        Ok(read) => read,
         Err(response) => return *response,
     };
     if admitted.provider.flavor.api() == Api::AnthropicMessages {
@@ -291,7 +429,7 @@ async fn messages(State(models): State<Arc<Models>>, headers: HeaderMap, body: B
             return *response;
         }
         log_passthrough(&passed);
-        let forwarded = forward_headers(&headers);
+        let forwarded = forward_headers(&parts.headers);
         return pass(models, admitted, Front::Anthropic, passed, forwarded).await;
     }
     let request: anthropic::Request = match serde_json::from_slice(&body) {
@@ -308,13 +446,9 @@ async fn messages(State(models): State<Arc<Models>>, headers: HeaderMap, body: B
 }
 
 /// `POST /v1/responses`: the Responses front (Codex).
-async fn responses_call(
-    State(models): State<Arc<Models>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let admitted = match admit(&models, &headers, Front::Responses) {
-        Ok(admitted) => admitted,
+async fn responses_call(State(models): State<Arc<Models>>, request: Request) -> Response {
+    let (admitted, _parts, body) = match admit_and_read(&models, request, Front::Responses).await {
+        Ok(read) => read,
         Err(response) => return *response,
     };
     if admitted.provider.flavor.api() == Api::OpenAiResponses {
@@ -343,14 +477,11 @@ async fn responses_call(
 
 /// `POST /v1/messages/count_tokens`: an estimate, a quarter of the
 /// request's bytes (Claude Code shows it; no provider is called).
-async fn count_tokens(
-    State(models): State<Arc<Models>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if let Err(response) = admit(&models, &headers, Front::Anthropic) {
-        return *response;
-    }
+async fn count_tokens(State(models): State<Arc<Models>>, request: Request) -> Response {
+    let body = match admit_and_read(&models, request, Front::Anthropic).await {
+        Ok((_admitted, _parts, body)) => body,
+        Err(response) => return *response,
+    };
     let estimate = u64::try_from(body.len()).unwrap_or(u64::MAX).div_ceil(4);
     json(&anthropic::TokenCount {
         input_tokens: estimate,
@@ -360,13 +491,14 @@ async fn count_tokens(
 /// `GET /v1/models`: the models the session's route allows, in the shape
 /// of the API the caller speaks (Anthropic's when it sends
 /// `anthropic-version`).
-async fn list_models(State(models): State<Arc<Models>>, headers: HeaderMap) -> Response {
-    let front = if headers.contains_key("anthropic-version") {
+async fn list_models(State(models): State<Arc<Models>>, request: Request) -> Response {
+    let (parts, _body) = request.into_parts();
+    let front = if parts.headers.contains_key("anthropic-version") {
         Front::Anthropic
     } else {
         Front::Responses
     };
-    let admitted = match admit(&models, &headers, front) {
+    let admitted = match admit(&models, &parts, front) {
         Ok(admitted) => admitted,
         Err(response) => return *response,
     };
@@ -485,6 +617,8 @@ struct Outcome {
     usage: ir::Usage,
     stop: Option<ir::StopReason>,
     failure: Option<ir::FailureClass>,
+    /// The first failure, as the harness is told it (already redacted).
+    detail: Option<ir::Failure>,
 }
 
 impl Outcome {
@@ -492,7 +626,12 @@ impl Outcome {
         match event {
             ir::Event::Usage(usage) => self.usage = *usage,
             ir::Event::Stop(stop) => self.stop = Some(*stop),
-            ir::Event::Failed(failure) => self.failure = Some(failure.class),
+            ir::Event::Failed(failure) => {
+                self.failure = Some(failure.class);
+                if self.detail.is_none() {
+                    self.detail = Some(failure.clone());
+                }
+            }
             ir::Event::Text(_)
             | ir::Event::Thinking(_)
             | ir::Event::ThinkingEnd(_)
@@ -638,13 +777,66 @@ fn failure_response(front: Front, failure: &ir::Failure) -> Response {
         }
         // Codex reads failures inside the stream, with the codes it acts
         // on; so does a non-streaming caller, from the response's body.
+        Front::Responses => sse_response(failure_frames(front, failure)),
+    }
+}
+
+/// A failure as SSE events in `front`'s form, for a stream already under
+/// way or one that never started: Anthropic's `error` event, or a
+/// Responses `response.failed` (with its `response.created`).
+fn failure_frames(front: Front, failure: &ir::Failure) -> Vec<Bytes> {
+    match front {
+        Front::Anthropic => {
+            let answer = front::anthropic::error_response(failure);
+            serde_json::to_string(&answer.body)
+                .ok()
+                .and_then(|data| encode_event(Some("error"), &data).ok())
+                .into_iter()
+                .collect()
+        }
         Front::Responses => {
             let mut encoder = front::responses::StreamEncoder::new("", "", &[]);
             let mut out = Vec::new();
             encoder.push(ir::Event::Failed(failure.clone()), &mut out);
-            sse_response(out.iter().filter_map(responses_event).collect())
+            out.iter().filter_map(responses_event).collect()
         }
     }
+}
+
+/// The failure of an answer past [`Bounds::answer`] (finding 5).
+fn too_large(limit: usize) -> ir::Failure {
+    ir::Failure::new(
+        ir::FailureClass::UpstreamError,
+        format!("the provider's answer grew past {limit} bytes; the proxy cut it off"),
+    )
+}
+
+/// The failure of a stream Vessel cannot read as Server-Sent Events.
+fn unreadable() -> ir::Failure {
+    ir::Failure::new(
+        ir::FailureClass::UpstreamError,
+        "the provider's stream is not Server-Sent Events Vessel can read",
+    )
+}
+
+/// Write `items` toward the harness, each within `deadline`; `false` once
+/// the harness has gone or stopped reading.
+async fn deliver(
+    sender: &mpsc::Sender<Result<Bytes, std::io::Error>>,
+    items: impl IntoIterator<Item = Bytes>,
+    deadline: Duration,
+) -> bool {
+    for bytes in items {
+        match tokio::time::timeout(deadline, sender.send(Ok(bytes))).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_gone)) => return false,
+            Err(_stalled) => {
+                tracing::info!("a harness stopped reading its model answer; the call ends");
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn sse_response(chunks: Vec<Bytes>) -> Response {
@@ -696,21 +888,57 @@ async fn pass(
             return failure_response(front, &failure);
         }
     };
+    let redactor = answer.redactor();
     if !passed.stream {
         return match answer.body().await {
             Ok(body) => {
                 record.finish(&whole_outcome(front, &body));
+                // A 200 may carry a failed response, quoting the key.
+                let body = redact_whole(&redactor, body);
                 ([(header::CONTENT_TYPE, "application/json")], body).into_response()
             }
             Err(failure) => {
                 record.finish(&Outcome::failed(failure.class));
-                failure_response(front, &failure)
+                failure_response(front, &redactor.failure(failure))
             }
         };
     }
     let (sender, receiver) = mpsc::channel::<Result<Bytes, std::io::Error>>(PIPE);
-    drop(tokio::spawn(relay(answer, front, sender, record)));
+    drop(tokio::spawn(relay(
+        answer,
+        front,
+        sender,
+        record,
+        Bounds::of(&models),
+    )));
     sse_body(Body::from_stream(tokio_stream(receiver)))
+}
+
+/// A whole answer with the key removed from its JSON strings (or from its
+/// text, if it is not JSON); the provider's bytes when it holds none.
+fn redact_whole(redactor: &Redactor, body: Bytes) -> Bytes {
+    let text = String::from_utf8_lossy(&body);
+    match redactor.json(&text) {
+        std::borrow::Cow::Borrowed(_) => body,
+        std::borrow::Cow::Owned(redacted) => Bytes::from(redacted),
+    }
+}
+
+/// One event of a same-API stream as the harness gets it: written again,
+/// its data redacted; an error event's JSON strings decoded to find the
+/// key however escaped. `None` for an event name SSE cannot carry (the
+/// decoder never yields one).
+fn release(event: &SseEvent, redactor: &Redactor) -> Option<Bytes> {
+    let error = matches!(
+        event.event.as_deref(),
+        Some("error" | "response.failed" | "response.incomplete")
+    ) || event.data.contains("\"error\"");
+    let data = if error {
+        redactor.json(&event.data)
+    } else {
+        redactor.text(&event.data)
+    };
+    encode_event(event.event.as_deref(), &data).ok()
 }
 
 /// A non-streamed answer's usage and stop.
@@ -739,6 +967,7 @@ fn whole_outcome(front: Front, body: &[u8]) -> Outcome {
                     | None => ir::StopReason::EndTurn,
                 }),
                 failure: None,
+                detail: None,
             },
         ),
         Front::Responses => serde_json::from_slice::<responses::Response>(body).map_or_else(
@@ -765,6 +994,7 @@ fn whole_outcome(front: Front, body: &[u8]) -> Outcome {
                     | responses::ResponseStatus::Unknown(_) => ir::StopReason::EndTurn,
                 }),
                 failure: None,
+                detail: None,
             },
         ),
     }
@@ -793,14 +1023,18 @@ impl Tap {
     }
 }
 
-/// Copy a same-API stream to the harness, reading it alongside for the
-/// record.
+/// Copy a same-API stream to the harness event by event (see [`release`]),
+/// reading it alongside for the record, within [`Bounds`]; a stream that
+/// cannot be decoded, or grows past the bound, ends in a failure in the
+/// front's form.
 async fn relay(
     answer: Answer,
     front: Front,
     sender: mpsc::Sender<Result<Bytes, std::io::Error>>,
     record: Record,
+    bounds: Bounds,
 ) {
+    let redactor = answer.redactor();
     let mut tap = match front {
         Front::Anthropic => Tap::Anthropic(upstream::anthropic::StreamDecoder::new()),
         Front::Responses => Tap::Responses(upstream::responses::StreamDecoder::new()),
@@ -809,27 +1043,52 @@ async fn relay(
     let mut outcome = Outcome::default();
     let mut frames = Vec::new();
     let mut events = Vec::new();
+    let mut budget = bounds.answer;
     let mut chunks = chunks(answer);
-    while let Some(chunk) = chunks.next().await {
-        let bytes = match chunk {
-            Ok(bytes) => bytes,
-            Err(failure) => {
-                outcome.failure = Some(failure.class);
-                break;
-            }
-        };
-        if sse.feed(&bytes, &mut frames).is_ok() {
-            for frame in frames.drain(..) {
-                if let SseFrame::Event(event) = frame {
-                    tap.push(&event, &mut events);
+    loop {
+        let (ended, failure) = match chunks.next().await {
+            None => (
+                true,
+                std::mem::take(&mut sse)
+                    .finish(&mut frames)
+                    .err()
+                    .map(|_unreadable| unreadable()),
+            ),
+            Some(Err(failure)) => (true, Some(failure)),
+            Some(Ok(bytes)) => match budget.checked_sub(bytes.len()) {
+                None => (true, Some(too_large(bounds.answer))),
+                Some(left) => {
+                    budget = left;
+                    let fed = sse.feed(&bytes, &mut frames);
+                    (fed.is_err(), fed.err().map(|_unreadable| unreadable()))
                 }
-            }
-            for event in events.drain(..) {
-                outcome.see(&event);
+            },
+        };
+        let mut out = Vec::new();
+        for frame in frames.drain(..) {
+            match frame {
+                SseFrame::Event(event) => {
+                    tap.push(&event, &mut events);
+                    out.extend(release(&event, &redactor));
+                }
+                SseFrame::Comment => out.push(encode_comment("keepalive")),
             }
         }
-        if sender.send(Ok(bytes)).await.is_err() {
-            // The harness went away.
+        for event in events.drain(..) {
+            outcome.see(&event);
+        }
+        if let Some(failure) = &failure {
+            outcome.see(&ir::Event::Failed(redactor.failure(failure.clone())));
+            out.extend(failure_frames(front, &redactor.failure(failure.clone())));
+        }
+        if !deliver(&sender, out, bounds.send).await {
+            // The harness went away, or stopped reading.
+            if outcome.failure.is_none() && outcome.stop.is_none() {
+                outcome.failure = Some(ir::FailureClass::Truncated);
+            }
+            break;
+        }
+        if ended {
             break;
         }
     }
@@ -924,10 +1183,14 @@ async fn translate(
         Flavor::Chat { .. } => Decoder::Chat(upstream::chat::StreamDecoder::new()),
     };
     let (sender, receiver) = mpsc::channel::<Result<Bytes, std::io::Error>>(PIPE);
+    let bounds = Bounds::of(&models);
     let pump = Pump {
         decoder,
         encoder,
         record,
+        redactor: answer.redactor(),
+        budget: bounds.answer,
+        bounds,
     };
     if stream {
         drop(tokio::spawn(pump.run(answer, sender)));
@@ -1070,6 +1333,11 @@ struct Pump {
     decoder: Decoder,
     encoder: Encoder,
     record: Record,
+    /// Removes the call's key from every failure before it is written.
+    redactor: Redactor,
+    /// What is left of [`Bounds::answer`].
+    budget: usize,
+    bounds: Bounds,
 }
 
 impl Pump {
@@ -1084,11 +1352,12 @@ impl Pump {
         let mut ticker = tokio::time::interval_at(start, KEEPALIVE);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut gone = false;
+        let deadline = self.bounds.send;
         while !self.ended() && !gone {
             let chunk = tokio::select! {
                 chunk = chunks.next() => chunk,
                 _tick = ticker.tick() => {
-                    gone = sender.send(Ok(self.encoder.keepalive())).await.is_err();
+                    gone = !deliver(&sender, [self.encoder.keepalive()], deadline).await;
                     continue;
                 }
             };
@@ -1096,12 +1365,7 @@ impl Pump {
             let Some(written) = self.step(chunk, &mut sse, &mut outcome) else {
                 break;
             };
-            for bytes in written.bytes() {
-                if sender.send(Ok(bytes)).await.is_err() {
-                    gone = true;
-                    break;
-                }
-            }
+            gone = !deliver(&sender, written.bytes(), deadline).await;
         }
         if gone && outcome.stop.is_none() && outcome.failure.is_none() {
             outcome.failure = Some(ir::FailureClass::Truncated);
@@ -1135,6 +1399,11 @@ impl Pump {
             }
         }
         self.record.finish(&outcome);
+        // A failure (the provider's, redacted, or the answer's bound) is
+        // answered as a failure, with the status its class calls for.
+        if let Some(failure) = &outcome.detail {
+            return failure_response(front, failure);
+        }
         match front {
             Front::Anthropic => match anthropic_out.finish() {
                 Ok(message) => json(&message),
@@ -1167,20 +1436,23 @@ impl Pump {
         }
         let mut neutral = Vec::new();
         match chunk {
-            Some(Ok(bytes)) => {
-                let mut frames = Vec::new();
-                if sse.feed(&bytes, &mut frames).is_err() {
-                    neutral.push(ir::Event::Failed(ir::Failure::new(
-                        ir::FailureClass::UpstreamError,
-                        "the provider's stream is not Server-Sent Events Vessel can read",
-                    )));
-                }
-                for frame in frames {
-                    if let SseFrame::Event(event) = frame {
-                        self.decoder.push(&event, &mut neutral);
+            Some(Ok(bytes)) => match self.budget.checked_sub(bytes.len()) {
+                // Past the bound: the provider is cut off (the caller stops
+                // reading once the answer has ended).
+                None => neutral.push(ir::Event::Failed(too_large(self.bounds.answer))),
+                Some(left) => {
+                    self.budget = left;
+                    let mut frames = Vec::new();
+                    if sse.feed(&bytes, &mut frames).is_err() {
+                        neutral.push(ir::Event::Failed(unreadable()));
+                    }
+                    for frame in frames {
+                        if let SseFrame::Event(event) = frame {
+                            self.decoder.push(&event, &mut neutral);
+                        }
                     }
                 }
-            }
+            },
             Some(Err(failure)) => neutral.push(ir::Event::Failed(failure)),
             None => self.decoder.finish(&mut neutral),
         }
@@ -1189,7 +1461,11 @@ impl Pump {
             Encoder::Anthropic(_) => Written::Anthropic(Vec::new()),
             Encoder::Responses(_) => Written::Responses(Vec::new()),
         };
-        for event in neutral {
+        for mut event in neutral {
+            // An inline error from a 200 stream may quote the key.
+            if let ir::Event::Failed(failure) = &mut event {
+                *failure = self.redactor.failure(failure.clone());
+            }
             outcome.see(&event);
             merge(&mut written, self.encoder.push(event));
         }

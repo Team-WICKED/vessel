@@ -21,6 +21,7 @@
 //!   limit, which harnesses back off from.
 
 pub(crate) mod config;
+mod listen;
 pub(crate) mod proxy;
 #[cfg(test)]
 mod tests;
@@ -295,6 +296,11 @@ impl Models {
         self.addr.get().map(|addr| format!("http://{addr}"))
     }
 
+    /// The proxy's port, once it listens (its `Host` check).
+    pub(crate) fn port(&self) -> Option<u16> {
+        self.addr.get().map(SocketAddr::port)
+    }
+
     /// The proxy listens at `addr`.
     pub(crate) fn listening(&self, addr: SocketAddr) {
         let _first = self.addr.set(addr);
@@ -305,11 +311,13 @@ impl Models {
     /// fakes only).
     #[cfg(test)]
     pub(crate) fn for_tests(dir: &DataDir) -> Self {
-        let client = Client::with_roots(
-            rustls::RootCertStore::empty(),
-            vessel_llm::client::Limits::default(),
-        )
-        .unwrap();
+        Self::for_tests_with(dir, vessel_llm::client::Limits::default())
+    }
+
+    /// [`for_tests`](Self::for_tests) with the client's `limits`.
+    #[cfg(test)]
+    pub(crate) fn for_tests_with(dir: &DataDir, limits: vessel_llm::client::Limits) -> Self {
+        let client = Client::with_roots(rustls::RootCertStore::empty(), limits).unwrap();
         Self::load(dir.clone(), FleetFiles::new(dir), client).unwrap()
     }
 }

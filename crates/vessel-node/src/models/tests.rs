@@ -17,9 +17,10 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use vessel_harness::Lookup;
 use vessel_harness::fakes::{Role, install};
+use vessel_llm::client::Limits;
 use vessel_proto::{
-    EventRecord, HarnessKind, ModelApi, ModelCall, ModelStop, SessionEvent, SessionMode,
-    SessionSpec, TerminalSize,
+    EventRecord, HarnessKind, ModelApi, ModelCall, ModelFailure, ModelStop, SessionEvent,
+    SessionMode, SessionSpec, TerminalSize,
 };
 use vessel_session::{
     DEFAULT_DURABLE_CAPACITY, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_RING_CAPACITY, RuntimeConfig,
@@ -50,6 +51,12 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with(Limits::default()).await
+    }
+
+    /// A fixture whose upstream client has `limits` (the proxy's answer
+    /// bound and write deadline come from them).
+    async fn with(limits: Limits) -> Self {
         let data = tempfile::tempdir().unwrap();
         let bin = tempfile::tempdir().unwrap();
         let tui = Fake::Tui.path().unwrap();
@@ -68,7 +75,7 @@ impl Fixture {
         let dir = DataDir::new(data.path());
         write_models(&dir, &upstream.url());
         set_secret(&FleetFiles::new(&dir), &"TEST_KEY".parse().unwrap(), KEY).unwrap();
-        let models = Arc::new(Models::for_tests(&dir));
+        let models = Arc::new(Models::for_tests_with(&dir, limits));
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap();
@@ -213,8 +220,29 @@ async fn call(
     headers: &[(&str, &str)],
     body: &str,
 ) -> Answer {
+    call_as(proxy, &proxy.to_string(), request_line, headers, body).await
+}
+
+/// [`call`] naming `host` as its `Host`.
+async fn call_as(
+    proxy: SocketAddr,
+    host: &str,
+    request_line: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> Answer {
+    let request = request_text(host, request_line, headers, body);
+    let mut stream = TcpStream::connect(proxy).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    let _read = stream.read_to_end(&mut response).await.unwrap();
+    parse(&response)
+}
+
+/// A request as the bytes a harness sends.
+fn request_text(host: &str, request_line: &str, headers: &[(&str, &str)], body: &str) -> String {
     let mut request = format!(
-        "{request_line} HTTP/1.1\r\nhost: {proxy}\r\nconnection: close\r\n\
+        "{request_line} HTTP/1.1\r\nhost: {host}\r\nconnection: close\r\n\
          content-type: application/json\r\ncontent-length: {}\r\n",
         body.len()
     );
@@ -223,11 +251,7 @@ async fn call(
     }
     request.push_str("\r\n");
     request.push_str(body);
-    let mut stream = TcpStream::connect(proxy).await.unwrap();
-    stream.write_all(request.as_bytes()).await.unwrap();
-    let mut response = Vec::new();
-    let _read = stream.read_to_end(&mut response).await.unwrap();
-    parse(&response)
+    request
 }
 
 fn parse(response: &[u8]) -> Answer {
@@ -589,11 +613,8 @@ fn a_models_file_others_can_read_is_refused() {
     let data = tempfile::tempdir().unwrap();
     let dir = DataDir::new(data.path());
     let client = || {
-        vessel_llm::client::Client::with_roots(
-            rustls::RootCertStore::empty(),
-            vessel_llm::client::Limits::default(),
-        )
-        .unwrap()
+        vessel_llm::client::Client::with_roots(rustls::RootCertStore::empty(), Limits::default())
+            .unwrap()
     };
     write_models(&dir, "http://127.0.0.1:9");
     let open = std::fs::Permissions::from_mode(0o644);
@@ -612,4 +633,264 @@ fn a_models_file_others_can_read_is_refused() {
         Err(super::ModelsError::NotOwnerOnly)
     ));
     assert_eq!(models.list().len(), 2);
+}
+
+/// The next model call recorded in `handle`'s log, as it happens.
+async fn next_call(handle: &SessionHandle) -> ModelCall {
+    let follow = handle.follow(vessel_proto::EventSeq::ZERO).unwrap();
+    for record in &follow.cached {
+        if let SessionEvent::ModelCall(call) = &record.event {
+            return call.clone();
+        }
+    }
+    let mut live = follow.live;
+    loop {
+        let record = live.recv().await.unwrap();
+        if let SessionEvent::ModelCall(call) = &record.event {
+            return call.clone();
+        }
+    }
+}
+
+/// Anthropic stream events: `count` text deltas of `size` bytes each.
+fn deltas(count: usize, size: usize) -> Bytes {
+    let delta = format!(
+        "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\
+         \"delta\":{{\"type\":\"text_delta\",\"text\":\"{}\"}}}}\n\n",
+        "a".repeat(size)
+    );
+    Bytes::from(delta.repeat(count))
+}
+
+/// [`MESSAGE`], streamed.
+fn streamed() -> String {
+    MESSAGE.replacen(
+        "\"max_tokens\":64,",
+        "\"max_tokens\":64,\"stream\":true,",
+        1,
+    )
+}
+
+/// `Host` must name the proxy itself (defence in depth against DNS
+/// rebinding), checked after the token: without one, 401 whatever the
+/// host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_proxy_s_own_host_is_answered() {
+    within(async {
+        let fixture = Fixture::new().await;
+        let (handle, token, records) = fixture.session("sonnet").await;
+        let bearer = format!("Bearer {token}");
+        let port = fixture.proxy.port();
+        let ask = |host: String, headers: Vec<(&'static str, String)>| {
+            let proxy = fixture.proxy;
+            async move {
+                let headers: Vec<(&str, &str)> = headers
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
+                call_as(proxy, &host, "GET /v1/models", &headers, "")
+                    .await
+                    .status
+            }
+        };
+        let with = || vec![("authorization", bearer.clone())];
+        for host in [
+            format!("rebind.example:{port}"),
+            format!("localhost.rebind.example:{port}"),
+            "127.0.0.1:1".to_owned(),
+            "127.0.0.1".to_owned(),
+        ] {
+            assert_eq!(ask(host.clone(), with()).await, 403, "{host}");
+            assert_eq!(ask(host.clone(), Vec::new()).await, 401, "{host}");
+        }
+        for host in [
+            format!("127.0.0.1:{port}"),
+            format!("localhost:{port}"),
+            format!("LocalHost:{port}"),
+        ] {
+            assert_eq!(ask(host.clone(), with()).await, 200, "{host}");
+        }
+        assert!(fixture.upstream.seen().is_empty());
+        drop(model_calls(&handle, records).await);
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// A harness that stops reading its streamed answer: the write deadline
+/// (the client's idle timeout, a second here) ends the call, recorded as
+/// cut off, instead of holding the session's place for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_harness_that_stops_reading_ends_its_call() {
+    within(async {
+        let limits = Limits {
+            idle: Duration::from_secs(1),
+            ..Limits::default()
+        };
+        let fixture = Fixture::with(limits).await;
+        let (handle, token, records) = fixture.session("sonnet").await;
+        // About 24 MiB: more than the sockets between hold, less than the
+        // answer's bound.
+        fixture.upstream.reply(Reply::Stream {
+            body: deltas(6 * 1024, 4096),
+            piece: 64 * 1024,
+        });
+        let request = request_text(
+            &fixture.proxy.to_string(),
+            "POST /v1/messages",
+            &[("authorization", &format!("Bearer {token}"))],
+            &streamed(),
+        );
+        let mut socket = TcpStream::connect(fixture.proxy).await.unwrap();
+        socket.write_all(request.as_bytes()).await.unwrap();
+        // Never read.
+        let call = next_call(&handle).await;
+        assert_eq!(call.failure, Some(ModelFailure::Truncated), "{call:?}");
+        drop(socket);
+        drop(model_calls(&handle, records).await);
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// A same-API stream Vessel cannot decode is not passed on unread: the
+/// harness gets an error in its own form, and the call is a failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stream_vessel_cannot_read_is_a_failure() {
+    within(async {
+        let fixture = Fixture::new().await;
+        let (handle, token, records) = fixture.session("sonnet").await;
+        fixture.upstream.reply(Reply::Stream {
+            body: Bytes::from_static(b"event: message_start\ndata: \xff\xfe\n\n"),
+            piece: 64,
+        });
+        let got = fixture
+            .call(
+                "POST /v1/messages",
+                &[("authorization", &format!("Bearer {token}"))],
+                &streamed(),
+            )
+            .await;
+        assert_eq!(got.status, 200, "{got:?}");
+        assert!(got.body.contains("event: error"), "{got:?}");
+        assert!(got.body.contains("not Server-Sent Events"), "{got:?}");
+        let calls = model_calls(&handle, records).await;
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].failure, Some(ModelFailure::UpstreamError));
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// An answer that grows past the bound is cut off, same API or
+/// translated, streamed or collected (finding 5, with a 64 KiB bound).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_past_the_bound_is_cut_off() {
+    within(async {
+        let limits = Limits {
+            max_body: 64 * 1024,
+            ..Limits::default()
+        };
+        let fixture = Fixture::with(limits).await;
+        let (sonnet, token, sonnet_records) = fixture.session("sonnet").await;
+        fixture.upstream.reply(Reply::Stream {
+            body: deltas(200, 1024),
+            piece: 4096,
+        });
+        let got = fixture
+            .call(
+                "POST /v1/messages",
+                &[("authorization", &format!("Bearer {token}"))],
+                &streamed(),
+            )
+            .await;
+        assert!(got.body.len() < 80 * 1024, "{}", got.body.len());
+        assert!(got.body.contains("event: error"), "{}", got.body.len());
+        assert!(got.body.contains("grew past 65536 bytes"));
+
+        let (qwen, token, qwen_records) = fixture.session("qwen").await;
+        let delta = format!(
+            "data: {{\"id\":\"c1\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{}\"}},\
+             \"finish_reason\":null}}]}}\n\n",
+            "a".repeat(1024)
+        );
+        fixture.upstream.reply(Reply::Stream {
+            body: Bytes::from(delta.repeat(200)),
+            piece: 4096,
+        });
+        let request = r#"{"model":"qwen/qwen3-coder","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}"#;
+        let got = fixture
+            .call(
+                "POST /v1/messages",
+                &[("authorization", &format!("Bearer {token}"))],
+                request,
+            )
+            .await;
+        assert!(got.status >= 500, "{got:?}");
+        assert!(got.body.contains("grew past 65536 bytes"), "{got:?}");
+
+        for (handle, records) in [(sonnet, sonnet_records), (qwen, qwen_records)] {
+            let calls = model_calls(&handle, records).await;
+            assert_eq!(calls.len(), 1, "{calls:?}");
+            assert_eq!(calls[0].failure, Some(ModelFailure::UpstreamError));
+        }
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// A successful status does not mean the answer holds no key: a whole
+/// same-API answer quoting it reaches the harness redacted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_whole_answer_quoting_the_key_is_redacted() {
+    within(async {
+        let fixture = Fixture::new().await;
+        let (handle, token, records) = fixture.session("sonnet").await;
+        let answer = format!(
+            r#"{{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{{"type":"text","text":"the key was {}"}}],"stop_reason":"end_turn","stop_sequence":null,"usage":{{"input_tokens":1,"output_tokens":1}}}}"#,
+            KEY.replace('-', "\\u002d")
+        );
+        fixture.upstream.reply(Reply::Status {
+            status: 200,
+            body: Bytes::from(answer),
+            retry_after: None,
+        });
+        let got = fixture
+            .call(
+                "POST /v1/messages",
+                &[("authorization", &format!("Bearer {token}"))],
+                MESSAGE,
+            )
+            .await;
+        assert_eq!(got.status, 200, "{got:?}");
+        let text = got.json()["content"][0]["text"].as_str().unwrap().to_owned();
+        assert_eq!(text, "the key was [redacted]");
+        drop(model_calls(&handle, records).await);
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// Past [`super::listen::MAX_CONNECTIONS`] a connection is answered 503
+/// and closed before any byte is read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connections_past_the_limit_are_refused() {
+    within(async {
+        let fixture = Fixture::new().await;
+        let mut held = Vec::new();
+        for _ in 0..super::listen::MAX_CONNECTIONS {
+            held.push(TcpStream::connect(fixture.proxy).await.unwrap());
+        }
+        let mut extra = TcpStream::connect(fixture.proxy).await.unwrap();
+        let mut answer = Vec::new();
+        let _read = extra.read_to_end(&mut answer).await.unwrap();
+        assert!(
+            answer.starts_with(b"HTTP/1.1 503 "),
+            "{}",
+            String::from_utf8_lossy(&answer)
+        );
+        drop(held);
+        fixture.stop().await;
+    })
+    .await;
 }

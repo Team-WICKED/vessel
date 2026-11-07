@@ -28,6 +28,13 @@ vessel-session.workspace = true
 vessel-store.workspace = true
 
 axum.workspace = true
+# The model proxy's own accept loop (`models::listen`): HTTP/1 with a
+# header-read deadline and a bounded number of connections, which
+# `axum::serve` cannot give (the M5 security review, finding 4). Already
+# in the tree through axum and vessel-relay.
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
