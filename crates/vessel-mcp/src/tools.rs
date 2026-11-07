@@ -22,6 +22,8 @@
 //!   [`EARLY_PAUSE`] before the next, so that is a poll a second, not a
 //!   busy loop.
 
+mod lsp;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -82,6 +84,7 @@ impl VesselTools {
 
     async fn call(&self, name: &str, args: &JsonObject) -> Result<Value, ToolError> {
         match name {
+            name if name.starts_with("vessel_lsp_") => self.lsp(name, args).await,
             "list_nodes" => Ok(json!(self.client.call(ListNodes).await?)),
             "list_sessions" => {
                 let node = self.target(args).await?;
@@ -459,6 +462,9 @@ impl ServerHandler for VesselTools {
         match self.call(&request.name, &args).await {
             Ok(value) => Ok(CallToolResult::success(vec![McpContent::text(pretty(&value))]).into()),
             Err(ToolError::Arguments(message)) => Err(ErrorData::invalid_params(message, None)),
+            Err(ToolError::LspJson(error)) => {
+                Err(ErrorData::invalid_params(error.to_string(), None))
+            }
             Err(refused) => {
                 Ok(CallToolResult::error(vec![McpContent::text(refused.to_string())]).into())
             }
@@ -472,6 +478,9 @@ enum ToolError {
     /// The call itself is wrong: a JSON-RPC error.
     #[error("{0}")]
     Arguments(String),
+    /// Typed LSP arguments or results failed to encode/decode at the SDK edge.
+    #[error("invalid LSP tool JSON")]
+    LspJson(#[source] serde_json::Error),
     /// The node refused or failed; the agent reads why.
     #[error("{}", node_error(.0))]
     Node(#[from] CallError),
@@ -535,6 +544,10 @@ fn session(args: &JsonObject) -> Result<SessionId, ToolError> {
 
 /// Every tool with its input schema.
 fn tools() -> Vec<Tool> {
+    session_tools().into_iter().chain(lsp::tools()).collect()
+}
+
+fn session_tools() -> Vec<Tool> {
     let session = json!({ "type": "string", "description": "A session id." });
     let node = json!({
         "type": "string",

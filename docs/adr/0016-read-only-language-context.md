@@ -77,3 +77,61 @@ per-language policy set. Windows receives the node-supplied `SystemRoot`;
 clearing the environment must not make platform DLL/runtime lookup depend
 on a repository path. A process-crate child test enumerates its environment
 and verifies that only explicitly supplied variables remain.
+
+## Conservative execution policy (coordinator additions)
+
+A Read-scoped caller must not turn normal analysis into repository code
+execution. Operator-selected binaries and the explicit operator home remain
+trusted. Full analysis is an operator-only per-root choice, never an RPC
+argument. It does not restore arbitrary inherited environment or downloads.
+
+| Server | What could execute | Conservative policy | Full analysis |
+| --- | --- | --- | --- |
+| rust-analyzer | `build.rs`, proc macros, Cargo wrappers/rustc/runners/aliases, forced `[env]` loader injection, a repository-selected rustup toolchain | Build scripts, proc macros and check-on-save off; offline Cargo; `RUSTUP_AUTO_INSTALL=0`; wrappers empty; trusted PATH cargo/rustc pinned in environment. Project/ancestor Cargo configs accept only inert `build.target-dir/jobs/incremental` and `profile.*.debug`; other settings, includes and path/named toolchains are refused before launch and before queries. Operator-home Cargo config remains trusted. | Enables build scripts, proc macros and check-on-save; permits project configuration. |
+| typescript-language-server | Workspace `node_modules/typescript/tsserver.js`, plugins and automatic npm type acquisition | Trusted global/operator `tsserver.js` pinned in initialization; ATA off; plugin/extends/project-reference configuration refused. Relative/empty/repository PATH entries never select tools. | May use the workspace engine and project configuration; ATA remains off. |
+| gopls | A downloaded Go toolchain, dependency fetching, cgo toolchains | `GOTOOLCHAIN=local`, `GOFLAGS=-mod=readonly`, `GOPROXY=off`, `GOSUMDB=off`, `GOENV=off`, `GOVCS=*:off`, `CGO_ENABLED=0`. The exposed queries never invoke `go generate`, test or run. Its package discovery uses trusted `go list`/`go env`, which do not run package initializers. | Allows cgo; download and generate/run restrictions remain. |
+| clangd | Compiler-driver queries from compilation databases, executable project configuration | Empty `--query-driver` list, reject operator arguments that would add entries in conservative mode, `--enable-config=false`; no code-action/execute-command path. | Operator command arguments and project clangd configuration may apply. |
+| pyright / basedpyright | Python used to discover search paths, a configured venv/interpreter, startup imports | No interpreter/venv/extends overrides: only the supported inert JSON/TOML settings are accepted. `PYTHONSAFEPATH=1`, `PYTHONNOUSERSITE=1`, no `PYTHONPATH`; startup-shadow files at the root are refused. Trusted PATH selects the interpreter. | Allows project interpreter/venv configuration. |
+
+All servers receive `CommandSpec::env_clear`, an explicit filtered PATH,
+locale, home/temp locations and Windows `SystemRoot` when supplied. No agent
+credentials, `NODE_OPTIONS`, `LD_PRELOAD` or other daemon environment survives.
+Repository configuration is rechecked before a query; refusals say
+`unavailable: project configuration can run code; the operator can enable
+full analysis for this root`. Conservative parsing rejects comments or
+unsupported config syntax rather than guessing that it is harmless.
+
+These are application checks, **not an OS sandbox**. A malicious process
+running as the same OS account can race filesystem changes, replace trusted
+executables or alter operator-owned settings. Server bugs and native compiler
+parsers are also outside this boundary. Install only trusted tools, keep
+operator settings outside writable repositories, and use OS isolation for
+untrusted actors. A full-analysis root deliberately allows its build tools.
+
+Grounding (primary sources, read 2026-11-07):
+[rust-analyzer configuration](https://rust-analyzer.github.io/book/configuration.html),
+[TypeScript server configuration](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md),
+[gopls settings](https://go.dev/gopls/settings),
+[clangd configuration](https://clangd.llvm.org/config),
+[Pyright interpreter execution](https://github.com/microsoft/pyright/blob/main/packages/pyright-internal/src/common/fullAccessHost.ts).
+Pyright does execute Python for search-path discovery; saying it never
+executes an interpreter would be incorrect.
+
+
+## Rust readiness and saved project changes
+
+The real-server smoke exposed a distinction a fake cannot: disabling Cargo
+reloads before initial loading leaves rust-analyzer with document syntax but
+no usable crate graph. The client advertises its typed `serverStatus` extension,
+allows the one preflighted initial load, waits for quiescence within its
+startup deadline, then disables background Cargo reloads before serving a
+query. Config/manifest metadata changes cause a policy recheck and a new
+server generation, so a changed project cannot silently reuse the old graph.
+LSP ContentModified/ServerCancelled reads retry at most three times within
+the whole-query deadline. No sleep loop guesses readiness.
+
+The smoke uses an already-installed analyzer and toolchain with rust-src,
+plus an explicitly selected trusted offline Cargo cache, under an isolated
+server/agent home. It neither installs components nor uses real harness
+accounts. Missing rust-src/cache can reduce analysis; offline does not mean
+returning syntax-only results should be reported as full semantic coverage.

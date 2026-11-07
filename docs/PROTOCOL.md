@@ -10,8 +10,8 @@ Nodes speak 2..=7. The M6 LSP rows append to the RPC table with `since 7`:
 `lsp.workspace_symbols`, `lsp.document_symbols`, `lsp.definition`,
 `lsp.references`, `lsp.hover`, `lsp.implementations`, `lsp.type_definition`,
 `lsp.incoming_calls`, `lsp.outgoing_calls`, `lsp.diagnostics`. All need Read
-and are forwardable under the existing scope intersection. The contract is
-staged: until the runtime lands, authorized calls return `unsupported`.
+and are forwardable under the existing scope intersection. The runtime serves the implemented capability subset and returns
+`unsupported` when the selected server does not advertise a feature.
 
 Each request selects `workspace: {root, language}`. Languages are `rust`,
 `type_script`, `python`, `go`, `cpp`. Files are relative paths without
@@ -19,7 +19,7 @@ traversal. Positions use 1-based lines and Unicode scalar columns; ranges
 have exclusive ends. Page requests default to offset 0, limit 50; the node
 caps limits at 200. Pages are sorted but may shift when files change.
 
-Responses carry context: covered files, optional observation time, freshness
+Responses carry context: covered files, optional observation time (the oldest contributing cached report), freshness
 (`saved`, `cached`, `unknown`), indexing (`unknown`, `busy`, `observed_idle`)
 and explicit workspace completeness. An empty diagnostics cache is unknown,
 not clean. Hover is bounded untrusted plaintext/Markdown; clients disable

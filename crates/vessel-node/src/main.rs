@@ -44,6 +44,15 @@ struct Args {
 /// Running the node (the default).
 #[derive(Debug, clap::Args)]
 struct Run {
+    /// Operator-owned LSP roots and trusted executable overrides (JSON).
+    #[arg(long)]
+    lsp_config: Option<PathBuf>,
+    /// Saved-source root allowed to Read callers, including the fleet (repeatable).
+    #[arg(long = "lsp-root")]
+    lsp_roots: Vec<PathBuf>,
+    /// Trusted root where LSP may run build scripts/proc macros (repeatable).
+    #[arg(long = "lsp-full-analysis-root")]
+    lsp_full_roots: Vec<PathBuf>,
     /// TCP address for the websocket, or `none` to serve only the local
     /// socket (reached through `vesseld attach`, for example over SSH).
     #[arg(long, env = "VESSEL_BIND", default_value = "127.0.0.1:7077")]
@@ -392,6 +401,30 @@ async fn run(dir: DataDir, args: Run) -> ExitCode {
         Bind::None => None,
     };
     config.name = args.name;
+    config.lsp.registry.search_path = std::env::var_os("PATH").unwrap_or_default();
+    config.lsp.registry.system_root = std::env::var_os("SystemRoot");
+    if let Some(path) = args.lsp_config
+        && let Err(error) = vessel_node::load_lsp_config(&mut config, &path).await
+    {
+        tracing::error!(%error, "LSP configuration refused");
+        return ExitCode::FAILURE;
+    }
+    config.lsp_roots.extend(
+        args.lsp_roots
+            .into_iter()
+            .map(|path| vessel_node::LspRoot {
+                path,
+                full_analysis: false,
+            })
+            .chain(
+                args.lsp_full_roots
+                    .into_iter()
+                    .map(|path| vessel_node::LspRoot {
+                        path,
+                        full_analysis: true,
+                    }),
+            ),
+    );
     config.agent_handshake_timeout = Duration::from_secs(args.agent_handshake_timeout);
     config.relays = args.relays;
     config.relay_token_file = args.relay_token_file;

@@ -162,8 +162,8 @@ No credentials, private paths or host details in docs/fixtures/logs.
 
 ## Done criteria
 
-- Fake-driven tests cover initialize/initialized, concurrent out-of-order
-  replies, server requests, UTF-16 emoji/combining/CRLF conversion, sync and
+- Fake-driven tests cover initialize/initialized, serialized correlated
+  replies with notifications interleaved, server requests, UTF-16 emoji/combining/CRLF conversion, sync and
   deletion, diagnostics/progress, cancellation, EOF, malformed/oversized
   headers/bodies, crash/backoff, idle and process-tree cleanup.
 - Each RPC roundtrips; older protocols refuse before dispatch. Read-only
@@ -238,3 +238,38 @@ Zed source inspected at commit `654efae441bc8eb117d0042bb28cd7cf3570bdc9`:
 Primary references: [LSP 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/),
 [lsp-types InitializeParams](https://docs.rs/lsp-types/0.97.0/lsp_types/struct.InitializeParams.html),
 [Zed source](https://github.com/zed-industries/zed/tree/654efae441bc8eb117d0042bb28cd7cf3570bdc9/crates/lsp).
+
+
+## Implementation record (2026-11-07)
+
+The seven decisions were accepted, with later conservative execution
+requirements recorded in ADR 0016. Implemented: ten protocol 7 Read rows,
+local/fleet root policy, MCP tools, typed stdio runtime, bounded lazy actors,
+native saved-file watches, push/pull diagnostics, explicit context metadata,
+UTF-16 conversion, sorted paging, crash backoff and idle/shutdown cleanup.
+`--lsp-config` supplies explicit operator roots, executable overrides and
+trusted auxiliary tool/cache paths. The process-level env-clear primitive is
+its own commit because other tracks share vessel-proc.
+
+A deliberate refinement: one query at a time per server, with eight queued,
+while different servers run independently. This binds each query to one
+saved version and avoids an unnecessary concurrent pending-request map;
+notifications and server requests remain interleaved with response waits.
+
+Manual smoke: rust-analyzer 1.98.1, through an isolated session's MCP
+credential, querying this repository's `to_utf16` (no real harness account).
+All ten tools returned successfully. Document symbols 15; workspace search
+1; definition 1; references 7; hover nonempty; incoming calls 3; outgoing
+calls 1; implementations/type-definition empty for this function; file
+cached diagnostics 3. None claimed complete workspace diagnostics. A first
+syntax-only attempt was rejected as insufficient; the readiness fix is in
+ADR 0016. The script is `docs/smoke/m6-lsp.py` and the ordinary test gate
+ignores the real-server test with its prerequisite reason.
+
+Other real server binaries were not exercised: their conservative launch
+policies are covered with fake repository traps and primary-source review,
+not claimed as real-server interoperability proof. Editor overlays,
+installers, editing/code-action tools and a process sandbox remain out of
+scope. Local and three-platform gate results are recorded after the final
+push; an early baseline run timed out during unrelated host I/O saturation,
+and no existing timeout was changed.

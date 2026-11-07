@@ -318,6 +318,10 @@ fn forwarded(reply: Result<Reply, WireError>) -> Result<Forwarded, WireError> {
 
 /// Run a forwardable call here through the guard. Every forwardable method
 /// has its arm; every other is refused (and was refused before any hop).
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive forwarding match keeps every typed RPC visible to review"
+)]
 async fn run_here(
     guard: &Guarded,
     connection: &Connection,

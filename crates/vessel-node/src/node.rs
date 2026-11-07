@@ -380,7 +380,14 @@ fn core(
         transfers::IDLE,
     ));
     transfers.sweep(&tasks, &stop);
+    let lsp = vessel_lsp::Manager::start(config.lsp.clone(), stop.child_token());
+    let lsp_shutdown = lsp.clone();
+    drop(tasks.spawn(async move {
+        lsp_shutdown.stopped().await;
+    }));
     let service = Arc::new(Guarded(NodeService::new(Parts {
+        lsp,
+        lsp_roots: config.lsp_roots.clone(),
         lifecycle: lifecycle.clone(),
         lookup: config.harness_lookup.clone(),
         sessions,
