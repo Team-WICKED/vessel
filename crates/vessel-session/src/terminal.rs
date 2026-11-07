@@ -36,11 +36,15 @@ impl TerminalActor {
                     Some(bytes) => self.life.publish(&mut self.pty, terminal(bytes)).await,
                     None => output_open = false,
                 },
+                Some(call) = self.life.model_calls.recv() => {
+                    self.life.publish(&mut self.pty, SessionEvent::ModelCall(call)).await;
+                }
             }
         };
         if output_open {
             self.drain().await;
         }
+        self.life.drain_model_calls(&mut self.pty).await;
 
         let status = if self.life.stop.interrupted() {
             SessionStatus::Interrupted

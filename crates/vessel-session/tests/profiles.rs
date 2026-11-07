@@ -60,8 +60,9 @@ mod support {
         HarnessEnv::new(dir.to_owned())
     }
 
+    /// The test is boxed at once, so the futures handed around stay small.
     pub(super) async fn within<F: Future>(test: F) -> F::Output {
-        vessel_testkit::within(SAFETY_NET, test)
+        vessel_testkit::within(SAFETY_NET, Box::pin(test))
             .await
             .expect("test timed out")
     }
@@ -703,6 +704,11 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
                 session: SessionId::random(),
             }),
             via: Some(NodeId::random()),
+            // A routed session (protocol 7).
+            model: Some(vessel_proto::SessionModel {
+                route: "qwen-coder".parse().unwrap(),
+                model: vessel_proto::ModelId::new("qwen/qwen3-coder"),
+            }),
         };
         let created = fixture
             .create(structured(None), options.clone())
@@ -715,6 +721,7 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
         assert_eq!(Some(info.id), options.id);
         assert_eq!(info.origin, options.origin);
         assert_eq!(info.via, options.via);
+        assert_eq!(info.model, options.model);
         // The id is taken while the runtime has the session.
         let error = fixture
             .create(structured(None), options.clone())

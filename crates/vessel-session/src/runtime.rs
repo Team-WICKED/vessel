@@ -14,8 +14,8 @@ use tracing::Instrument as _;
 use vessel_agent::{AgentProcess, AgentSetup};
 use vessel_harness::{McpFile, Profile};
 use vessel_proto::{
-    Creator, EventRecord, HarnessSessionId, ModelId, NodeId, ResolvedMcpServers, SessionId,
-    SessionInfo, SessionMode, SessionOrigin, SessionSpec, TerminalSize,
+    Creator, EventRecord, HarnessSessionId, ModelCall, ModelId, NodeId, ResolvedMcpServers,
+    SessionId, SessionInfo, SessionMode, SessionModel, SessionOrigin, SessionSpec, TerminalSize,
 };
 use vessel_pty::{PtyProcess, WindowSize};
 
@@ -101,6 +101,10 @@ pub struct LaunchOptions {
     /// The home a creating call came through (protocol 6), recorded in
     /// `SessionInfo::via`.
     pub via: Option<NodeId>,
+    /// The model route the session's harness is pointed at through the
+    /// node's proxy (protocol 7), recorded in `SessionInfo::model`; `None`
+    /// for a session on its harness's own provider.
+    pub model: Option<SessionModel>,
 }
 
 /// What a session records about its start besides its spec.
@@ -109,8 +113,14 @@ struct Record {
     created_by: Creator,
     origin: Option<SessionOrigin>,
     via: Option<NodeId>,
+    model: Option<SessionModel>,
     notices: Vec<String>,
 }
+
+/// How many model calls may wait for a session's actor to record them; a
+/// call that finds the queue full is dropped with a warning (the proxy is
+/// never held up by the log).
+const MODEL_CALL_CAPACITY: usize = 64;
 
 /// The process-independent parts of a new session.
 struct Parts {
@@ -203,6 +213,7 @@ impl SessionRuntime {
             id,
             origin,
             via,
+            model,
         } = options;
         let id = id.unwrap_or_else(SessionId::random);
         if self.get(id).is_some() {
@@ -213,6 +224,7 @@ impl SessionRuntime {
             created_by,
             origin,
             via,
+            model,
             notices,
         };
         let profile = profile.unwrap_or_else(|| Profile::default_for(spec.harness));
@@ -456,18 +468,22 @@ impl SessionRuntime {
             created_by,
             origin,
             via,
+            model,
             notices,
         } = record;
         let mut info = SessionInfo::new(id, spec, Utc::now()).with_creator(created_by);
         info.origin = origin;
         info.via = via;
-        let (info, kill, shared) = self.shared(info, input, control);
+        info.model = model;
+        let (model_calls, recorded) = mpsc::channel(MODEL_CALL_CAPACITY);
+        let (info, kill, shared) = self.shared(info, input, control, model_calls);
         let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         Parts {
             life: Lifecycle {
                 out: Publisher::new(Arc::clone(&shared), durable_sender, info),
                 stop: Stopper::new(kill, self.shutdown.clone()),
                 notices,
+                model_calls: recorded,
             },
             shared,
             durable,
@@ -480,6 +496,7 @@ impl SessionRuntime {
         info: SessionInfo,
         input: Input,
         control: Option<mpsc::Sender<Control>>,
+        model_calls: mpsc::Sender<ModelCall>,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
         let id = info.id;
         let (info, info_receiver) = watch::channel(info);
@@ -491,6 +508,7 @@ impl SessionRuntime {
             input,
             kill: kill.clone(),
             control,
+            model_calls,
             ended: AtomicBool::new(false),
         });
         (info, kill, shared)

@@ -214,6 +214,9 @@ impl Launcher {
                 Principal::Delegated { via, .. } => Some(*via),
                 Principal::Owner | Principal::Device { .. } | Principal::Agent { .. } => None,
             },
+            // A profile's model route is wired in with the node's proxy
+            // (milestone 5, B7).
+            model: None,
         })
     }
 
