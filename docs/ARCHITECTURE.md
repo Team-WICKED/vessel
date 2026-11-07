@@ -158,7 +158,8 @@ they started.
 - **Milestone 3** (relay and pairing; `docs/plans/backend-m3.md`, ADRs 0009
   and 0010): built on `backend/m3`. Checked by hand on one machine
   through a local relay (pairing, every command through it, revocation).
-  Still to do by hand: `wss://` behind an HTTPS proxy on a public host.
+  By hand, 2026-11-07: the same over `wss://` with the relay on a public
+  host behind an HTTPS proxy (milestone 3's plan, "Smoke on one machine").
 - **Milestone 4** (the fleet; `docs/plans/backend-m4.md`, ADRs 0011 to
   0013, protocols 5 and 6): Tracks H, F and X are merged on `backend/m4`,
   green on Linux, macOS and Windows. An independent security review of

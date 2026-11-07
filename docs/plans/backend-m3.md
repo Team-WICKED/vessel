@@ -1,7 +1,8 @@
 # Backend milestone 3: any node, with no SSH and no open port
 
 Status: built on `backend/m3` (2026-11-06; "State" and "Smoke on one
-machine" below). Drafted the same day, to start once milestone 2 was merged
+machine" below); its last manual smoke, the relay on a public host behind
+an HTTPS proxy, passed on 2026-11-07. Drafted the same day, to start once milestone 2 was merged
 and green on all three CI platforms (`backend/m2` at 2cd316b). Owner:
 coordinator. Two implementation tracks, as in M1 and M2.
 
@@ -701,9 +702,25 @@ directory, a testkit fake under `codex`; no real harness or account.
   without scopes.
 - `node devices revoke` closed the device's connections; the next command
   from it got "this device was revoked on the node".
-- Still to do: the same over `wss://` behind an HTTPS proxy on a public
-  host (the first real TLS test), which needs the operator's go for the
-  host.
+- Over `wss://` on a public host (2026-11-07, `f27793b` built for that
+  host, aarch64, musl): the relay listens on loopback behind Cloudflare's
+  proxy (a Cloudflare Tunnel to it, TLS at Cloudflare's edge), run as its
+  own unprivileged service account with the token passed as a credential,
+  `--client-address-header CF-Connecting-IP --trusted-proxy 127.0.0.1`. A
+  node behind NAT with no direct route registered through it; a second
+  device paired over it (`wss://`, the edge's certificate verified by
+  rustls with system roots); `status`, `run`, `send`, `log`, `kill`
+  through it; restarting the relay (the network dropping) made the node
+  register again within half a second and the session went on; revoking
+  the device closed it out ("this device was revoked on the node"). The
+  testkit fake stood in for the harness. The client address header was
+  believed only from the proxy: a list from the proxy got 400, one
+  address 101, and the edge refuses a client that sets the header itself.
+  Cloudflare's 100 s idle limit is no issue: the keepalive pings every
+  10 s.
+- Seen on the way: systemd 249 does not expand `%d` in `ExecStart`, so a
+  unit passing the token as a credential reads `$CREDENTIALS_DIRECTORY`
+  through `/bin/sh -c 'exec ...'` there.
 - Seen in passing: when `vessel` exits after a call, the node logs
   "connection ended abnormally" (the client drops its websocket without a
   close frame). Harmless; worth a clean close later.

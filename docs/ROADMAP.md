@@ -45,9 +45,9 @@ Plans: `docs/plans/backend-m2.md` (ADRs 0007 and 0008) and
       creates a revocable credential per device (ADR 0010).
 - [x] Node-to-node calls: built in milestone 4 as calls through the fleet's
       home (protocol 6, below), not as a mesh.
-- [ ] By hand, still to do: a relay over `wss://` behind an HTTPS proxy on
-      a public host (the first real TLS test; milestone 3's plan, "Smoke on
-      one machine").
+- [x] By hand: a relay over `wss://` behind an HTTPS proxy on a public
+      host (the first real TLS test), passed on 2026-11-07 (milestone 3's
+      plan, "Smoke on one machine").
 
 ## Phase 2: the fleet (milestone 4, done)
 
