@@ -9,11 +9,23 @@ repository.workspace = true
 
 [dependencies]
 vessel-proc.workspace = true
+vessel-proto.workspace = true
+chrono.workspace = true
+url.workspace = true
+notify.workspace = true
+toml_edit.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 which.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+vessel-testkit.workspace = true
 
 [lints]
 workspace = true

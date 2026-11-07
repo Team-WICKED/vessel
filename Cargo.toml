@@ -78,6 +78,7 @@ vessel-agent = { path = "crates/vessel-agent" }
 vessel-client = { path = "crates/vessel-client" }
 vessel-fleet = { path = "crates/vessel-fleet" }
 vessel-harness = { path = "crates/vessel-harness" }
+vessel-lsp = { path = "crates/vessel-lsp" }
 vessel-mcp = { path = "crates/vessel-mcp" }
 vessel-node = { path = "crates/vessel-node" }
 vessel-proc = { path = "crates/vessel-proc" }
@@ -195,6 +196,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # tables and `tinyvec` are all it brings.
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
+# LSP file URIs, including platform drive letters and percent encoding (ADR 0016).
+url = "2.5"
+# Native saved-file change notifications; replaces polling (ADR 0016).
+notify = "8"
 which = "7"
 # Wipes the node's secret key from memory when it is dropped: the key pair
 # (vessel-secure) and the bytes read from `node.key` (vessel-store).

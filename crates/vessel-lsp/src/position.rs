@@ -8,14 +8,7 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
 
-/// A 1-based position measured in Unicode scalar values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScalarPosition {
-    /// One-based line.
-    pub line: NonZeroU32,
-    /// One-based column, with an exclusive-end position after the last scalar.
-    pub column: NonZeroU32,
-}
+pub use vessel_proto::lsp::Position as ScalarPosition;
 
 /// A zero-based LSP position, measured in UTF-16 code units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

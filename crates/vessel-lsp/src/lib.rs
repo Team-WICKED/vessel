@@ -6,3 +6,18 @@
 
 pub mod framing;
 pub mod position;
+
+pub mod documents;
+mod error;
+mod manager;
+mod policy;
+mod process;
+mod protocol;
+mod query;
+pub mod registry;
+mod server_requests;
+mod sync;
+
+pub use error::LspError;
+pub use manager::{Config, Manager};
+pub use query::Query;

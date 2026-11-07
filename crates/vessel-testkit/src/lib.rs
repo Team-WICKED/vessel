@@ -89,6 +89,8 @@ pub use vesseld::vesseld;
 /// A fake harness binary built from this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Fake {
+    /// `fake-lsp`: deterministic saved-file language server, no real toolchain.
+    Lsp,
     /// `fake-tui`: echoes stdin, prints `size COLSxROWS` on start and on
     /// `SIGWINCH` (Unix), runs `exit [code]`, `env NAME` and `cwd` commands,
     /// and keeps a sleeping grandchild in its process group.
@@ -110,6 +112,7 @@ impl Fake {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::Lsp => "fake-lsp",
             Self::Tui => "fake-tui",
             Self::Acp => "fake-acp",
             Self::Ssh => "fake-ssh",
