@@ -304,14 +304,21 @@ design where it differs.
   arguments that end empty become `{}`. History is repaired so every call
   is followed by its result (a missing one becomes an error result), and
   text after a `tool_use` moves before it for Anthropic.
-- **Thinking** (open decision 9). Same API: untouched. Anthropic thinking
-  sent to a non-Anthropic upstream is dropped (its signature means nothing
-  there). Reasoning from a non-Anthropic upstream reaches Claude Code as
-  thinking blocks whose signature is a Vessel envelope (`vsl1:` and the
-  provider's opaque reasoning, for example a Responses `encrypted_content`)
-  so it can be replayed to the same provider; an envelope is never sent to
-  Anthropic. `max_tokens` is sized above the thinking budget, and sampling
-  parameters are dropped when thinking is on, per the provider's flags.
+- **Thinking** (open decision 9). Same API: untouched, except what
+  decision 9 forbids: a passthrough to Anthropic drops every thinking block
+  whose signature is an envelope or empty, a passthrough to Responses every
+  reasoning item whose encrypted content is an envelope, and a request whose
+  last tool-calling turn would then not start with thinking goes without
+  `thinking` (Anthropic refuses it otherwise). Anthropic thinking sent to a
+  non-Anthropic upstream is dropped (its signature means nothing there).
+  Reasoning from another provider reaches the harness in its own opaque
+  field (a thinking block's signature for Claude Code, a reasoning item's
+  `encrypted_content` for Codex) as a Vessel envelope,
+  `vsl1:<provider>:<kind>:<payload>`, so it can be replayed to the provider
+  that made it and to no other; an envelope is never sent to any provider.
+  `max_tokens` is sized above the thinking budget, and sampling parameters
+  and forced tool choices are dropped when thinking is on, per the
+  provider's flags.
 - **Images and documents.** Base64 and URL images map between the APIs;
   an image inside a tool result becomes a text marker where the upstream
   takes none. Documents an upstream cannot take are refused with a clear

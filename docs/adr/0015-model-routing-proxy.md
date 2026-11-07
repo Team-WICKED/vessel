@@ -117,6 +117,11 @@ session (or any local process) from using another's route.
 - Some information does not survive translation between APIs (Anthropic
   cache markers toward `OpenAI`-style upstreams; thinking toward a
   provider that cannot replay it); same-API routes lose nothing.
+- A native signature or encrypted reasoning names no provider, so two
+  providers with the same API (Anthropic and a proxy in front of it)
+  cannot tell each other's apart: after a move between them, the second
+  refuses the first's, as it would without Vessel. Vessel's envelopes do
+  name their provider.
 - Tool schemas pass through unchanged in milestone 5; a provider stricter
   than JSON Schema (Gemini's native API) needs rewriting later.
 - Subscription logins are not upstreams: a profile using its account's

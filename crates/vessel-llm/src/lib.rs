@@ -19,6 +19,8 @@
 //!   through.
 //! - [`front`]: the APIs harnesses speak, into and out of the neutral form.
 //! - [`upstream`]: the APIs providers speak, out of and into it.
+//! - [`passthrough`]: the same API on both sides, the request as the
+//!   harness wrote it, less what decision 8 of ADR 0015 forbids.
 //! - [`error`]: what translation refuses, and what it leaves out.
 
 pub mod error;
@@ -28,6 +30,7 @@ pub mod front;
 pub mod ir;
 #[cfg(test)]
 mod matrix;
+pub mod passthrough;
 pub mod sse;
 pub mod upstream;
 pub mod wire;
