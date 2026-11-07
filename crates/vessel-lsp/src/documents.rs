@@ -3,10 +3,14 @@
 //! Canonical paths stop ordinary traversal and symlink escape. The trusted
 //! workspace can still change between canonicalization and open: this is an
 //! API policy boundary, not a filesystem sandbox against a hostile OS user.
+//! Within that boundary two rules hold for every path a caller names:
+//! missing, escaping and non-regular paths get the same [`Error::Path`], so
+//! the answer never reveals which paths exist outside a root; and opening
+//! never blocks, so a FIFO swapped in after the check cannot park a worker.
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use tokio::io::AsyncReadExt;
 use url::Url;
 use vessel_proto::lsp::FilePath;
 
@@ -23,8 +27,13 @@ pub async fn canonical_root(path: &Path) -> Result<PathBuf, Error> {
     if !path.is_absolute() || network_path(path) {
         return Err(Error::Path);
     }
-    let path = tokio::fs::canonicalize(path).await?;
-    if !tokio::fs::metadata(&path).await?.is_dir() {
+    let path = tokio::fs::canonicalize(path)
+        .await
+        .map_err(|_missing_or_denied| Error::Path)?;
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|_missing_or_denied| Error::Path)?;
+    if !metadata.is_dir() {
         return Err(Error::Path);
     }
     Ok(path)
@@ -40,8 +49,16 @@ fn network_path(path: &Path) -> bool {
 /// Resolve a relative file below the root, verifying symlinks before reading.
 pub(crate) async fn resolve(root: &Path, file: &FilePath) -> Result<PathBuf, Error> {
     let candidate = root.join(file.as_path());
-    let canonical = tokio::fs::canonicalize(candidate).await?;
-    if !canonical.starts_with(root) || !tokio::fs::metadata(&canonical).await?.is_file() {
+    let canonical = tokio::fs::canonicalize(candidate)
+        .await
+        .map_err(|_missing_or_denied| Error::Path)?;
+    if !canonical.starts_with(root) {
+        return Err(Error::Path);
+    }
+    let metadata = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|_missing_or_denied| Error::Path)?;
+    if !metadata.is_file() {
         return Err(Error::Path);
     }
     Ok(canonical)
@@ -94,19 +111,39 @@ pub(crate) fn relative(root: &Path, path: &Path) -> Result<FilePath, Error> {
 }
 
 pub(crate) async fn read(path: &Path) -> Result<String, Error> {
-    let file = tokio::fs::File::open(path).await?;
-    if !file.metadata().await?.is_file() {
+    let path = path.to_owned();
+    let bytes = tokio::task::spawn_blocking(move || read_regular(&path, MAX_FILE)).await??;
+    Ok(String::from_utf8(bytes)?)
+}
+
+/// Read at most `limit` bytes of a regular file; larger files are
+/// [`Error::Limit`]. Blocking: call it from a blocking worker.
+///
+/// The open itself is non-blocking on Unix. A FIFO opened for reading
+/// otherwise waits for a writer, and a path checked as a regular file can be
+/// replaced by one before the open; with `O_NONBLOCK` the open returns at
+/// once and `fstat` on the opened handle (not the path) refuses it. The flag
+/// does not change reads from a regular file.
+pub(crate) fn read_regular(path: &Path, limit: u64) -> Result<Vec<u8>, Error> {
+    let mut options = std::fs::OpenOptions::new();
+    let _read = options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let _nonblocking = options.custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits());
+    }
+    let file = options
+        .open(path)
+        .map_err(|_missing_or_denied| Error::Path)?;
+    if !file.metadata()?.is_file() {
         return Err(Error::Path);
     }
     let mut bytes = Vec::new();
-    let _read = file
-        .take(MAX_FILE.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .await?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_FILE {
+    let _read = file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
         return Err(Error::Limit);
     }
-    Ok(String::from_utf8(bytes)?)
+    Ok(bytes)
 }
 
 #[cfg(not(windows))]
@@ -136,6 +173,56 @@ fn lexically_inside(path: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review finding: a symlink to a missing target answered with an I/O
+    /// error while one to an existing outside path answered "forbidden",
+    /// revealing which outside paths exist.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn missing_and_escaping_symlinks_get_the_same_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(dir.path()).await.unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("exists.rs"), "secret").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("exists.rs"), root.join("present.rs"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path().join("absent.rs"), root.join("absent.rs"))
+            .unwrap();
+        for name in ["present.rs", "absent.rs", "never-created.rs"] {
+            let file = FilePath::try_from(PathBuf::from(name)).unwrap();
+            let outcome = resolve(&root, &file).await;
+            assert!(matches!(outcome, Err(Error::Path)), "{name}: {outcome:?}");
+        }
+        let link = root.join("dir-link");
+        std::os::unix::fs::symlink(outside.path().join("absent-dir"), &link).unwrap();
+        assert!(matches!(canonical_root(&link).await, Err(Error::Path)));
+    }
+
+    /// Review finding: a FIFO swapped in after the regular-file check made
+    /// the open block a worker thread until some writer appeared.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_fifo_is_refused_without_blocking() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("swapped.rs");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        let reader = tokio::spawn({
+            let fifo = fifo.clone();
+            async move { read(&fifo).await }
+        });
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), reader).await;
+        // Release a reader stuck in open(2), so a failure here cannot also
+        // hang runtime shutdown. With no reader waiting this open just fails.
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits())
+                .open(&fifo),
+        );
+        let outcome = outcome.expect("opening a FIFO must not block").unwrap();
+        assert!(matches!(outcome, Err(Error::Path)), "{outcome:?}");
+    }
 
     #[tokio::test]
     async fn file_uris_roundtrip_spaces_unicode_and_windows_verbatim_roots() {

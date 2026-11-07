@@ -86,7 +86,6 @@ pub(crate) fn check(
 }
 
 fn bounded_text(path: &Path) -> Result<String, Error> {
-    use std::io::Read as _;
     if std::fs::symlink_metadata(path)?.file_type().is_symlink()
         || path.parent().is_some_and(|parent| {
             std::fs::symlink_metadata(parent)
@@ -95,14 +94,14 @@ fn bounded_text(path: &Path) -> Result<String, Error> {
     {
         return Err(Error::ProjectConfiguration);
     }
-    let mut text = String::new();
-    let _read = std::fs::File::open(path)?
-        .take(65_537)
-        .read_to_string(&mut text)?;
-    if text.len() > 65_536 {
-        return Err(Error::ProjectConfiguration);
-    }
-    Ok(text)
+    // Oversized, special (a FIFO) and non-UTF-8 files are not inert
+    // configuration this policy can vouch for.
+    let bytes = match crate::documents::read_regular(path, 65_536) {
+        Ok(bytes) => bytes,
+        Err(Error::Limit | Error::Path) => return Err(Error::ProjectConfiguration),
+        Err(error) => return Err(error),
+    };
+    String::from_utf8(bytes).map_err(|_not_utf8| Error::ProjectConfiguration)
 }
 
 fn check_toolchain(text: &str) -> Result<(), Error> {

@@ -79,10 +79,9 @@ impl NodeService {
             }
         }
         if !permitted {
-            return Err(WireError::new(
-                ErrorCode::Forbidden,
-                "LSP workspace escapes the allowed root",
-            ));
+            // The same answer as a missing path: a symlink inside an allowed
+            // root must not reveal whether its outside target exists.
+            return Err(wire_error(&Error::Path));
         }
         let reply = self
             .lsp
