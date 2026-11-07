@@ -295,11 +295,21 @@ impl Idle {
 
 /// A carrier the node can close with a reason the client reads.
 pub trait NodeCarrier: Carrier {
-    /// Close with `close`'s code (best effort, bounded in time).
+    /// Close with `close`'s code, then read and discard what the peer
+    /// still sends until its own close or the end (best effort, all within
+    /// [`CLOSE_TIMEOUT`]).
+    ///
+    /// Why the reading: a socket dropped with bytes it has not read is
+    /// reset, not closed, and on Windows the reset throws away what is
+    /// still in flight to the peer, this close frame among it. A client
+    /// whose handshake failed, or a relay forwarding a node's `4401`, would
+    /// then never learn why. The relay does the same for its own sockets
+    /// (`server::accept`'s `linger`).
     fn close_with(self, close: NodeClose) -> impl Future<Output = ()> + Send;
 }
 
-/// How long closing with a code may take.
+/// How long closing with a code may take, reading until the peer's close
+/// included.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The node's side of a secure channel on a websocket:

@@ -188,6 +188,32 @@ pub(crate) async fn echo(carrier: impl vessel_relay::NodeCarrier, keypair: &Node
 
 pub(crate) type RawSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// The close code a websocket was closed with (`None`: a close without
+/// one), and how the connection ended after it: `Ok` for a clean end (the
+/// peer closed its side with a FIN), the error otherwise (a reset: the
+/// peer dropped its socket with data it had not read, which on Windows
+/// throws away a close frame still in flight). Data and pings before the
+/// close are skipped.
+pub(crate) async fn closed<S>(stream: &mut S) -> (Option<u16>, Result<(), String>)
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let code = loop {
+        match within(stream.next()).await {
+            Some(Ok(Message::Close(frame))) => break frame.map(|frame| frame.code.into()),
+            Some(Ok(_other)) => {}
+            None => return (None, Err("ended without a close".to_owned())),
+            Some(Err(error)) => return (None, Err(format!("before the close: {error}"))),
+        }
+    };
+    let end = match within(stream.next()).await {
+        None => Ok(()),
+        Some(Ok(message)) => Err(format!("after the close: {message:?}")),
+        Some(Err(error)) => Err(format!("after the close: {error}")),
+    };
+    (code, end)
+}
+
 /// A websocket to `url` with the library's default (large) limits.
 pub(crate) async fn raw(url: &str) -> RawSocket {
     tokio_tungstenite::connect_async(url).await.unwrap().0
