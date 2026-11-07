@@ -1,13 +1,15 @@
 //! Typed fixture messages for the deliberately small fake server.
 
 use super::types::{
-    Capabilities, Changed, Diagnostic, DiagnosticProvider, Failure, FailureDetail, HierarchyItem,
-    HierarchyRequest, Hover, Id, Incoming, Initialize, InitializeResult, Location, Markup, Message,
-    Mode, Notification, Open, Outgoing, Position, Progress, Published, Range, Report, Response,
-    RustStatus, ServerRequest, Symbol, Ticket, Token, WorkDone, WorkspaceItem, WorkspaceReport,
+    Capabilities, Changed, ConfigurationRequest, Diagnostic, DiagnosticProvider, Failure,
+    FailureDetail, HierarchyItem, HierarchyRequest, Hover, Id, Incoming, Initialize,
+    InitializeResult, Location, Markup, Message, Mode, Notification, Open, Outgoing, Position,
+    Progress, Published, Range, RawOptions, Report, Response, RustStatus, Section, ServerRequest,
+    Symbol, Ticket, Token, WorkDone, WorkspaceItem, WorkspaceReport,
 };
 use serde::Serialize;
 use std::io::Write;
+use std::path::PathBuf;
 
 use super::transport::{self, TransportError as Error};
 
@@ -17,16 +19,27 @@ pub(super) struct Peer {
     uri: String,
     text: String,
     version: i32,
+    launch: Option<PathBuf>,
 }
 impl Peer {
-    pub(super) fn new(mode: Mode) -> Self {
+    pub(super) fn new(mode: Mode, launch: Option<PathBuf>) -> Self {
         Self {
             mode,
             root: String::new(),
             uri: String::new(),
             text: String::new(),
             version: 0,
+            launch,
         }
+    }
+
+    /// Append one `key=value` line to the launch record, if one was asked for.
+    fn record(&self, key: &str, value: &str) -> Result<(), Error> {
+        if let Some(path) = &self.launch {
+            let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+            writeln!(file, "{key}={value}")?;
+        }
+        Ok(())
     }
 
     #[expect(
@@ -40,6 +53,10 @@ impl Peer {
     ) -> Result<bool, Error> {
         let params = message.params.as_ref().map_or("null", |raw| raw.get());
         let Some(method) = message.method.as_deref() else {
+            if matches!(&message.id, Some(Id::Text(id)) if id == "python-config") {
+                let result = message.result.as_ref().map_or("null", |raw| raw.get());
+                self.record("python", result)?;
+            }
             return Ok(false);
         };
         let Some(id) = message.id else {
@@ -112,7 +129,8 @@ impl Peer {
                 | Mode::Incremental
                 | Mode::Outside
                 | Mode::Silent
-                | Mode::Push => {
+                | Mode::Push
+                | Mode::PythonConfig => {
                     respond(
                         output,
                         id,
@@ -181,6 +199,8 @@ impl Peer {
 
     fn initialize(&mut self, id: Id, params: &str, output: &mut impl Write) -> Result<(), Error> {
         let request: Initialize = serde_json::from_str(params)?;
+        let raw: RawOptions = serde_json::from_str(params)?;
+        self.record("init", raw.initialization_options.get())?;
         // Every normal test proves the conservative settings reach the peer.
         if request
             .initialization_options
@@ -194,16 +214,7 @@ impl Peer {
         {
             return Err(Error::Protocol);
         }
-        for name in [
-            "NODE_OPTIONS",
-            "LD_PRELOAD",
-            "DYLD_INSERT_LIBRARIES",
-            "PYTHONPATH",
-        ] {
-            if std::env::var_os(name).is_some() {
-                return Err(Error::Protocol);
-            }
-        }
+        refuse_injected_environment()?;
         if self.mode == Mode::GuardGo {
             for (name, expected) in [
                 ("GOTOOLCHAIN", "local"),
@@ -278,6 +289,9 @@ impl Peer {
                     },
                 },
             )?;
+        }
+        if self.mode == Mode::PythonConfig {
+            ask_python(output)?;
         }
         Ok(())
     }
@@ -393,4 +407,34 @@ fn range() -> Range {
             character: 13,
         },
     }
+}
+
+/// pyright asks for the `python` section to find its interpreter.
+fn ask_python(output: &mut impl Write) -> Result<(), Error> {
+    transport::write(
+        output,
+        &ServerRequest {
+            jsonrpc: "2.0",
+            id: Id::Text("python-config".into()),
+            method: "workspace/configuration",
+            params: ConfigurationRequest {
+                items: [Section { section: "python" }],
+            },
+        },
+    )
+}
+
+/// No loader or interpreter injection may reach a language server.
+fn refuse_injected_environment() -> Result<(), Error> {
+    for name in [
+        "NODE_OPTIONS",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+        "PYTHONPATH",
+    ] {
+        if std::env::var_os(name).is_some() {
+            return Err(Error::Protocol);
+        }
+    }
+    Ok(())
 }

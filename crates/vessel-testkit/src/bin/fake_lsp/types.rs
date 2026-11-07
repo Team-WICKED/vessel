@@ -16,6 +16,7 @@ pub(super) enum Mode {
     Silent,
     Oversized,
     Push,
+    PythonConfig,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -28,6 +29,8 @@ pub(super) struct Message {
     pub(super) id: Option<Id>,
     pub(super) method: Option<String>,
     pub(super) params: Option<Box<RawValue>>,
+    /// The client's answer to one of this fake's own requests.
+    pub(super) result: Option<Box<RawValue>>,
 }
 #[derive(Serialize)]
 pub(super) struct Response<T> {
@@ -173,6 +176,20 @@ pub(super) struct Capabilities {
 pub(super) struct DiagnosticProvider {
     pub(super) inter_file_dependencies: bool,
     pub(super) workspace_diagnostics: bool,
+}
+/// The client's initialization options exactly as sent, for launch records.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RawOptions {
+    pub(super) initialization_options: Box<RawValue>,
+}
+#[derive(Serialize)]
+pub(super) struct ConfigurationRequest {
+    pub(super) items: [Section; 1],
+}
+#[derive(Serialize)]
+pub(super) struct Section {
+    pub(super) section: &'static str,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
