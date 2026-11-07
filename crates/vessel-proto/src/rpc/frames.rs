@@ -12,6 +12,7 @@ use crate::node::{NodeInfo, ProtocolRange, ProtocolVersion};
 
 /// Who is connecting; for logs and future per-client capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ClientInfo {
     /// Client program name (`vessel-cli`, `vessel-web`, ...).
     pub name: String,
@@ -21,6 +22,7 @@ pub struct ClientInfo {
 
 /// First frame a client sends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Hello {
     /// Protocols the client speaks.
     pub protocol: ProtocolRange,
@@ -30,6 +32,7 @@ pub struct Hello {
 
 /// The node's answer to a successful `Hello`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Welcome {
     /// The negotiated protocol version for this connection.
     pub protocol: ProtocolVersion,
@@ -39,6 +42,7 @@ pub struct Welcome {
 
 /// Why a subscription stopped delivering events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum SubscriptionEnd {
     /// The session ended and its final event was delivered.
@@ -55,6 +59,7 @@ pub enum SubscriptionEnd {
 
 /// A frame from client to node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
     /// Handshake; must be the first frame.
@@ -75,6 +80,7 @@ pub enum ClientFrame {
 
 /// A frame from node to client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
     /// Handshake accepted.

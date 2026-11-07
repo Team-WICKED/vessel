@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>3f2a · laptop · Vessel</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <a class="skip" href="#timeline">Skip to timeline</a>
+    <div class="app">
+      <header class="topbar" role="banner">
+        <a class="brand" href="fleet.html">
+          <span class="mark" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M2 8.5 6 2.5 10 8.5" />
+              <path d="M4 8.5h4" />
+            </svg>
+          </span>
+          <span>Vessel</span>
+        </a>
+        <nav class="crumb" aria-label="Breadcrumb">
+          <a href="fleet.html">Fleet</a>
+          <span class="sep">/</span>
+          <a href="sessions.html">laptop</a>
+          <span class="sep">/</span>
+          <span class="here mono">3f2a</span>
+        </nav>
+        <label class="topbar-search">
+          <span class="ico ico-search" aria-hidden="true"></span>
+          <input
+            type="search"
+            placeholder="Search nodes, sessions, commands"
+            aria-label="Search"
+          />
+          <kbd class="kbd">⌘K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <a class="btn primary sm" href="new-session.html"
+            ><span class="ico ico-plus sm" aria-hidden="true"></span> New</a
+          >
+          <a class="chip" href="#settings">
+            <span class="pulse" aria-hidden="true"></span>
+            laptop · direct
+          </a>
+        </div>
+      </header>
+
+      <nav class="sidebar" role="navigation" aria-label="Fleet">
+        <div class="nav-block">
+          <div class="nav-kicker">Place</div>
+          <a class="nav-item" href="fleet.html"
+            ><span class="ico ico-fleet" aria-hidden="true"></span
+            ><span class="label">Fleet</span></a
+          >
+          <a class="nav-item node active" href="fleet.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">laptop</span>
+            <span class="count">3</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">gpu-box</span>
+            <span class="count">2</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot warn" aria-label="draining"></span>
+            <span class="label">build-server</span>
+            <span class="count">1</span>
+          </a>
+          <a class="nav-item node offline" href="sessions.html">
+            <span class="status-dot offline" aria-label="offline"></span>
+            <span class="label">studio</span>
+            <span class="dash">—</span>
+          </a>
+        </div>
+        <div class="nav-block">
+          <div class="nav-kicker">Work</div>
+          <a class="nav-item active" href="sessions.html"
+            ><span class="ico ico-sessions" aria-hidden="true"></span
+            ><span class="label">Sessions</span><span class="count">6</span></a
+          >
+          <a class="nav-item" href="fleet-sync.html"
+            ><span class="ico ico-sync" aria-hidden="true"></span
+            ><span class="label">Sync</span><span class="count">1</span></a
+          >
+          <a class="nav-item" href="devices.html"
+            ><span class="ico ico-devices" aria-hidden="true"></span
+            ><span class="label">Devices</span></a
+          >
+        </div>
+        <div class="nav-foot">
+          <a class="nav-item" href="#settings"
+            ><span class="ico ico-settings" aria-hidden="true"></span
+            ><span class="label">Settings</span></a
+          >
+        </div>
+      </nav>
+
+      <main class="main" id="main" role="main">
+        <div class="session">
+          <header class="session-head">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="id">3f2a</span>
+            <span class="badge running">running</span>
+            <span class="badge accent">structured</span>
+            <span class="meta">laptop · claude-work · /Users/you/src/app</span>
+            <div class="actions">
+              <button class="btn sm" type="button">
+                <span class="ico ico-move sm" aria-hidden="true"></span> Profile
+              </button>
+              <button class="btn sm" type="button">
+                <span class="ico ico-copy sm" aria-hidden="true"></span> Copy
+              </button>
+              <button class="btn sm danger" type="button">
+                <span class="ico ico-kill sm" aria-hidden="true"></span> Kill
+              </button>
+              <button
+                class="btn ghost icon-btn"
+                type="button"
+                aria-label="More"
+              >
+                <span class="ico ico-more"></span>
+              </button>
+            </div>
+          </header>
+
+          <div class="timeline" id="timeline" aria-live="polite">
+            <div class="t-item meta-item">
+              <span class="glyph" aria-hidden="true"></span>
+              <span class="when">14m</span>
+              <p class="t-meta">
+                Ready · harness session <code>sess_9c1a</code>
+              </p>
+            </div>
+
+            <div class="t-item user">
+              <span class="glyph" aria-hidden="true"></span>
+              <span class="when">14m</span>
+              <div class="prompt">
+                The fleet overview is drawing stale generation numbers. Check
+                how members report applied generation, then fix the display and
+                add a test. Delegate the compile to gpu-box if you need the
+                local model.
+              </div>
+            </div>
+
+            <div class="t-item">
+              <span class="glyph" aria-hidden="true"></span>
+              <details class="thought">
+                <summary>Thought</summary>
+                <p>
+                  Need the member status shape, then the UI field. A child
+                  session on gpu-box can compile. Stay within depth 3.
+                </p>
+              </details>
+            </div>
+
+            <div class="t-item">
+              <span class="glyph" aria-hidden="true"></span>
+              <span class="when">13m</span>
+              <div class="md">
+                <p>
+                  I’ll inspect how members report the generation they applied,
+                  then fix the overview so a stale member is obvious. Compile
+                  stays on <code>gpu-box</code>.
+                </p>
+              </div>
+            </div>
+
+            <div class="t-item tool">
+              <span class="glyph" aria-hidden="true"></span>
+              <details class="tool">
+                <summary>
+                  <span class="ico ico-read sm" aria-hidden="true"></span>
+                  <span class="title">Read fleet status</span>
+                  <span class="badge applied">completed</span>
+                  <span class="loc"
+                    >/Users/you/src/app/crates/vessel-fleet/src/status.rs</span
+                  >
+                </summary>
+                <div class="body">
+                  <div class="io-label">Input</div>
+                  <pre><span class="key">path</span>: <span class="str">"crates/vessel-fleet/src/status.rs"</span>
+<span class="key">limit</span>: <span class="num">120</span></pre>
+                  <div class="io-label">Output</div>
+                  <pre>
+pub struct MemberStatus {
+    pub applied: u64,
+    pub conflicts: Vec&lt;Conflict&gt;,
+}</pre>
+                </div>
+              </details>
+            </div>
+
+            <div class="t-item tool">
+              <span class="glyph" aria-hidden="true"></span>
+              <details class="tool">
+                <summary>
+                  <span
+                    class="ico ico-search-kind sm"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="title">Search applied generation</span>
+                  <span class="badge applied">completed</span>
+                  <span class="loc">crates/</span>
+                </summary>
+                <div class="body">
+                  <div class="io-label">Input</div>
+                  <pre><span class="key">pattern</span>: <span class="str">"applied_generation|applied:"</span></pre>
+                </div>
+              </details>
+            </div>
+
+            <div class="t-item">
+              <span class="glyph" aria-hidden="true"></span>
+              <span class="when">12m</span>
+              <div class="md">
+                <p>
+                  Members already send <code>applied</code>. The overview was
+                  using the home generation for every row. Started
+                  <code>a91c</code> on gpu-box to compile after the patch.
+                </p>
+                <ul>
+                  <li>Show the member’s applied generation.</li>
+                  <li>Badge <code>stale</code> when it lags the home.</li>
+                  <li>Leave local edits as conflicts — do not overwrite.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="t-item tool">
+              <span class="glyph" aria-hidden="true"></span>
+              <details class="tool" open>
+                <summary>
+                  <span class="ico ico-edit sm" aria-hidden="true"></span>
+                  <span class="title">Patch overview row</span>
+                  <span class="badge applied">completed</span>
+                  <span class="loc">ui/src/fleet/NodeRow.tsx</span>
+                </summary>
+                <div class="body">
+                  <div class="io-label">Diff</div>
+                  <div class="diff" role="figure" aria-label="Diff">
+                    <div class="ln del">
+                      <span class="n"></span><span class="n">41</span
+                      ><span class="tx"
+                        >- <span class="key">generation</span>:
+                        home.generation,</span
+                      >
+                    </div>
+                    <div class="ln add">
+                      <span class="n">41</span><span class="n">41</span
+                      ><span class="tx"
+                        >+ <span class="key">generation</span>:
+                        member.applied,</span
+                      >
+                    </div>
+                    <div class="ln add">
+                      <span class="n">42</span><span class="n">42</span
+                      ><span class="tx"
+                        >+ <span class="key">stale</span>: member.applied &lt;
+                        home.generation,</span
+                      >
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <div class="t-item">
+              <span class="glyph" aria-hidden="true"></span>
+              <p class="t-meta">
+                Child session <a href="sessions.html"><code>a91c</code></a> on
+                gpu-box · compile · running
+              </p>
+            </div>
+
+            <div class="t-item perm">
+              <span class="glyph" aria-hidden="true"></span>
+              <span class="when">now</span>
+              <div class="perm-card">
+                <h3>Permission · execute</h3>
+                <p>
+                  Allow
+                  <code>cargo test -p vessel-fleet -- applied_generation</code>
+                  on laptop? First answer from any follower wins.
+                </p>
+                <div class="perm-actions">
+                  <button class="btn primary sm" type="button">
+                    Allow once
+                  </button>
+                  <button class="btn sm" type="button">Allow always</button>
+                  <button class="btn sm" type="button">Reject once</button>
+                  <button class="btn sm danger" type="button">
+                    Reject always
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside
+            class="inspect"
+            role="complementary"
+            aria-label="Session inspector"
+          >
+            <section>
+              <h2>Plan</h2>
+              <div class="plan-item done">
+                <span class="mark-box" aria-hidden="true"></span
+                ><span>Read member status shape</span>
+              </div>
+              <div class="plan-item done">
+                <span class="mark-box" aria-hidden="true"></span
+                ><span>Fix overview generation field</span>
+              </div>
+              <div class="plan-item now">
+                <span class="mark-box" aria-hidden="true"></span
+                ><span>Run vessel-fleet tests</span>
+              </div>
+              <div class="plan-item">
+                <span class="mark-box" aria-hidden="true"></span
+                ><span>Report stale members only</span>
+              </div>
+            </section>
+            <section>
+              <h2>Files</h2>
+              <div class="file-row">
+                <span class="ico ico-read sm" aria-hidden="true"></span
+                >status.rs
+              </div>
+              <div class="file-row">
+                <span class="ico ico-edit sm" aria-hidden="true"></span
+                >NodeRow.tsx
+              </div>
+            </section>
+            <section>
+              <h2>Meta</h2>
+              <dl>
+                <dt>id</dt>
+                <dd>3f2a9c10…</dd>
+                <dt>node</dt>
+                <dd>laptop</dd>
+                <dt>profile</dt>
+                <dd>claude-work</dd>
+                <dt>model</dt>
+                <dd>anthropic/claude-sonnet-4.5</dd>
+                <dt>cwd</dt>
+                <dd>/Users/you/src/app</dd>
+                <dt>created</dt>
+                <dd>you · this device</dd>
+                <dt>seq</dt>
+                <dd>1842</dd>
+                <dt>children</dt>
+                <dd>a91c → c07e</dd>
+              </dl>
+            </section>
+          </aside>
+
+          <div class="compose">
+            <div class="perm-sticky perm-card" aria-live="assertive">
+              <h3>Waiting on permission</h3>
+              <p>
+                Execute <code>cargo test -p vessel-fleet</code> · answer above
+                or here. Composer is paused.
+              </p>
+              <div class="perm-actions">
+                <button class="btn primary sm" type="button">Allow once</button>
+                <button class="btn sm danger" type="button">Reject once</button>
+              </div>
+            </div>
+            <form class="composer" aria-label="Prompt">
+              <textarea
+                disabled
+                placeholder="Answer the permission to continue"
+              ></textarea>
+              <div class="composer-bar">
+                <span class="model">anthropic/claude-sonnet-4.5</span>
+                <span>claude-work</span>
+                <span>turn 2 · waiting</span>
+                <button class="btn primary sm" type="submit" disabled>
+                  Send <kbd class="kbd">⌘↵</kbd>
+                </button>
+              </div>
+            </form>
+            <div class="status-line">
+              <span>laptop · direct</span>
+              <span>followers 1</span>
+              <span>seq 1842</span>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div
+      id="settings"
+      class="overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+    >
+      <div class="dialog narrow">
+        <div class="dialog-h">
+          <h1 id="settings-title">Settings</h1>
+          <a class="btn ghost icon-btn" href="#" aria-label="Close"
+            ><span class="ico ico-close"></span
+          ></a>
+        </div>
+        <div class="dialog-b">
+          <div class="field">
+            <span>Theme</span>
+            <div class="seg">
+              <label
+                ><input type="radio" name="theme" checked /><span
+                  >Dark</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="theme" id="theme-light" /><span
+                  >Light</span
+                ></label
+              >
+            </div>
+          </div>
+        </div>
+        <div class="dialog-f"><a class="btn" href="#">Done</a></div>
+      </div>
+    </div>
+  </body>
+</html>

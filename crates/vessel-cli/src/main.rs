@@ -23,6 +23,7 @@ mod render;
 mod secret;
 mod selector;
 mod transfer;
+mod ui;
 mod view;
 
 use std::process::ExitCode;
@@ -102,7 +103,8 @@ async fn cli() -> ExitCode {
         | Command::Kill { .. }
         | Command::Session { .. }
         | Command::Init(_)
-        | Command::Mcp => "warn",
+        | Command::Mcp
+        | Command::Ui(_) => "warn",
     };
     tracing_subscriber::fmt()
         .with_env_filter(

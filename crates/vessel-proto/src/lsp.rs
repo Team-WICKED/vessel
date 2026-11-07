@@ -18,6 +18,7 @@ pub use requests::{
 
 /// A supported server family; JavaScript uses the TypeScript server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     /// rust-analyzer.
@@ -45,6 +46,9 @@ impl std::error::Error for InvalidFilePath {}
 
 /// A file under the authorized workspace, never an absolute path or URI.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+// Serialized through `PathBuf`: a string on the wire, which ts-rs cannot
+// see through `try_from`/`into`.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 #[serde(try_from = "PathBuf", into = "PathBuf")]
 pub struct FilePath(PathBuf);
 
@@ -85,6 +89,7 @@ impl FilePath {
 
 /// The server identity a query selects. This is not a filesystem grant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Workspace {
     /// Absolute root on the destination node; the node checks authority.
     pub root: PathBuf,
@@ -94,6 +99,7 @@ pub struct Workspace {
 
 /// A 1-based Unicode scalar position; the line's exclusive end is valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Position {
     /// One-based line.
     pub line: NonZeroU32,
@@ -103,6 +109,7 @@ pub struct Position {
 
 /// An exclusive-end source range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Range {
     /// Inclusive start.
     pub start: Position,
@@ -112,6 +119,7 @@ pub struct Range {
 
 /// A location relative to the authorized workspace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Location {
     /// Saved source file.
     pub file: FilePath,
@@ -121,11 +129,13 @@ pub struct Location {
 
 /// A best-effort offset into sorted results; edits may shift later pages.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct Offset(pub u32);
 
 /// The requested page. Limits are capped at 200 by the node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PageRequest {
     /// Zero-based result offset.
     #[serde(default)]
@@ -145,6 +155,7 @@ impl Default for PageRequest {
 
 /// What progress the server actually reported, never inferred from silence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Indexing {
     /// No completion signal has been observed.
@@ -157,6 +168,7 @@ pub enum Indexing {
 
 /// How saved contents relate to the response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Freshness {
     /// Query ran against the saved text synchronized before the request.
@@ -169,6 +181,7 @@ pub enum Freshness {
 
 /// Scope and age of every answer, including empty answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Context {
     /// Files represented by this result/cache, never a promise of all files.
     pub files: Vec<FilePath>,
@@ -185,6 +198,7 @@ pub struct Context {
 
 /// A bounded page, deterministically sorted before offset selection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Page<T> {
     /// At most the requested number of items, capped by the node.
     pub items: Vec<T>,
@@ -198,6 +212,7 @@ pub struct Page<T> {
 
 /// LSP symbol kinds, including a typed unknown for future protocol values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
     /// File.
@@ -258,6 +273,7 @@ pub enum SymbolKind {
 
 /// A symbol in saved source. Nested document symbols are flattened.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Symbol {
     /// Bounded display name.
     pub name: String,
@@ -271,6 +287,7 @@ pub struct Symbol {
 
 /// Diagnostic severity; absence is distinct from an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// Error.
@@ -287,6 +304,7 @@ pub enum Severity {
 
 /// A bounded diagnostic with only authorized source locations.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Diagnostic {
     /// Diagnostic location.
     pub location: Location,
@@ -300,6 +318,9 @@ pub struct Diagnostic {
 
 /// A call edge anchored at its caller's source sites.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// `LspCall` in TypeScript: one file declares every wire type, and `Call`
+// is the RPC call there.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "LspCall"))]
 pub struct Call {
     /// Caller for incoming calls, callee for outgoing calls.
     pub symbol: Symbol,
@@ -309,6 +330,7 @@ pub struct Call {
 
 /// Hover text is untrusted content; clients must not render raw HTML.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Hover {
     /// Plain text or Markdown as indicated by `format`.
     pub text: String,
@@ -324,6 +346,7 @@ pub struct Hover {
 
 /// How a bounded hover text is represented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Markup {
     /// Literal text.

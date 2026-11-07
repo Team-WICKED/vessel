@@ -37,6 +37,7 @@ use crate::rpc::{Call, Method, Reply};
 
 /// Who a forwarded call speaks for, as the node it started on vouches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Origin {
     /// The node the call started on.
     pub node: NodeId,
@@ -49,6 +50,7 @@ pub struct Origin {
 
 /// The principal a call started with, on its own node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OriginBy {
     /// That node's token or local socket.
@@ -73,6 +75,7 @@ pub enum OriginBy {
 /// were local, then passes it on with the caller's [`Origin`]. Needs `read`
 /// here; the inner call's own scope is checked on every hop.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Forward {
     /// The node that runs the call; this node itself runs it locally.
     pub node: NodeId,
@@ -85,6 +88,7 @@ pub struct Forward {
 /// speaks only for its own principals). Needs `relay`, which a member gets
 /// only when the home's owner asks for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RelayCall {
     /// The node that runs the call; the home runs it itself when it is
     /// the target.
@@ -101,6 +105,7 @@ pub struct RelayCall {
 /// Needs `read`; the inner call runs with the delivering device's grant
 /// intersected with `origin.scopes`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Deliver {
     /// The call.
     pub call: Box<Call>,
@@ -111,6 +116,7 @@ pub struct Deliver {
 /// Reply to `fleet.forward`, `fleet.relay` and `fleet.deliver`: the inner
 /// call's reply. An inner call that fails fails the envelope with its error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Forwarded {
     /// What the target answered.
     pub reply: Box<Reply>,
@@ -122,6 +128,7 @@ pub struct Forwarded {
 /// keeps the credential; revoking it on the member cuts the home off.
 /// Needs `sync`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GrantHome {
     /// The link, made on the member.
     pub link: PairingLink,
@@ -135,6 +142,7 @@ pub struct GrantHome {
 /// grant, for a claim its record would take. Asked again before the ticket
 /// expires. Needs `sync`; never forwarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GetCallback {
     /// The member's node.
     pub node: NodeId,
@@ -144,6 +152,7 @@ pub struct GetCallback {
 
 /// What `fleet.callback` answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Callback {
     /// The relays the home registers with, in its preference order; none
     /// when the home has no relay (it is reached directly), and then a
@@ -162,6 +171,7 @@ pub struct Callback {
 /// node is invited again and joins from there. Needs `admin`; never
 /// forwarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ForgetNode {
     /// The member node.
     pub node: NodeId,
@@ -169,6 +179,7 @@ pub struct ForgetNode {
 
 /// What `fleet.forget` did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct NodeForgotten {
     /// The key the node was bound to.
     pub key: NodePublicKey,
@@ -185,15 +196,18 @@ pub struct NodeForgotten {
 /// `fleet.peers` (protocol 6): the home's view of its fleet, for its
 /// members. Needs `sync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListPeers;
 
 /// `fleet.nodes` (protocol 6): what this node knows of its fleet (a member
 /// asks its home with `fleet.peers`). Needs `read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListNodes;
 
 /// A node of a fleet, the home included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FleetNode {
     /// Its id.
     pub node: NodeId,

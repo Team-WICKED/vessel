@@ -7,12 +7,19 @@ rust-version.workspace = true
 license-file.workspace = true
 repository.workspace = true
 
+[features]
+# TypeScript declarations of the wire types, for the web UI (ADR 0017):
+# `ts_rs::TS` derives and the generator in `ts`. Nothing on the wire
+# changes; only the declaration check and `vessel-web`'s tests enable it.
+ts = ["dep:ts-rs"]
+
 [dependencies]
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ts-rs = { workspace = true, optional = true }
 uuid.workspace = true
 
 [lints]

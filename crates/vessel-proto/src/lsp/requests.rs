@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Workspace symbol search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WorkspaceSymbols {
     /// Authorized server selection.
     pub workspace: Workspace,
@@ -17,6 +18,7 @@ pub struct WorkspaceSymbols {
 
 /// Symbols in one saved file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DocumentSymbols {
     /// Authorized server selection.
     pub workspace: Workspace,
@@ -29,6 +31,7 @@ pub struct DocumentSymbols {
 
 /// Shared fields for a query at a saved source position.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AtPosition {
     /// Authorized server selection.
     pub workspace: Workspace,
@@ -45,6 +48,7 @@ macro_rules! position_request {
     ($( $(#[$doc:meta])* $name:ident; )*) => {$(
         $(#[$doc])*
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
         #[serde(transparent)]
         pub struct $name(pub AtPosition);
     )*};
@@ -66,6 +70,7 @@ position_request! {
 
 /// References at a source position.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct References {
     /// Source position and page.
     #[serde(flatten)]
@@ -77,6 +82,7 @@ pub struct References {
 
 /// File diagnostics, or the known workspace diagnostic cache.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Diagnostics {
     /// Authorized server selection.
     pub workspace: Workspace,

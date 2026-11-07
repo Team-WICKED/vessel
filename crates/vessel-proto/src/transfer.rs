@@ -46,6 +46,7 @@ pub const MAX_TRANSFER_TOTAL: u64 = 2 << 30;
 /// on that session, so an agent exports only what it started. Needs
 /// `operate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ExportSession {
     /// Which session.
     pub session: SessionId,
@@ -58,6 +59,7 @@ pub struct ExportSession {
 /// project's or all of it. Needs `admin`: memory is kept per account on
 /// purpose (plan decision 4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ExportMemory {
     /// Whose memory; absent is the harness's default profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,6 +72,7 @@ pub struct ExportMemory {
 
 /// Reply to `session.export` and `memory.export`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TransferManifest {
     /// The open transfer.
     pub transfer: TransferId,
@@ -81,6 +84,7 @@ pub struct TransferManifest {
 
 /// What a transfer holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransferDetail {
     /// A session's harness files.
@@ -109,6 +113,7 @@ pub enum TransferDetail {
 /// `offset`, as `fleet.blob` reads the bundle. Only the caller that opened
 /// it may read it. Needs `read`. Answers a `BlobChunk`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ReadTransfer {
     /// Which transfer.
     pub transfer: TransferId,
@@ -122,6 +127,7 @@ pub struct ReadTransfer {
 /// `transfer.close` (protocol 6): drop the snapshot. Only the caller that
 /// opened it may close it. Needs `read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CloseTransfer {
     /// Which transfer.
     pub transfer: TransferId,
@@ -129,6 +135,7 @@ pub struct CloseTransfer {
 
 /// A session on a node of the fleet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionRef {
     /// The node.
     pub node: NodeId,
@@ -143,6 +150,7 @@ pub struct SessionRef {
 /// already there with other content refuses the import before anything is
 /// written. Moving is importing, then killing the source. Needs `operate`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImportSession {
     /// The session to copy.
     pub from: SessionRef,
@@ -159,6 +167,7 @@ pub struct ImportSession {
 
 /// Reply to `session.import`: where the conversation is now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionImported {
     /// The harness's id for it, to resume it by later.
     pub harness_session: HarnessSessionId,
@@ -176,6 +185,7 @@ pub struct SessionImported {
 
 /// A profile's memory on a node of the fleet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct MemoryRef {
     /// The node.
     pub node: NodeId,
@@ -192,6 +202,7 @@ pub struct MemoryRef {
 /// (`.vessel-incoming`), as the fleet's materialiser does; nothing is
 /// overwritten. Needs `admin`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImportMemory {
     /// The memory to copy.
     pub from: MemoryRef,
@@ -205,6 +216,7 @@ pub struct ImportMemory {
 
 /// Reply to `memory.import`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct MemoryImported {
     /// Files written.
     pub written: u32,

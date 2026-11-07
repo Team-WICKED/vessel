@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sync · Vessel</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to main</a>
+    <div class="app">
+      <header class="topbar" role="banner">
+        <a class="brand" href="fleet.html">
+          <span class="mark" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M2 8.5 6 2.5 10 8.5" />
+              <path d="M4 8.5h4" />
+            </svg>
+          </span>
+          <span>Vessel</span>
+        </a>
+        <nav class="crumb" aria-label="Breadcrumb">
+          <a href="fleet.html">Fleet</a>
+          <span class="sep">/</span>
+          <span class="here">Sync</span>
+        </nav>
+        <label class="topbar-search">
+          <span class="ico ico-search" aria-hidden="true"></span>
+          <input
+            type="search"
+            placeholder="Search nodes, sessions, commands"
+            aria-label="Search"
+          />
+          <kbd class="kbd">⌘K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <a class="btn primary sm" href="new-session.html"
+            ><span class="ico ico-plus sm" aria-hidden="true"></span> New</a
+          >
+          <a class="chip" href="#settings">
+            <span class="pulse" aria-hidden="true"></span>
+            laptop · direct
+          </a>
+        </div>
+      </header>
+
+      <nav class="sidebar" role="navigation" aria-label="Fleet">
+        <div class="nav-block">
+          <div class="nav-kicker">Place</div>
+          <a class="nav-item" href="fleet.html"
+            ><span class="ico ico-fleet" aria-hidden="true"></span
+            ><span class="label">Fleet</span></a
+          >
+          <a class="nav-item node" href="fleet.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">laptop</span>
+            <span class="count">3</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">gpu-box</span>
+            <span class="count">2</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot warn" aria-label="draining"></span>
+            <span class="label">build-server</span>
+            <span class="count">1</span>
+          </a>
+          <a class="nav-item node offline" href="sessions.html">
+            <span class="status-dot offline" aria-label="offline"></span>
+            <span class="label">studio</span>
+            <span class="dash">—</span>
+          </a>
+        </div>
+        <div class="nav-block">
+          <div class="nav-kicker">Work</div>
+          <a class="nav-item" href="sessions.html"
+            ><span class="ico ico-sessions" aria-hidden="true"></span
+            ><span class="label">Sessions</span><span class="count">6</span></a
+          >
+          <a class="nav-item active" href="fleet-sync.html" aria-current="page"
+            ><span class="ico ico-sync" aria-hidden="true"></span
+            ><span class="label">Sync</span><span class="count">1</span></a
+          >
+          <a class="nav-item" href="devices.html"
+            ><span class="ico ico-devices" aria-hidden="true"></span
+            ><span class="label">Devices</span></a
+          >
+        </div>
+        <div class="nav-foot">
+          <a class="nav-item" href="#settings"
+            ><span class="ico ico-settings" aria-hidden="true"></span
+            ><span class="label">Settings</span></a
+          >
+        </div>
+      </nav>
+
+      <main class="main" id="main" role="main">
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <h1>Fleet sync</h1>
+              <p>
+                laptop is home, generation 48. Members pull instructions, skills
+                and MCP servers. Local edits are kept.
+              </p>
+            </div>
+          </div>
+          <div class="page-body">
+            <div class="strip">
+              <div>
+                <div class="k">Home</div>
+                <div class="v">laptop</div>
+                <div class="s">publishing</div>
+              </div>
+              <div>
+                <div class="k">Generation</div>
+                <div class="v mono">48</div>
+                <div class="s">2 minutes ago</div>
+              </div>
+              <div>
+                <div class="k">Members</div>
+                <div class="v mono">3</div>
+                <div class="s">1 stale · 1 conflict</div>
+              </div>
+              <div>
+                <div class="k">MCP servers</div>
+                <div class="v mono">4</div>
+                <div class="s">secrets by name only</div>
+              </div>
+            </div>
+
+            <div class="panel" style="margin-bottom: 16px">
+              <h2>Sources on laptop</h2>
+              <div class="pad">
+                <div class="source-row">
+                  <span class="k">Instructions</span>
+                  <span class="path">~/agents/AGENTS.md</span>
+                  <span class="badge applied">linked</span>
+                </div>
+                <div class="source-row">
+                  <span class="k">Skills</span>
+                  <span class="path">~/agents/skills</span>
+                  <span class="muted">12 · skip draft-*</span>
+                </div>
+                <div class="source-row">
+                  <span class="k">MCP</span>
+                  <span class="path">docs · repo · browser · vessel</span>
+                  <span class="muted">DOCS_TOKEN, GH_TOKEN</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="conflict">
+              <h3>Conflict on build-server</h3>
+              <span class="path">~/.claude/skills/release-notes/SKILL.md</span>
+              <p class="hint" style="margin-bottom: 10px">
+                A local edit was kept. The home version is beside it as
+                <span class="mono">SKILL.md.vessel-incoming</span>. Vessel never
+                overwrites a file you changed.
+              </p>
+              <div class="inline">
+                <button class="btn sm" type="button">Keep local edit</button>
+                <button class="btn sm" type="button">
+                  Take incoming version
+                </button>
+                <span class="hint">gen 47 on the member · gen 48 incoming</span>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data" aria-label="Members">
+                <thead>
+                  <tr>
+                    <th scope="col">Member</th>
+                    <th scope="col">Applied</th>
+                    <th scope="col">Lag</th>
+                    <th scope="col">Conflicts</th>
+                    <th scope="col">Grant</th>
+                    <th scope="col">Last pull</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <div class="inline">
+                        <span class="status-dot" aria-hidden="true"></span>
+                        <span class="name">gpu-box</span>
+                      </div>
+                    </td>
+                    <td class="mono">48</td>
+                    <td><span class="badge applied">current</span></td>
+                    <td class="mono muted">0</td>
+                    <td class="mono muted">read, operate</td>
+                    <td class="mono muted">12s</td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="inline">
+                        <span class="status-dot warn" aria-hidden="true"></span>
+                        <span class="name">build-server</span>
+                      </div>
+                    </td>
+                    <td class="mono">47</td>
+                    <td><span class="badge stale">1 behind</span></td>
+                    <td><span class="badge conflict">1</span></td>
+                    <td class="mono muted">read, operate, admin</td>
+                    <td class="mono muted">8m</td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="inline">
+                        <span
+                          class="status-dot offline"
+                          aria-hidden="true"
+                        ></span>
+                        <span class="name">studio</span>
+                      </div>
+                    </td>
+                    <td class="mono">48</td>
+                    <td><span class="badge">offline</span></td>
+                    <td class="mono muted">0</td>
+                    <td class="mono muted">read, operate</td>
+                    <td class="mono muted">2h</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div
+      id="settings"
+      class="overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+    >
+      <div class="dialog narrow">
+        <div class="dialog-h">
+          <h1 id="settings-title">Settings</h1>
+          <a class="btn ghost icon-btn" href="#" aria-label="Close"
+            ><span class="ico ico-close"></span
+          ></a>
+        </div>
+        <div class="dialog-b">
+          <div class="field">
+            <span>Theme</span>
+            <div class="seg">
+              <label
+                ><input type="radio" name="theme" checked /><span
+                  >Dark</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="theme" id="theme-light" /><span
+                  >Light</span
+                ></label
+              >
+            </div>
+          </div>
+        </div>
+        <div class="dialog-f"><a class="btn" href="#">Done</a></div>
+      </div>
+    </div>
+  </body>
+</html>

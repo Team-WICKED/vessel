@@ -103,3 +103,38 @@ async fn an_older_connection_reads_a_stand_in_for_a_newer_event() {
         assert!(text.contains(r#""seq":2"#), "protocol {version}: {text}");
     }
 }
+
+/// `call_any` holds an already-built call to the negotiated version, as
+/// typed calls are: one newer than the connection is not sent.
+#[tokio::test]
+async fn an_already_built_call_newer_than_the_connection_is_not_sent() {
+    let (client_end, mut server_end) = pair();
+    // A node that speaks protocol 4 only.
+    let older_node = async move {
+        let hello = server_end.next().await.unwrap().unwrap();
+        let _hello: ClientFrame = serde_json::from_str(&hello).unwrap();
+        let welcome = ServerFrame::Welcome(vessel_proto::Welcome {
+            protocol: ProtocolVersion::new(4),
+            node: node(),
+        });
+        server_end
+            .send(serde_json::to_string(&welcome).unwrap())
+            .await
+            .unwrap();
+        server_end
+    };
+    let config = ClientConfig::default();
+    let (client, _server_end) = tokio::join!(
+        Connection::connect(client_end, client_info(), &config),
+        older_node
+    );
+    let client = client.unwrap();
+    let call = UnaryCall::try_from(ListProfiles { harness: None }.into_call()).unwrap();
+    assert!(matches!(
+        client.call_any(call).await,
+        Err(CallError::NotInProtocol {
+            method: vessel_proto::Method::ListProfiles,
+            ..
+        })
+    ));
+}

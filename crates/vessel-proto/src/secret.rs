@@ -30,6 +30,7 @@ use crate::name::SecretName;
 
 /// A secret's value, on its way into a node's store.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct SecretValue(String);
 
@@ -56,6 +57,7 @@ impl fmt::Debug for SecretValue {
 /// `secret.set` (protocol 6): store a value in this node's `secrets.toml`,
 /// replacing one of the same name. Needs `admin`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SetSecret {
     /// Its name.
     pub name: SecretName,
@@ -66,10 +68,12 @@ pub struct SetSecret {
 /// `secret.list` (protocol 6): the names of this node's secrets, never
 /// their values. Needs `admin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListSecrets;
 
 /// `secret.delete` (protocol 6): remove a secret. Needs `admin`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DeleteSecret {
     /// Which secret.
     pub name: SecretName,
@@ -79,6 +83,7 @@ pub struct DeleteSecret {
 /// node `to`, which stores it under the same name. Needs `admin` here, and
 /// the delivering grant on `to` must hold `admin` too.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CopySecret {
     /// Which secret.
     pub name: SecretName,

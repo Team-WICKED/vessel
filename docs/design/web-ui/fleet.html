@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fleet · Vessel</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to main</a>
+    <div class="app">
+      <header class="topbar" role="banner">
+        <a class="brand" href="fleet.html">
+          <span class="mark" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M2 8.5 6 2.5 10 8.5" />
+              <path d="M4 8.5h4" />
+            </svg>
+          </span>
+          <span>Vessel</span>
+        </a>
+        <nav class="crumb" aria-label="Breadcrumb">
+          <span class="here">Fleet</span>
+        </nav>
+        <label class="topbar-search">
+          <span class="ico ico-search" aria-hidden="true"></span>
+          <input
+            type="search"
+            placeholder="Search nodes, sessions, commands"
+            aria-label="Search"
+          />
+          <kbd class="kbd">⌘K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <a class="btn primary sm" href="new-session.html"
+            ><span class="ico ico-plus sm" aria-hidden="true"></span> New</a
+          >
+          <a class="chip" href="#settings" title="This client">
+            <span class="pulse" aria-hidden="true"></span>
+            laptop · direct
+          </a>
+        </div>
+      </header>
+
+      <nav class="sidebar" role="navigation" aria-label="Fleet">
+        <div class="nav-block">
+          <div class="nav-kicker">Place</div>
+          <a class="nav-item active" href="fleet.html"
+            ><span class="ico ico-fleet" aria-hidden="true"></span
+            ><span class="label">Fleet</span></a
+          >
+          <a class="nav-item node" href="fleet.html" aria-current="page">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">laptop</span>
+            <span class="count">3</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">gpu-box</span>
+            <span class="count">2</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot warn" aria-label="draining"></span>
+            <span class="label">build-server</span>
+            <span class="count">1</span>
+          </a>
+          <a class="nav-item node offline" href="sessions.html">
+            <span class="status-dot offline" aria-label="offline"></span>
+            <span class="label">studio</span>
+            <span class="dash">—</span>
+          </a>
+        </div>
+        <div class="nav-block">
+          <div class="nav-kicker">Work</div>
+          <a class="nav-item" href="sessions.html"
+            ><span class="ico ico-sessions" aria-hidden="true"></span
+            ><span class="label">Sessions</span><span class="count">6</span></a
+          >
+          <a class="nav-item" href="fleet-sync.html"
+            ><span class="ico ico-sync" aria-hidden="true"></span
+            ><span class="label">Sync</span><span class="count">1</span></a
+          >
+          <a class="nav-item" href="devices.html"
+            ><span class="ico ico-devices" aria-hidden="true"></span
+            ><span class="label">Devices</span></a
+          >
+        </div>
+        <div class="nav-foot">
+          <a class="nav-item" href="#settings"
+            ><span class="ico ico-settings" aria-hidden="true"></span
+            ><span class="label">Settings</span></a
+          >
+        </div>
+      </nav>
+
+      <main class="main" id="main" role="main">
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <h1>Fleet</h1>
+              <p>
+                Four nodes, one home. Live counts are starting or running
+                sessions.
+              </p>
+            </div>
+            <a class="btn" href="new-session.html"
+              ><span class="ico ico-plus sm" aria-hidden="true"></span> New
+              session</a
+            >
+          </div>
+          <div class="page-body">
+            <div class="strip" aria-label="Fleet summary">
+              <div>
+                <div class="k">Nodes</div>
+                <div class="v mono">4</div>
+                <div class="s">3 online · 1 offline</div>
+              </div>
+              <div>
+                <div class="k">Live sessions</div>
+                <div class="v mono">6</div>
+                <div class="s">2 of them agent-created</div>
+              </div>
+              <div>
+                <div class="k">Sync</div>
+                <div class="v mono">48</div>
+                <div class="s">home generation · 1 stale</div>
+              </div>
+              <div>
+                <div class="k">Conflicts</div>
+                <div class="v mono">1</div>
+                <div class="s">build-server kept a local edit</div>
+              </div>
+            </div>
+
+            <div class="two-col">
+              <div class="table-wrap">
+                <table class="data" aria-label="Nodes">
+                  <thead>
+                    <tr>
+                      <th scope="col">Node</th>
+                      <th scope="col">Role</th>
+                      <th scope="col">State</th>
+                      <th scope="col">Reach</th>
+                      <th scope="col">Live</th>
+                      <th scope="col">Version</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr class="selected" aria-selected="true">
+                      <td>
+                        <div class="inline">
+                          <span class="status-dot" aria-hidden="true"></span>
+                          <div class="stack">
+                            <span class="name">laptop</span>
+                            <span class="muted"
+                              >darwin/arm64 · this client</span
+                            >
+                          </div>
+                        </div>
+                      </td>
+                      <td><span class="badge home">home</span></td>
+                      <td><span class="badge serving">serving</span></td>
+                      <td><span class="badge mono">direct</span></td>
+                      <td class="mono">3</td>
+                      <td class="mono muted">0.5.0</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <div class="inline">
+                          <span class="status-dot" aria-hidden="true"></span>
+                          <div class="stack">
+                            <span class="name">gpu-box</span>
+                            <span class="muted"
+                              >linux/x86_64 · 2 profiles logged in</span
+                            >
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span class="badge">member</span>
+                        <span class="gen">gen 48</span>
+                      </td>
+                      <td><span class="badge serving">serving</span></td>
+                      <td><span class="badge mono">relay</span></td>
+                      <td class="mono">2</td>
+                      <td class="mono muted">0.5.0</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <div class="inline">
+                          <span
+                            class="status-dot warn"
+                            aria-hidden="true"
+                          ></span>
+                          <div class="stack">
+                            <span class="name">build-server</span>
+                            <span class="muted"
+                              >linux/x86_64 · when-idle stop</span
+                            >
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span class="badge">member</span>
+                        <span class="badge stale">gen 47</span>
+                        <span class="badge conflict">conflict</span>
+                      </td>
+                      <td><span class="badge draining">draining</span></td>
+                      <td><span class="badge mono">ssh</span></td>
+                      <td class="mono">1</td>
+                      <td class="mono muted">0.4.2</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <div class="inline">
+                          <span
+                            class="status-dot offline"
+                            aria-hidden="true"
+                          ></span>
+                          <div class="stack">
+                            <span class="name">studio</span>
+                            <span class="muted"
+                              >darwin/arm64 · last seen 2h ago</span
+                            >
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span class="badge">member</span>
+                        <span class="gen">gen 48</span>
+                      </td>
+                      <td><span class="badge">offline</span></td>
+                      <td><span class="badge mono">direct</span></td>
+                      <td class="mono muted">—</td>
+                      <td class="mono muted">0.5.0</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <aside class="panel" role="complementary" aria-label="laptop">
+                <h2>laptop</h2>
+                <div class="pad">
+                  <dl>
+                    <dt>id</dt>
+                    <dd>n_7c2a1b90</dd>
+                    <dt>os</dt>
+                    <dd>darwin / arm64</dd>
+                    <dt>version</dt>
+                    <dd>0.5.0 · protocol 6</dd>
+                    <dt>started</dt>
+                    <dd>today 08:14</dd>
+                    <dt>reach</dt>
+                    <dd>direct · ws://127.0.0.1:7077</dd>
+                    <dt>role</dt>
+                    <dd>home · generation 48</dd>
+                  </dl>
+                  <section style="margin-top: 16px">
+                    <h2 style="padding: 0; border: 0; margin-bottom: 8px">
+                      Harnesses
+                    </h2>
+                    <div class="stack" style="gap: 8px">
+                      <div class="inline">
+                        <span class="badge running">claude</span
+                        ><span class="muted">claude, claude-work</span>
+                      </div>
+                      <div class="inline">
+                        <span class="badge running">codex</span
+                        ><span class="muted">codex</span>
+                      </div>
+                      <div class="inline">
+                        <span class="badge">gemini</span
+                        ><span class="muted">gemini · idle</span>
+                      </div>
+                    </div>
+                  </section>
+                  <section style="margin-top: 16px">
+                    <h2 style="padding: 0; border: 0; margin-bottom: 8px">
+                      Live
+                    </h2>
+                    <p class="hint" style="margin-bottom: 8px">
+                      3 running · <a href="sessions.html">open sessions</a>
+                    </p>
+                    <div class="stack" style="gap: 6px">
+                      <a class="path" href="session-structured.html"
+                        >3f2a · claude-work · /Users/you/src/app</a
+                      >
+                      <a class="path" href="session-terminal.html"
+                        >b4e1 · claude · terminal</a
+                      >
+                      <span class="path muted">9aa0 · gemini · starting</span>
+                    </div>
+                  </section>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div
+      id="settings"
+      class="overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+    >
+      <div class="dialog narrow">
+        <div class="dialog-h">
+          <h1 id="settings-title">Settings</h1>
+          <a class="btn ghost icon-btn" href="#" aria-label="Close"
+            ><span class="ico ico-close"></span
+          ></a>
+        </div>
+        <div class="dialog-b">
+          <div class="field">
+            <span>Theme</span>
+            <div class="seg" role="radiogroup" aria-label="Theme">
+              <label
+                ><input type="radio" name="theme" checked /><span
+                  >Dark</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="theme" id="theme-light" /><span
+                  >Light</span
+                ></label
+              >
+            </div>
+            <p class="hint">
+              Dark is the design. Light is a second palette, not an inversion.
+            </p>
+          </div>
+          <div>
+            <div
+              class="inline"
+              style="justify-content: space-between; margin-bottom: 6px"
+            >
+              <span class="muted">Node book</span>
+              <span class="hint">~/.config/vessel/nodes.toml</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data book">
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Reach</th>
+                    <th scope="col">Default</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="name">laptop</td>
+                    <td class="mono muted">direct</td>
+                    <td>yes</td>
+                  </tr>
+                  <tr>
+                    <td class="name">gpu-box</td>
+                    <td class="mono muted">relay</td>
+                    <td></td>
+                  </tr>
+                  <tr>
+                    <td class="name">build-server</td>
+                    <td class="mono muted">ssh you@build-server</td>
+                    <td></td>
+                  </tr>
+                  <tr>
+                    <td class="name">studio</td>
+                    <td class="mono muted">direct</td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="dialog-f">
+          <a class="btn" href="#">Done</a>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

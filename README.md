@@ -31,7 +31,7 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Milestones 1 to 6 are done, on `main`, and green on Linux, macOS and
+Milestones 1 to 7 are done, on `main`, and green on Linux, macOS and
 Windows ([docs/ROADMAP.md](docs/ROADMAP.md) has the details and what is
 next):
 
@@ -53,8 +53,10 @@ next):
 6. **IDE context.** The node runs language servers on saved files and gives
    agents symbols, references, hover, call hierarchy and diagnostics as MCP
    tools, without running repository code by default (below).
-
-The web UI (milestone 7) is a separate milestone, still in review.
+7. **A web UI.** `vessel ui` serves the fleet in a browser on this
+   machine: nodes, sessions (structured and terminal), new sessions on any
+   route, sync, devices and settings, with the session's model calls
+   ("Web UI" below).
 
 ## Try it
 
@@ -506,6 +508,79 @@ vessel log 3f2a                              # model calls: route, model, tokens
 - `docs/smoke/model-route.sh` checks a real provider end to end
   (`docs/smoke/README.md`).
 
+## Web UI
+
+`vessel ui` serves Vessel's web UI on this machine and opens it in the
+browser on Unix (on Windows, open the printed address): the fleet, every node's sessions (a session an agent started
+sits under the one that started it), a session as a terminal or as a
+structured timeline with its prompt box and permission answers, new
+sessions, fleet sync, devices and pairing with a QR code, and settings.
+
+```bash
+vessel ui            # serves on 127.0.0.1:7079 (any free port if taken), opens the browser
+vessel ui --no-open  # prints the address instead
+```
+
+- The page reaches the nodes of your node book (and this machine's node)
+  through `vessel ui`, which connects to them as `vessel` does: tokens,
+  SSH, paired credentials and pinned ids stay in this process. The browser
+  holds none of them and never speaks to a node itself.
+- It listens on loopback only. Each printed address uses a fresh random
+  `vessel-<id>.localhost` hostname so an earlier process on that port cannot
+  seed this launch's HTML cache or service worker. Use a browser that resolves
+  `*.localhost` locally: **Chrome, Edge or Firefox is required**. Safari
+  does not resolve these hostnames and is not supported for now. Do not
+  replace the printed hostname with a fixed address: that loses the
+  per-launch browser-origin isolation.
+- The address's `#bootstrap=` fragment is a
+  single-use code: treat it like a password until opened. The page removes
+  it from the address bar and exchanges proof of it for an independent
+  session key in this tab's `sessionStorage`. Reloads and network reconnects
+  work; reusing the address in a fresh tab does not. Start `vessel ui` again
+  for another independent browser context. Every connection verifies a fresh
+  server proof and launch id; an old tab stops when the UI is restarted.
+  A tab whose connection keeps failing stops redialling and says it is
+  disconnected; Retry (or a reload) resumes once `vessel ui` answers again.
+- Links in agent output, in the timeline's Markdown or a terminal's OSC 8
+  hyperlinks, open only when they are http(s): in a new tab that cannot
+  reach the UI's, after a confirmation showing the URL for the terminal.
+  The UI's own tab never navigates away.
+- The Unix browser handoff is a 0600 file in a directory created as 0700,
+  under `XDG_RUNTIME_DIR` when set (otherwise the system temporary directory).
+  SIGINT, SIGTERM and SIGHUP remove it. Forced kills/crashes cannot guarantee
+  cleanup, but a redeemed code is already dead. On Windows automatic opening
+  is disabled until an atomic private ACL implementation is available; the
+  printed address works and no handoff file is created.
+- Device pairing links and QR codes start hidden. Use **Show pairing link**;
+  copying, leaving the page, or 30 seconds passing hides them again.
+- New session's Model field lists the node's model routes by provider;
+  picking one picks the profile on it (a route reaches a session only
+  through a profile). A routed session shows its route, and each model
+  call (route, model, tokens, how it ended, how long; never content) in
+  its timeline, summed in the inspector or the terminal's frame.
+- One connection per node is shared by every tab. A session's stream
+  survives the node's connection dropping and resumes where it was.
+- Release builds of `vessel` embed the page. A build from source embeds it
+  when `web/dist` exists (`npm ci && npm run build` in `web/`), and shows a
+  page saying how to build it otherwise.
+
+The page's own development (Node.js 22 or later):
+
+```bash
+cd web
+npm ci
+npm run lint && npm run typecheck && npm test   # ESLint, Prettier, the font rule; tsc; vitest
+npm run build && npm run fonts                  # SRI-protected web/dist and built font audit
+npm run e2e                                     # Playwright against real nodes with the fake harnesses
+npm run screens                                 # every main screen into web/artifacts/screens/
+```
+
+`e2e` and `screens` need the Rust binaries first (`cargo build -p
+vessel-cli -p vessel-node --bin vesseld` and `cargo build -p
+vessel-testkit --bins`). Set `VESSEL_SCREEN_DIR` to write screenshots outside
+the checkout. CI uploads only the deliberate screenshots with pairing links
+hidden; traces, videos and automatic failure screenshots are disabled.
+
 ## Environment
 
 | Variable | Means | Default |
@@ -541,7 +616,8 @@ cargo test --workspace
 
 CI runs exactly those three on Linux, Windows and macOS. Lints are strict
 (no `unwrap`, no panics, no indexing, no raw arithmetic); see the workspace
-`Cargo.toml`.
+`Cargo.toml`. Changes to `web/` also need its checks ("Web UI" above),
+which CI runs on Linux.
 
 ## License
 

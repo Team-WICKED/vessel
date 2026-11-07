@@ -1,0 +1,35 @@
+/* The placeholder page shown when no web bundle was embedded. The
+   operator's font rule holds here too: Pretendard before any generic
+   family, and code in a real monospace font first. */
+body {
+  margin: 3rem auto;
+  max-width: 40rem;
+  padding: 0 1.5rem;
+  font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Malgun Gothic", sans-serif;
+  line-height: 1.6;
+  color: #1f2328;
+  background: #ffffff;
+}
+
+code,
+pre {
+  font-family: Consolas, "SFMono-Regular", Menlo, "DejaVu Sans Mono", Pretendard, monospace;
+}
+
+pre {
+  padding: 1rem;
+  border-radius: 6px;
+  background: #f6f8fa;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #e6edf3;
+    background: #0d1117;
+  }
+
+  pre {
+    background: #161b22;
+  }
+}

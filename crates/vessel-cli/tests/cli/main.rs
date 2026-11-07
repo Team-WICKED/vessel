@@ -25,6 +25,8 @@ mod reconnect;
 mod support;
 #[cfg(test)]
 mod transfers;
+#[cfg(test)]
+mod ui;
 
 use support::{Fixture, within};
 

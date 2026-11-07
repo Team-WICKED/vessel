@@ -50,6 +50,14 @@ pub(crate) enum CliError {
     /// The node book or a project file.
     #[error(transparent)]
     Book(#[from] BookError),
+    /// `vessel ui` was asked for a node the book does not have (the UI
+    /// reaches book nodes and this machine's only, never an address a
+    /// page made up).
+    #[error("no node named `{0}` in the book")]
+    NotInBook(String),
+    /// Text that is not a node name.
+    #[error(transparent)]
+    NodeName(#[from] vessel_client::book::InvalidNodeName),
     /// Text that names no node.
     #[error("`{text}` is not a node address")]
     Address {
@@ -178,6 +186,10 @@ pub(crate) enum CliError {
     FleetFile(#[from] vessel_node::fleet::FileError),
     #[error("terminal I/O failed")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    UiToken(#[from] vessel_web::MintError),
+    #[error(transparent)]
+    Ui(#[from] vessel_web::ServeError),
     #[error("an input task failed")]
     Task(#[from] tokio::task::JoinError),
 }

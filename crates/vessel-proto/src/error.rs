@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// What kind of failure occurred. Clients branch on this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     /// The request was malformed or its arguments were invalid.
@@ -40,6 +41,7 @@ pub enum ErrorCode {
 
 /// An error returned in place of a response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WireError {
     /// Machine-readable kind.
     pub code: ErrorCode,

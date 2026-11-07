@@ -1,0 +1,206 @@
+[
+  {
+    "seq": 0,
+    "at": "2026-11-07T16:19:13.042183629Z",
+    "event": {
+      "type": "status",
+      "status": {
+        "state": "starting"
+      }
+    }
+  },
+  {
+    "seq": 1,
+    "at": "2026-11-07T16:19:13.044246719Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "harness_log",
+        "line": "fake-acp starting"
+      }
+    }
+  },
+  {
+    "seq": 2,
+    "at": "2026-11-07T16:19:13.049092789Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "ready",
+        "harness_session": "fake-session-1"
+      }
+    }
+  },
+  {
+    "seq": 3,
+    "at": "2026-11-07T16:19:13.049132039Z",
+    "event": {
+      "type": "status",
+      "status": {
+        "state": "running"
+      }
+    }
+  },
+  {
+    "seq": 4,
+    "at": "2026-11-07T16:19:13.164879163Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "turn_started",
+        "content": [
+          {
+            "type": "text",
+            "text": "tidy the overview"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "seq": 5,
+    "at": "2026-11-07T16:19:13.167844119Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "thinking"
+        }
+      }
+    }
+  },
+  {
+    "seq": 6,
+    "at": "2026-11-07T16:19:13.170063019Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "message_chunk",
+        "content": {
+          "type": "text",
+          "text": "echo: tidy the overview (model fake-small)"
+        }
+      }
+    }
+  },
+  {
+    "seq": 7,
+    "at": "2026-11-07T16:19:13.170097083Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "tool_call",
+        "id": "call-1",
+        "title": "Run fake tool",
+        "kind": "execute",
+        "status": "pending",
+        "content": [],
+        "locations": [],
+        "raw_input": { "command": "fake", "args": ["--fast"] }
+      }
+    }
+  },
+  {
+    "seq": 8,
+    "at": "2026-11-07T16:19:13.170105004Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "plan",
+        "entries": [
+          {
+            "content": "Run the fake tool",
+            "priority": "high",
+            "status": "in_progress"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "seq": 9,
+    "at": "2026-11-07T16:19:13.170110891Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "tool_call_update",
+        "id": "call-1",
+        "status": "in_progress"
+      }
+    }
+  },
+  {
+    "seq": 10,
+    "at": "2026-11-07T16:19:13.172026177Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "permission_requested",
+        "id": "67d8dc5a-78cb-4e1a-95a3-46f3d2784cc5",
+        "tool_call": "call-1",
+        "options": [
+          {
+            "id": "allow-once",
+            "name": "Allow",
+            "kind": "allow_once"
+          },
+          {
+            "id": "reject-once",
+            "name": "Reject",
+            "kind": "reject_once"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "seq": 11,
+    "at": "2026-11-07T16:19:13.214317866Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "permission_resolved",
+        "id": "67d8dc5a-78cb-4e1a-95a3-46f3d2784cc5",
+        "outcome": {
+          "outcome": "selected",
+          "option": "allow-once"
+        }
+      }
+    }
+  },
+  {
+    "seq": 12,
+    "at": "2026-11-07T16:19:13.218438343Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "tool_call_update",
+        "id": "call-1",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "tool output"
+            }
+          }
+        ],
+        "raw_output": { "ok": true }
+      }
+    }
+  },
+  {
+    "seq": 13,
+    "at": "2026-11-07T16:19:13.223150459Z",
+    "event": {
+      "type": "agent",
+      "event": {
+        "event": "turn_ended",
+        "reason": "end_turn"
+      }
+    }
+  }
+]

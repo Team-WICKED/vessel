@@ -17,6 +17,7 @@ use crate::pairing::PairingLink;
 /// (`Method::scope`); the node checks it for calls from a paired device.
 /// The node token and the local socket hold every scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     /// Look: node info, harnesses, sessions, logs, subscriptions.
@@ -88,6 +89,7 @@ secret! {
 
 /// A paired device as the node reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DeviceInfo {
     /// Its id.
     pub id: DeviceId,
@@ -107,6 +109,7 @@ pub struct DeviceInfo {
 
 /// The first frame a client sends inside a secure channel, before `hello`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Preamble {
     /// A paired device presents its credential.
@@ -128,6 +131,7 @@ pub enum Preamble {
 /// Why a node refused a preamble. Deliberately coarse: a refusal must not
 /// tell an attacker which part was wrong beyond what a legitimate user needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RefusalReason {
     /// No such device, or the credential does not match.
@@ -142,6 +146,7 @@ pub enum RefusalReason {
 
 /// The node's answer to a [`Preamble`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreambleReply {
     /// The device is authenticated; `hello` follows.
@@ -169,6 +174,7 @@ pub enum PreambleReply {
 
 /// `device.invite` (protocol 4): make a pairing link. Needs `Admin`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct InviteDevice {
     /// Label for the device that redeems it (it may name itself instead).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,6 +190,7 @@ pub struct InviteDevice {
 
 /// Reply to `device.invite`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Invitation {
     /// The link to hand to the new device.
     pub link: PairingLink,
@@ -193,10 +200,12 @@ pub struct Invitation {
 
 /// `device.list` (protocol 4): every device, revoked ones included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListDevices;
 
 /// `device.revoke` (protocol 4): revoke a device and close its connections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RevokeDevice {
     /// Which device.
     pub device: DeviceId,

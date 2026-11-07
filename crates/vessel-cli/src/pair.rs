@@ -44,17 +44,49 @@ pub(crate) async fn add(
     default: bool,
 ) -> Result<(), CliError> {
     let book = nodes::book_path(target)?;
-    let credentials = config_dir(target)?;
     ensure_free(&book, &name).await?;
     let offer = offer_from_stdin(yes, "vessel node pair", "pair with this node?").await?;
+    let joined = with_offer(target, &name, &offer, default).await?;
+    io::note(&format!(
+        "paired with {} ({}) via {}; added {name} to {}\n",
+        joined.name,
+        joined.id,
+        joined.route,
+        book.display()
+    ))
+    .await?;
+    Ok(())
+}
 
+/// A node paired with and added to the book.
+pub(crate) struct Joined {
+    /// The node's own name for itself.
+    pub(crate) name: String,
+    /// Its id.
+    pub(crate) id: vessel_proto::NodeId,
+    /// The route the pairing went through.
+    pub(crate) route: String,
+}
+
+/// Pair with the node `offer` names (already shown and confirmed), write
+/// the credential, and add the node to the book as `name`: shared by
+/// `vessel nodes add --pair` and `vessel ui`'s devices screen.
+pub(crate) async fn with_offer(
+    target: &Target,
+    name: &NodeName,
+    offer: &PairingOffer,
+    default: bool,
+) -> Result<Joined, CliError> {
+    let book = nodes::book_path(target)?;
+    let credentials = config_dir(target)?;
+    ensure_free(&book, name).await?;
     let dialer =
         WsDialer::for_routes(offer.direct.iter().chain(&offer.relays)).map_err(CliError::Tls)?;
     let device_name = hostname::get()
         .ok()
         .and_then(|name| name.into_string().ok())
         .unwrap_or_else(|| "device".to_owned());
-    let (paired, route) = pair_over(&dialer, &offer, &device_name, RouteTimeouts::default())
+    let (paired, route) = pair_over(&dialer, offer, &device_name, RouteTimeouts::default())
         .await
         .map_err(CliError::Reach)?;
 
@@ -87,14 +119,11 @@ pub(crate) async fn add(
         .await?
     };
     saved?;
-    io::note(&format!(
-        "paired with {} ({}) via {route}; added {name} to {}\n",
-        paired.node.name,
-        paired.node.id,
-        book.display()
-    ))
-    .await?;
-    Ok(())
+    Ok(Joined {
+        name: paired.node.name.clone(),
+        id: paired.node.id,
+        route: route.to_string(),
+    })
 }
 
 /// A pairing link read from standard input (pasted at a prompt, or

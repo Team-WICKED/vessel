@@ -82,9 +82,9 @@ and 6).
 
 ## Next
 
-Not planned yet. In roadmap order the next milestone is Phase 5 (Phase 3,
-model routing, and Phase 4, IDE context, are done). Milestone 4 left these
-follow-ups, none scheduled:
+Not planned yet. Phases 3 (model routing) and 4 (IDE context) are done,
+and Phase 5 has its web UI; the editor integrations are next in roadmap
+order. Milestone 4 left these follow-ups, none scheduled:
 
 - Agent limits per fleet: today they are per node, so an agent may own 8
   live sessions on each node it reaches (ADR 0013, "Known limits").
@@ -124,6 +124,9 @@ follow-ups, none scheduled:
 
 ## Phase 5: clients
 
-- [ ] Web UI.
+- [x] Web UI: `vessel ui` (milestone 7, ADR 0017). Follow-ups: `vesseld
+  --web` (a node serving the page itself); Safari, which does not resolve
+  the per-launch `vessel-<id>.localhost` origins (revisit with a signed
+  bootstrap page or Safari's `localhost` port isolation; ADR 0017).
 - [ ] Zed / VS Code integration.
 - [ ] Native editor (only if the above is not enough).

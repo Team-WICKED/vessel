@@ -9,19 +9,23 @@ use crate::session::{SessionInfo, SessionInput, SessionSpec};
 
 /// `node.info`: describe the node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GetNode;
 
 /// `harness.list`: discover installed harnesses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListHarnesses;
 
 /// `session.list`: every session the node knows, newest first, including
 /// ended sessions restored from disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListSessions;
 
 /// `session.get`: one session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GetSession {
     /// Which session.
     pub session: SessionId,
@@ -29,6 +33,7 @@ pub struct GetSession {
 
 /// `session.create`: start a harness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CreateSession {
     /// What to run.
     pub spec: SessionSpec,
@@ -36,6 +41,7 @@ pub struct CreateSession {
 
 /// `session.send`: send input to a live session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SendInput {
     /// Which session.
     pub session: SessionId,
@@ -45,6 +51,7 @@ pub struct SendInput {
 
 /// `session.kill`: stop a session's process (and its process group).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct KillSession {
     /// Which session.
     pub session: SessionId,
@@ -53,6 +60,7 @@ pub struct KillSession {
 /// `session.read`: a page of a session's log. The authoritative way to fill
 /// gaps; live subscriptions are an optimisation on top of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ReadEvents {
     /// Which session.
     pub session: SessionId,
@@ -75,6 +83,7 @@ impl ReadEvents {
 
 /// Reply to `session.read`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EventPage {
     /// Records in order, starting at the requested `from` (or the oldest
     /// retained record if older ones were pruned).
@@ -112,6 +121,7 @@ impl EventPage {
 
 /// `session.subscribe`: stream a session's events from `from` onwards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Subscribe {
     /// Which session.
     pub session: SessionId,
@@ -121,6 +131,7 @@ pub struct Subscribe {
 
 /// Reply to `session.subscribe`. Events follow as `ServerFrame::Event`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Subscribed {
     /// Id that tags the events of this subscription.
     pub subscription: SubscriptionId,
@@ -130,6 +141,7 @@ pub struct Subscribed {
 
 /// `session.unsubscribe`: stop a subscription on this connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Unsubscribe {
     /// Which subscription.
     pub subscription: SubscriptionId,
@@ -137,6 +149,7 @@ pub struct Unsubscribe {
 
 /// When `node.stop` takes effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum StopWhen {
     /// Stop now: live sessions end `Interrupted`, as on a signal.
@@ -148,6 +161,7 @@ pub enum StopWhen {
 /// `node.stop` (protocol 3): stop the node, now or once idle. Used by
 /// remote update; a client that negotiated protocol 2 never sends it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct StopNode {
     /// When to stop.
     pub when: StopWhen,
@@ -155,4 +169,5 @@ pub struct StopNode {
 
 /// Empty success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Ack;

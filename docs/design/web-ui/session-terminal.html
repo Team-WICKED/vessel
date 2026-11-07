@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>b4e1 · laptop · Vessel</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <a class="skip" href="#term">Skip to terminal</a>
+    <div class="app">
+      <header class="topbar" role="banner">
+        <a class="brand" href="fleet.html">
+          <span class="mark" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M2 8.5 6 2.5 10 8.5" />
+              <path d="M4 8.5h4" />
+            </svg>
+          </span>
+          <span>Vessel</span>
+        </a>
+        <nav class="crumb" aria-label="Breadcrumb">
+          <a href="fleet.html">Fleet</a>
+          <span class="sep">/</span>
+          <a href="sessions.html">laptop</a>
+          <span class="sep">/</span>
+          <span class="here mono">b4e1</span>
+        </nav>
+        <label class="topbar-search">
+          <span class="ico ico-search" aria-hidden="true"></span>
+          <input
+            type="search"
+            placeholder="Search nodes, sessions, commands"
+            aria-label="Search"
+          />
+          <kbd class="kbd">⌘K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <a class="btn primary sm" href="new-session.html"
+            ><span class="ico ico-plus sm" aria-hidden="true"></span> New</a
+          >
+          <a class="chip reconnecting" href="#settings" title="Reconnecting">
+            <span class="pulse" aria-hidden="true"></span>
+            laptop · reconnecting
+          </a>
+        </div>
+      </header>
+
+      <nav class="sidebar" role="navigation" aria-label="Fleet">
+        <div class="nav-block">
+          <div class="nav-kicker">Place</div>
+          <a class="nav-item" href="fleet.html"
+            ><span class="ico ico-fleet" aria-hidden="true"></span
+            ><span class="label">Fleet</span></a
+          >
+          <a class="nav-item node active" href="fleet.html">
+            <span class="status-dot warn" aria-label="reconnecting"></span>
+            <span class="label">laptop</span>
+            <span class="count">3</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">gpu-box</span>
+            <span class="count">2</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot warn" aria-label="draining"></span>
+            <span class="label">build-server</span>
+            <span class="count">1</span>
+          </a>
+          <a class="nav-item node offline" href="sessions.html">
+            <span class="status-dot offline" aria-label="offline"></span>
+            <span class="label">studio</span>
+            <span class="dash">—</span>
+          </a>
+        </div>
+        <div class="nav-block">
+          <div class="nav-kicker">Work</div>
+          <a class="nav-item active" href="sessions.html"
+            ><span class="ico ico-sessions" aria-hidden="true"></span
+            ><span class="label">Sessions</span><span class="count">6</span></a
+          >
+          <a class="nav-item" href="fleet-sync.html"
+            ><span class="ico ico-sync" aria-hidden="true"></span
+            ><span class="label">Sync</span><span class="count">1</span></a
+          >
+          <a class="nav-item" href="devices.html"
+            ><span class="ico ico-devices" aria-hidden="true"></span
+            ><span class="label">Devices</span></a
+          >
+        </div>
+        <div class="nav-foot">
+          <a class="nav-item" href="#settings"
+            ><span class="ico ico-settings" aria-hidden="true"></span
+            ><span class="label">Settings</span></a
+          >
+        </div>
+      </nav>
+
+      <main class="main" id="main" role="main">
+        <div class="session term">
+          <header class="session-head">
+            <span class="status-dot warn" aria-hidden="true"></span>
+            <span class="id">b4e1</span>
+            <span class="badge running">running</span>
+            <span class="badge">terminal</span>
+            <span class="meta">laptop · claude · /Users/you/src/app</span>
+            <div class="actions">
+              <button class="btn sm" type="button">
+                <span class="ico ico-copy sm" aria-hidden="true"></span> Copy to
+                node
+              </button>
+              <button class="btn sm danger" type="button">
+                <span class="ico ico-kill sm" aria-hidden="true"></span> Kill
+              </button>
+            </div>
+          </header>
+          <div class="banner" role="status" aria-live="assertive">
+            <span class="ico ico-warn sm" aria-hidden="true"></span>
+            Reconnecting to laptop · last byte 4s ago · falling back to relay ·
+            terminal is frozen
+          </div>
+          <div class="term-wrap" id="term">
+            <div class="term-frame">
+              <div class="term-inner">
+                <div class="term-chrome">
+                  <span>laptop</span>
+                  <span>b4e1</span>
+                  <span>132×40</span>
+                  <span>utf-8</span>
+                  <span class="live">PTY · frozen</span>
+                </div>
+                <pre
+                  class="term"
+                  tabindex="0"
+                  aria-label="Session terminal"
+                >  <span class="dim">Claude Code v2.0</span>  <span class="kw">claude-work</span>  <span class="dim">/Users/you/src/app</span>
+
+  <span class="ok">●</span> Using profile claude · model anthropic/claude-sonnet-4.5
+
+  <span class="dim">›</span> look at the fleet overview generation display
+
+  <span class="kw">● Read</span> <span class="dim">crates/vessel-fleet/src/status.rs</span>
+  <span class="kw">● Search</span> <span class="dim">applied_generation</span>
+  <span class="ok">● Edit</span>  ui/src/fleet/NodeRow.tsx
+
+  <span class="dim"> Member applied generation was ignored; the row always
+   showed the home's. Patch uses member.applied and a
+   stale badge when it lags.</span>
+
+  <span class="warn">ctrl-]</span> <span class="dim">detach</span>   <span class="warn">ctrl-c</span> <span class="dim">interrupt</span>
+
+  <span class="dim">›</span> <span class="cursor" aria-hidden="true"></span></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div
+      id="settings"
+      class="overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+    >
+      <div class="dialog narrow">
+        <div class="dialog-h">
+          <h1 id="settings-title">Settings</h1>
+          <a class="btn ghost icon-btn" href="#" aria-label="Close"
+            ><span class="ico ico-close"></span
+          ></a>
+        </div>
+        <div class="dialog-b">
+          <div class="field">
+            <span>Theme</span>
+            <div class="seg">
+              <label
+                ><input type="radio" name="theme" checked /><span
+                  >Dark</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="theme" id="theme-light" /><span
+                  >Light</span
+                ></label
+              >
+            </div>
+          </div>
+        </div>
+        <div class="dialog-f"><a class="btn" href="#">Done</a></div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -46,7 +46,8 @@ vessel-relay    -> proto, secure           (milestone 3)
 vessel-fleet    -> proto, harness          (milestone 4)
 vessel-mcp      -> proto, client           (milestone 4)
 vessel-llm      -> proto                   (milestone 5)
-vessel-cli      -> proto, client, node, remote, mcp, harness
+vessel-web      -> proto, client           (milestone 7)
+vessel-cli      -> proto, client, node, remote, mcp, harness, web
 vessel-testkit  (fake harness binaries for tests; dev-dependency only)
 ```
 
@@ -107,6 +108,13 @@ nothing of sessions, nodes or harnesses, so its one edge is `-> proto`
 record). `vessel-node -> llm` is the proxy itself: who may call it, with
 which route and key, and where usage is recorded. How a harness is
 pointed at the proxy stays in `vessel-harness`.
+
+Milestone 7 (2026-11-07, Track M7) adds `vessel-web`: `vessel ui`'s
+loopback server, its embedded single-page app and the bridge from the
+browser to the book's nodes (ADR 0017). The bridge is a client like any
+other, so its edges are `-> client` and `-> proto`; `vessel-cli -> web`
+runs it and gives it, through a seam, the CLI's knowledge of how a book
+entry becomes a connection.
 
 `vessel-core` is renamed `vessel-proto` because its one job is the wire
 contract.

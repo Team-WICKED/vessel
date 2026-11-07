@@ -7,8 +7,9 @@ and the reasons are in `docs/adr/`.
 ## Pieces
 
 ```
-  vessel CLI      agents (`vessel mcp`)      editors, web UI (later)   (clients)
-        \                 |                        /
+  vessel CLI      agents (`vessel mcp`)      `vessel ui` (bridge)      (clients)
+        \                 |                        /    \
+        |                 |                       /   browser (web/, loopback)
    protocol 2..=7: typed frames over one connection, which is one of
    a websocket with the token, the local socket, SSH stdio (`vesseld
    attach`), or a Noise channel to the node's key, direct or relayed
@@ -54,7 +55,8 @@ and 0013).
 | `vessel-fleet` | Fleet bundles (milestone 4, ADR 0012): the home's sources into a manifest and a content-addressed blob store; plan and apply into harness homes with recorded hashes (`managed.json`), local edits kept with the incoming version beside them, symlinks never followed, targets linked to the sources left alone; skills named by `SKILL.md`; MCP secret references resolved at launch; transfers as file sets (`snapshot` into a staging store within protocol 6's limits, `place` into a home never overwriting: a session whole or not at all, memory beside what differs). | proto, harness |
 | `vessel-mcp` | `vessel mcp` (milestone 4, ADR 0013): the MCP server (stdio, on `rmcp`) a node attaches to every session as `vessel`; each tool is one call through the session's agent principal. | proto, client |
 | `vessel-llm` | Model APIs for the node's routing proxy (milestone 5, ADR 0015): Server-Sent Events decoded from any chunking and encoded (`sse`); the Anthropic Messages, `OpenAI` Responses and Chat Completions wire types, open to kinds Vessel does not know yet (`wire`); a neutral request and stream, the translators between them, a same-API passthrough and the upstream client (`client`: rustls with the platform's roots, no redirects or proxies, timeouts to connect, to the first byte and between bytes, bounded bodies, retries only before the first byte, errors classified with the key stripped). Nothing about sessions, nodes or harnesses. | proto |
-| `vessel-cli` | `vessel` binary: commands, interactive attach, `vessel mcp`, `vessel init` (first-run setup, milestone 4); `vessel models`, each profile's route in `vessel profiles` and model calls in `vessel log` (milestone 5). | proto, client, node, remote, mcp, harness |
+| `vessel-web` | `vessel ui`'s server (milestone 7, ADR 0017): loopback only, one-use bootstrap and mutual session proofs, bounded pre-auth transport, `Host`/`Origin` checks and security headers, the single-page app embedded at build time (`web/dist`, or a placeholder page), the browser's websocket, and the bridge to the book's nodes: one shared connection per node with its state pushed to every tab, calls forwarded as typed `Call`s, session streams that resume, and the bridge's own ops (the book's nodes, pairing, QR codes). The CLI gives it the nodes through `NodeSource`. | proto, client |
+| `vessel-cli` | `vessel` binary: commands, interactive attach, `vessel mcp`, `vessel init` (first-run setup, milestone 4); `vessel models`, each profile's route in `vessel profiles` and model calls in `vessel log` (milestone 5); `vessel ui` (milestone 7). | proto, client, node, remote, mcp, harness, web |
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`, which also make one model call through a routed session's proxy on `model <text>`, milestone 5), `fake-ssh` for tests and `fake-provider` for the model routing smoke; with the `relay` feature, a relay that misbehaves on command; with the `upstream` feature, a model provider on loopback answering with scripted streams, errors, drops, silences and hangs (milestone 5). The fakes report the environment, arguments, MCP servers, loaded session id and working directory they got (milestone 4). | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
@@ -171,6 +173,46 @@ they started.
   findings, fixes and accepted residuals are recorded in the plan. Both
   manual smokes passed on 2026-11-07 (three real accounts; a fresh machine
   joining), recorded under the plan's done criteria.
+- **Milestone 7** (the web UI; `docs/plans/backend-m7.md`, ADR 0017,
+  design under `docs/design/web-ui/`): built on `backend/m7-web`.
+  `vessel ui` (crate `vessel-web`) serves the page embedded from `web/`
+  on loopback and bridges it to the book's nodes; the page is React with
+  TypeScript types generated from the wire (`web/src/wire/`). Checked in
+  CI by Playwright against real nodes with the fake harnesses, which also
+  captures every main screen.
+
+### The web UI (`web/`)
+
+```
+web/src/wire/     generated from the Rust types (proto.ts, bridge.ts) and typed call helpers
+web/src/bridge/   the websocket to `vessel ui`: mutual proof, tab session key, typed calls, resumed follows
+web/src/data/     stores (useSyncExternalStore), the timeline reducer, formatting, the terminal adapter
+web/src/routes/   the screens: fleet, sessions, session (structured / terminal), new session,
+                  sync, devices, settings
+web/src/ui/       the shell, components, and the design's tokens and component CSS
+web/e2e/          Playwright: a fleet of real `vesseld` nodes with the fake harnesses, the tests,
+                  and `screens`
+```
+
+The page talks only to `vessel ui`'s `/api/ws`: `call` frames carry the
+protocol's own `Call` to a node, `follow` frames stream a session's
+records, `op` frames ask the bridge itself, and `node` frames push each
+node's connection state (`vessel_web::wire`).
+
+Each launch uses a fresh random `.localhost` origin so persisted HTML and
+service workers from an earlier port owner cannot intercept it. The UI needs
+a browser supporting these names (Chromium is exercised in CI).
+The launch's private Unix handoff/printed URL carries a one-use bootstrap,
+not the tab's session key. `auth` and `socket` verify role-separated HMAC
+proofs and fresh nonces before starting `bridge`; `transport` counts sockets
+from TCP accept through upgrades and enforces HTTP deadlines. The browser
+keeps the issued session key in `sessionStorage` for reloads. A changed
+launch or bad proof stops the tab. `files` serves content ETags; the web
+build's `scripts/integrity.mjs` closes the script/stylesheet SRI graph.
+`registry` validates the current book before allocating entries and cancels
+removed nodes. Pairing deliberately dials the supplied link before adding
+its entry. See ADR 0017 for transcripts, bounds and platform tradeoffs.
+
 
 ### By crate
 

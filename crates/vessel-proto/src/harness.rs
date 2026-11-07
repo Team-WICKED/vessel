@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// `vessel-harness`, and adding a variant must fail to compile until that
 /// module exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessKind {
     /// Claude Code (`claude`).
@@ -31,6 +32,13 @@ impl HarnessKind {
 
     /// Canonical kebab-case name used on the wire and in the CLI.
     #[must_use]
+    #[cfg_attr(
+        feature = "ts",
+        expect(
+            clippy::same_name_method,
+            reason = "`ts_rs::TS::name` is the type's TypeScript name, an associated function; callers of this method have a value"
+        )
+    )]
     pub const fn name(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude-code",
@@ -76,6 +84,7 @@ impl FromStr for HarnessKind {
 
 /// Whether a harness can run as a structured (ACP) session on this node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum StructuredSupport {
     /// Ready: the harness speaks ACP itself, or its adapter is installed.
@@ -89,6 +98,7 @@ pub enum StructuredSupport {
 
 /// A harness found on a node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Harness {
     /// Which harness.
     pub kind: HarnessKind,

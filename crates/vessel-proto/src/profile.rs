@@ -18,6 +18,7 @@ use crate::name::{EnvName, ModelRouteName, ProfileName};
 /// listed; their values never leave the node (they may be secrets or paths
 /// to credentials).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProfileInfo {
     /// The profile's name.
     pub name: ProfileName,
@@ -40,6 +41,7 @@ pub struct ProfileInfo {
 /// Who created a session (ADR 0013): the owner, a paired device, or an agent
 /// running in another session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Creator {
     /// The node token or the local socket. Sessions from before protocol 5
@@ -73,6 +75,7 @@ secret! {
 /// frame is plain text, never a JSON object, so the node tells the two apart
 /// by the first character.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename = "agent")]
 pub struct AgentAuth {
     /// The agent's session.
@@ -84,6 +87,7 @@ pub struct AgentAuth {
 /// `profile.list` (protocol 5): the node's profiles, the implicit default
 /// of each harness included. Needs `Read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListProfiles {
     /// Only this harness's profiles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,6 +98,7 @@ pub struct ListProfiles {
 /// not parse, the node keeps the profiles it had and the error says where.
 /// Answers with the profiles now in effect. Needs `Admin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ReloadProfiles;
 
 /// `session.move_profile` (protocol 5, ADR 0011): restart a structured
@@ -101,6 +106,7 @@ pub struct ReloadProfiles;
 /// Refused mid-turn unless `force`, and refused when the target profile is
 /// not logged in. Answers with the session as it is now. Needs `Operate`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct MoveProfile {
     /// Which session.
     pub session: SessionId,

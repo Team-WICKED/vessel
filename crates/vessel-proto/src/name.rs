@@ -179,6 +179,7 @@ macro_rules! name {
     ($(#[$meta:meta])* $name:ident, $kind:ident) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
         pub struct $name(String);
 
         impl $name {

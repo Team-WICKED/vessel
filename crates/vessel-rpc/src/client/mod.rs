@@ -43,10 +43,10 @@ use vessel_proto::{
     ExportMemory, ExportSession, ForgetNode, Forward, GetCallback, GetManifest, GetNode,
     GetSession, GrantHome, Hello, ImportMemory, ImportSession, InviteDevice, KillSession,
     ListDevices, ListHarnesses, ListMembers, ListModels, ListNodes, ListPeers, ListProfiles,
-    ListSecrets, ListSessions, MoveProfile, Outcome, ProtocolRange, ReadBlob, ReadEvents,
-    ReadTransfer, RelayCall, ReloadProfiles, ReportApplied, Request, RequestId, RevokeDevice,
-    SendInput, ServerFrame, SetSecret, StopNode, Subscribe, Unsubscribe, WatchFleet, Welcome,
-    WireError,
+    ListSecrets, ListSessions, Method, MoveProfile, Outcome, ProtocolRange, ReadBlob, ReadEvents,
+    ReadTransfer, RelayCall, ReloadProfiles, Reply, ReportApplied, Request, RequestId,
+    RevokeDevice, SendInput, ServerFrame, SetSecret, StopNode, Subscribe, Unsubscribe, WatchFleet,
+    Welcome, WireError,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -115,6 +115,98 @@ impl Unary for vessel_proto::lsp::TypeDefinition {}
 impl Unary for vessel_proto::lsp::IncomingCalls {}
 impl Unary for vessel_proto::lsp::OutgoingCalls {}
 impl Unary for vessel_proto::lsp::Diagnostics {}
+
+/// A call answered by exactly one reply, built already: every method but
+/// `session.subscribe` (whose answer opens a stream, [`Connection::subscribe`]).
+/// For callers that receive calls rather than build them, such as `vessel
+/// ui`'s bridge relaying a browser's (ADR 0017): checked once, here, then
+/// sent as it is with [`Connection::call_any`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnaryCall(Call);
+
+/// A call that is not one-reply: it was refused before sending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("`{}` is not a one-reply call", .0.as_str())]
+pub struct NotUnary(pub Method);
+
+impl TryFrom<Call> for UnaryCall {
+    type Error = NotUnary;
+
+    fn try_from(call: Call) -> Result<Self, NotUnary> {
+        let method = call.method();
+        if is_unary(method) {
+            Ok(Self(call))
+        } else {
+            Err(NotUnary(method))
+        }
+    }
+}
+
+impl UnaryCall {
+    /// The method.
+    #[must_use]
+    pub const fn method(&self) -> Method {
+        self.0.method()
+    }
+}
+
+/// Whether `method` is answered by exactly one reply. Exhaustive, so a new
+/// method is decided here, as it is by the [`Unary`] impls above.
+const fn is_unary(method: Method) -> bool {
+    match method {
+        Method::Subscribe => false,
+        Method::NodeInfo
+        | Method::ListHarnesses
+        | Method::ListSessions
+        | Method::GetSession
+        | Method::CreateSession
+        | Method::SendInput
+        | Method::KillSession
+        | Method::ReadEvents
+        | Method::Unsubscribe
+        | Method::StopNode
+        | Method::InviteDevice
+        | Method::ListDevices
+        | Method::RevokeDevice
+        | Method::ListProfiles
+        | Method::ReloadProfiles
+        | Method::MoveProfile
+        | Method::GetManifest
+        | Method::ReadBlob
+        | Method::WatchFleet
+        | Method::ReportApplied
+        | Method::ListMembers
+        | Method::Forward
+        | Method::Relay
+        | Method::Deliver
+        | Method::GrantHome
+        | Method::GetCallback
+        | Method::ListPeers
+        | Method::ListNodes
+        | Method::ForgetNode
+        | Method::ExportSession
+        | Method::ImportSession
+        | Method::ExportMemory
+        | Method::ImportMemory
+        | Method::ReadTransfer
+        | Method::CloseTransfer
+        | Method::SetSecret
+        | Method::ListSecrets
+        | Method::DeleteSecret
+        | Method::CopySecret
+        | Method::LspWorkspaceSymbols
+        | Method::LspDocumentSymbols
+        | Method::LspDefinition
+        | Method::LspReferences
+        | Method::LspHover
+        | Method::LspImplementations
+        | Method::LspTypeDefinition
+        | Method::LspIncomingCalls
+        | Method::LspOutgoingCalls
+        | Method::LspDiagnostics
+        | Method::ListModels => true,
+    }
+}
 
 /// `n` as a `NonZeroUsize` for constants.
 const fn at_least_one(n: usize) -> NonZeroUsize {
@@ -281,6 +373,23 @@ impl Connection {
             .await?;
         match pending.wait(answer).await? {
             Outcome::Ok(reply) => R::response_from(reply).map_err(CallError::UnexpectedReply),
+            Outcome::Err(error) => Err(CallError::Remote(error)),
+        }
+    }
+
+    /// Send an already-built one-reply call and return its reply as it
+    /// came, for callers that relay calls they did not build (`vessel
+    /// ui`'s bridge). The protocol-version gate is the typed calls' own
+    /// ([`CallError::NotInProtocol`]); the node checks scopes as for any
+    /// call. Dropping the future cancels the call on the node.
+    ///
+    /// # Errors
+    /// The node answered with an error, or the connection closed first.
+    pub async fn call_any(&self, call: UnaryCall) -> Result<Reply, CallError> {
+        let (waiter, answer) = oneshot::channel();
+        let pending = self.start(call.0, Waiter::Unary(waiter)).await?;
+        match pending.wait(answer).await? {
+            Outcome::Ok(reply) => Ok(reply),
             Outcome::Err(error) => Err(CallError::Remote(error)),
         }
     }

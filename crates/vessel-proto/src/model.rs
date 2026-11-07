@@ -27,6 +27,7 @@ use crate::name::{ModelRouteName, ProviderName};
 
 /// An API a provider or a harness speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ModelApi {
     /// The Anthropic Messages API (Claude Code's).
     #[serde(rename = "anthropic_messages")]
@@ -44,6 +45,7 @@ pub enum ModelApi {
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct TokenCount(u64);
 
@@ -69,6 +71,7 @@ impl TokenCount {
 
 /// The tokens one call used.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TokenUsage {
     /// Input tokens neither read from nor written to a prompt cache.
     #[serde(default)]
@@ -99,6 +102,7 @@ impl TokenUsage {
 
 /// How a model call ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ModelStop {
     /// The model finished its turn.
@@ -119,6 +123,7 @@ pub enum ModelStop {
 
 /// Why a model call failed: its class, never the provider's message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ModelFailure {
     /// The provider limits the rate.
@@ -160,6 +165,7 @@ impl ModelFailure {
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct DurationMs(u64);
 
@@ -186,6 +192,7 @@ impl DurationMs {
 /// One call a session made to a model through the node's proxy: metadata
 /// only, never prompt or completion content, tool arguments or keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ModelCall {
     /// The route the session runs on.
     pub route: ModelRouteName,
@@ -207,6 +214,7 @@ pub struct ModelCall {
 
 /// The route a session was launched with (protocol 7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionModel {
     /// The route.
     pub route: ModelRouteName,
@@ -217,10 +225,12 @@ pub struct SessionModel {
 /// `model.list` (protocol 7): the routes this node offers, for pickers and
 /// `vessel models`. Needs `read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListModels;
 
 /// A route a node offers (`model.list`, protocol 7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ModelRoute {
     /// Its name, which profiles use.
     pub name: ModelRouteName,
