@@ -44,6 +44,22 @@ export function DevicesPage(): ReactElement {
   const devices = listed?.node === node ? listed.devices : null;
   const error = listed?.node === node ? listed.error : null;
   const pairing = paired?.node === node ? paired : null;
+  const [revealed, setRevealed] = useState<Pairing | null>(null);
+  const showing = pairing !== null && revealed === pairing;
+  useEffect(() => {
+    if (!showing) return;
+    const hide = () => {
+      setRevealed(null);
+    };
+    const timer = setTimeout(hide, 30_000);
+    window.addEventListener("blur", hide);
+    document.addEventListener("visibilitychange", hide);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("blur", hide);
+      document.removeEventListener("visibilitychange", hide);
+    };
+  }, [showing]);
   const [name, setName] = useState("phone");
   const [revoking, setRevoking] = useState<DeviceInfo | null>(null);
   useCrumbs(
@@ -153,10 +169,10 @@ export function DevicesPage(): ReactElement {
                 <div
                   className="qr"
                   aria-label={
-                    pairing === null ? undefined : "Pairing link as a QR code"
+                    !showing ? undefined : "Pairing link as a QR code"
                   }
                 >
-                  {pairing === null ? (
+                  {!showing ? (
                     <Icon name="qr" size="lg" />
                   ) : (
                     <img
@@ -175,7 +191,7 @@ export function DevicesPage(): ReactElement {
                     <span className="mono">vessel node status</span> before
                     confirming there.
                   </p>
-                  {pairing === null ? null : (
+                  {!showing ? null : (
                     <>
                       <div className="link-box">
                         <Icon name="link" size="sm" />
@@ -185,6 +201,9 @@ export function DevicesPage(): ReactElement {
                         <CopyButton
                           text={pairing.invitation.link}
                           label="Copy pairing link"
+                          onCopied={() => {
+                            setRevealed(null);
+                          }}
                         />
                       </div>
                       <p className="hint">
@@ -193,6 +212,17 @@ export function DevicesPage(): ReactElement {
                         expires {when(pairing.invitation.expires)} · single use
                       </p>
                     </>
+                  )}
+                  {pairing === null ? null : (
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={() => {
+                        setRevealed(showing ? null : pairing);
+                      }}
+                    >
+                      {showing ? "Hide pairing link" : "Show pairing link"}
+                    </button>
                   )}
                   <div className="inline pair-new">
                     <label className="field">

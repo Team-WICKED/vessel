@@ -2,7 +2,7 @@
 // (plan, files, meta) and the composer with any pending permission.
 
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { Markdown } from "../data/markdown";
 
 import { useFleet } from "../context";
 import { harnessName, isLive, shortId, when } from "../data/format";
@@ -326,7 +326,7 @@ function TimelineItem({
         <div className="t-item">
           <span className="glyph" aria-hidden="true" />
           <div className="md">
-            <ReactMarkdown skipHtml>{entry.text}</ReactMarkdown>
+            <Markdown>{entry.text}</Markdown>
           </div>
         </div>
       );

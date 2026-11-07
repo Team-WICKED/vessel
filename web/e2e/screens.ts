@@ -6,19 +6,28 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { hostname } from "node:os";
 
 import { expect, type Page, test } from "@playwright/test";
 
+import { openUi } from "./open";
 import { type FleetEnv, loadEnv } from "./fleet";
 
-const OUT = join(import.meta.dirname, "..", "artifacts", "screens");
+const OUT =
+  process.env.VESSEL_SCREEN_DIR ??
+  join(import.meta.dirname, "..", "artifacts", "screens");
 
 async function shot(page: Page, name: string): Promise<void> {
   mkdirSync(OUT, { recursive: true });
   // Let fonts and the last frames settle.
   await page.evaluate(async () => document.fonts.ready);
   await page.waitForTimeout(400);
-  await page.screenshot({ path: join(OUT, `${name}.png`) });
+  // Fleet join currently labels its device with the host name. Do not
+  // publish the build machine's identity in otherwise synthetic fixtures.
+  await page.screenshot({
+    path: join(OUT, `${name}.png`),
+    mask: [page.getByText(hostname(), { exact: true })],
+  });
 }
 
 /** Run `vessel` as the user of this fleet would; `data` is the local data
@@ -119,22 +128,31 @@ async function newSession(
 test("every main screen", async ({ page }) => {
   test.setTimeout(240_000);
   const env = loadEnv();
-  const origin = new URL(env.url).origin;
+
   try {
     await fleetHome(env);
-  } catch (error) {
-    console.warn(`fleet sync could not be set up: ${String(error)}`);
+  } catch {
+    throw new Error("Fleet sync setup failed");
   }
-  await page.goto(env.url);
-  await expect(page.getByRole("navigation", { name: "Fleet" })).toBeVisible();
+  const origin = await openUi(page);
 
   // Some work on the fleet: a structured session with a pending permission
   // on laptop, terminals on gpu-box and build-server.
   const project = join(env.root, "laptop-home");
   await newSession(page, "gpu-box", "Terminal", join(env.root, "gpu-box-home"));
-  await page.getByLabel("Session terminal").click();
-  await page.keyboard.type("cwd\r");
-  await page.keyboard.type("args\r");
+  const terminal = page.getByLabel("Session terminal");
+  await expect(terminal).toContainText("ready");
+  await terminal.click();
+  // Seed screenshots only after the PTY is ready and acknowledges each
+  // command. A screenshot setup should not race a new harness's startup.
+  await page.keyboard.insertText("cwd");
+  await expect(terminal).toContainText("cwd");
+  await page.keyboard.press("Enter");
+  await expect(terminal).toContainText("cwd /");
+  await page.keyboard.insertText("args");
+  await expect(terminal).toContainText("args");
+  await page.keyboard.press("Enter");
+  await expect(terminal).toContainText("args [");
   await newSession(
     page,
     "build-server",
@@ -190,6 +208,7 @@ test("every main screen", async ({ page }) => {
   await page.goto(`${origin}/devices?node=laptop`);
   await page.getByLabel("Label").fill("phone");
   await page.getByRole("button", { name: "New link" }).click();
+  await page.getByRole("button", { name: "Show pairing link" }).click();
   await expect(
     page.getByRole("img", { name: "Pairing link as a QR code" }),
   ).toBeVisible();
@@ -205,12 +224,16 @@ test("every main screen", async ({ page }) => {
         VESSEL_CONFIG_DIR: join(phone, "config"),
       },
     });
-  } catch (error) {
-    console.warn(`a device could not pair: ${String(error)}`);
+  } catch {
+    throw new Error("Device pairing failed");
   }
   await page.getByLabel("Label").fill("tablet");
   await page.getByRole("button", { name: "New link" }).click();
   await page.waitForTimeout(800);
+  await expect(page.locator(".link-text")).toHaveCount(0);
+  await expect(
+    page.getByRole("img", { name: "Pairing link as a QR code" }),
+  ).toHaveCount(0);
   await shot(page, "07-devices");
 
   await page.goto(`${origin}/settings`);

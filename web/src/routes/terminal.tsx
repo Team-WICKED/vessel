@@ -12,6 +12,7 @@ import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
 import { useFleet } from "../context";
+import { userInput } from "../data/terminal-input";
 import { decodeBytes, encodeText } from "../data/terminal";
 import { Banner } from "../ui/parts";
 import type { StreamState } from "../wire/bridge";
@@ -83,7 +84,7 @@ export function TerminalView({
         },
       });
     };
-    const input = terminal.onData((data) => {
+    const input = userInput(terminal, (data) => {
       const first = !typed;
       typed = true;
       if (first) {

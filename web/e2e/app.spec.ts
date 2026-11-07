@@ -95,10 +95,24 @@ test("a device is invited, pairs, and is revoked", async ({ page }) => {
   await page.getByLabel("Label").fill("phone");
   await page.getByRole("button", { name: "New link" }).click();
   await expect(
+    page.getByRole("button", { name: "Show pairing link" }),
+  ).toBeVisible();
+  await expect(page.locator(".link-text")).toHaveCount(0);
+  await expect(
+    page.getByRole("img", { name: "Pairing link as a QR code" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Show pairing link" }).click();
+  await expect(
     page.getByRole("img", { name: "Pairing link as a QR code" }),
   ).toBeVisible();
   const link = (await page.locator(".link-box .link-text").textContent()) ?? "";
-  expect(link).toMatch(/^vessel:\/\/pair#/);
+  expect(link.startsWith("vessel://pair#")).toBe(true);
+  await page.context().grantPermissions(["clipboard-write"]);
+  await page.getByRole("button", { name: "Copy pairing link" }).click();
+  await expect(page.locator(".link-text")).toHaveCount(0);
+  await expect(
+    page.getByRole("img", { name: "Pairing link as a QR code" }),
+  ).toHaveCount(0);
   // Another device pairs with the link, as `vessel nodes add --pair` does.
   const phone = join(env.root, "phone");
   execFileSync(env.vessel, ["nodes", "add", "laptop", "--pair", "--yes"], {
@@ -120,4 +134,56 @@ test("a device is invited, pairs, and is revoked", async ({ page }) => {
     .getByRole("button", { name: "Revoke" })
     .click();
   await expect(row).toBeHidden();
+});
+
+test("terminal replay cannot answer device queries, while keys and paste still work", async ({
+  page,
+}) => {
+  const env = loadEnv();
+  await open(page);
+  await create(page, "laptop", "Terminal");
+  await expect(page.getByLabel("Session terminal")).toContainText("ready");
+  const sessionUrl = page.url();
+  const session = new URL(sessionUrl).pathname.split("/").at(-1);
+  if (session === undefined) throw new Error("No session id");
+  await page.goto(`${new URL(sessionUrl).origin}/fleet`);
+  const esc = "\x1b";
+  const bel = "\x07";
+  const queries = `${esc}[c${esc}[6n${esc}]10;?${bel}${esc}P$qm${esc}\\REPLAY_END`;
+  execFileSync(env.vessel, ["--node", "laptop", "send", session, queries], {
+    env: {
+      PATH: process.env.PATH,
+      HOME: env.root,
+      USERPROFILE: env.root,
+      VESSEL_CONFIG_DIR: join(env.root, "config"),
+      VESSEL_DATA_DIR: join(env.root, "ui-data"),
+    },
+  });
+  let inputs = 0;
+  page.on("websocket", (socket) => {
+    socket.on("framesent", (event) => {
+      const text =
+        typeof event.payload === "string"
+          ? event.payload
+          : event.payload.toString("utf8");
+      const frame = JSON.parse(text) as {
+        type: string;
+        call?: { method: string };
+      };
+      if (frame.type === "call" && frame.call?.method === "session.send")
+        inputs += 1;
+    });
+  });
+  await page.goto(sessionUrl);
+  const terminal = page.getByLabel("Session terminal");
+  await expect(terminal).toContainText("REPLAY_END");
+  expect(inputs).toBe(0);
+  await terminal.click();
+  await page.keyboard.type("typed\r");
+  await expect(terminal).toContainText("echo: typed");
+  // Browser text insertion follows the same public input path as IME.
+  await page.keyboard.insertText("한글 pasted");
+  await page.keyboard.press("Enter");
+  await expect(terminal).toContainText("echo: 한글 pasted");
+  expect(inputs).toBeGreaterThan(0);
 });

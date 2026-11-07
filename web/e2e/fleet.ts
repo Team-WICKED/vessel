@@ -126,10 +126,10 @@ function spawnLogged(
   });
   const log = join(root, `${name}.log`);
   child.stdout.on("data", (chunk: Buffer) => {
-    writeFileSync(log, chunk, { flag: "a" });
+    writeFileSync(log, chunk, { flag: "a", mode: 0o600 });
   });
   child.stderr.on("data", (chunk: Buffer) => {
-    writeFileSync(log, chunk, { flag: "a" });
+    writeFileSync(log, chunk, { flag: "a", mode: 0o600 });
   });
   return child;
 }
@@ -251,7 +251,7 @@ const ENV_FILE = join(import.meta.dirname, "..", "artifacts", "fleet.json");
 
 export function saveEnv(env: FleetEnv): void {
   mkdirSync(join(import.meta.dirname, "..", "artifacts"), { recursive: true });
-  writeFileSync(ENV_FILE, JSON.stringify(env));
+  writeFileSync(ENV_FILE, JSON.stringify(env), { mode: 0o600 });
 }
 
 export function loadEnv(): FleetEnv {

@@ -122,7 +122,15 @@ export function Skeleton() {
 }
 
 /** A copy-to-clipboard button. */
-export function CopyButton({ text, label }: { text: string; label: string }) {
+export function CopyButton({
+  text,
+  label,
+  onCopied,
+}: {
+  text: string;
+  label: string;
+  onCopied?: () => void;
+}) {
   return (
     <button
       className="btn ghost sm icon-btn"
@@ -130,7 +138,7 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
       aria-label={label}
       title={label}
       onClick={() => {
-        void navigator.clipboard.writeText(text);
+        void navigator.clipboard.writeText(text).then(onCopied);
       }}
     >
       <Icon name="copy" size="sm" />

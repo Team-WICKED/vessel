@@ -116,6 +116,4 @@ jobs:
           name: web-ui-screens
           path: |
             web/artifacts/screens
-            web/playwright-report
-            web/test-results
           if-no-files-found: ignore

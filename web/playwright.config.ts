@@ -13,16 +13,16 @@ export default defineConfig({
   fullyParallel: false,
   timeout: 60_000,
   expect: { timeout: 15_000 },
-  reporter:
-    process.env.CI === undefined
-      ? "list"
-      : [["list"], ["html", { open: "never" }]],
+  reporter: "list",
   use: {
     ...devices["Desktop Chrome"],
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
     colorScheme: "dark",
-    trace: "retain-on-failure",
+    // WS frames and navigation URLs can contain credentials. Never record them.
+    trace: "off",
+    screenshot: "off",
+    video: "off",
   },
   projects: [
     { name: "e2e", testMatch: /\.spec\.ts$/ },
