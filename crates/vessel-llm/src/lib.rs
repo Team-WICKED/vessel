@@ -15,8 +15,17 @@
 //!   and encoded back.
 //! - [`wire`]: each API's requests, responses, stream events and errors,
 //!   typed.
+//! - [`ir`]: the neutral request and stream every translation goes
+//!   through.
+//! - [`front`]: the APIs harnesses speak, into and out of the neutral form.
+//! - [`upstream`]: the APIs providers speak, out of and into it.
+//! - [`error`]: what translation refuses, and what it leaves out.
 
+pub mod error;
 #[cfg(test)]
 mod fixtures;
+pub mod front;
+pub mod ir;
 pub mod sse;
+pub mod upstream;
 pub mod wire;
