@@ -325,6 +325,34 @@ async fn run_here(
 ) -> Result<Reply, WireError> {
     use vessel_proto::Handler as _;
     Ok(match call {
+        Call::LspWorkspaceSymbols(request) => {
+            Reply::LspWorkspaceSymbols(guard.lsp_workspace_symbols(connection, request).await?)
+        }
+        Call::LspDocumentSymbols(request) => {
+            Reply::LspDocumentSymbols(guard.lsp_document_symbols(connection, request).await?)
+        }
+        Call::LspDefinition(request) => {
+            Reply::LspDefinition(guard.lsp_definition(connection, request).await?)
+        }
+        Call::LspReferences(request) => {
+            Reply::LspReferences(guard.lsp_references(connection, request).await?)
+        }
+        Call::LspHover(request) => Reply::LspHover(guard.lsp_hover(connection, request).await?),
+        Call::LspImplementations(request) => {
+            Reply::LspImplementations(guard.lsp_implementations(connection, request).await?)
+        }
+        Call::LspTypeDefinition(request) => {
+            Reply::LspTypeDefinition(guard.lsp_type_definition(connection, request).await?)
+        }
+        Call::LspIncomingCalls(request) => {
+            Reply::LspIncomingCalls(guard.lsp_incoming_calls(connection, request).await?)
+        }
+        Call::LspOutgoingCalls(request) => {
+            Reply::LspOutgoingCalls(guard.lsp_outgoing_calls(connection, request).await?)
+        }
+        Call::LspDiagnostics(request) => {
+            Reply::LspDiagnostics(guard.lsp_diagnostics(connection, request).await?)
+        }
         Call::NodeInfo(request) => Reply::NodeInfo(guard.node_info(connection, request).await?),
         Call::ListHarnesses(request) => {
             Reply::ListHarnesses(guard.list_harnesses(connection, request).await?)

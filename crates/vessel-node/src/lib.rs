@@ -68,6 +68,7 @@ mod guard;
 mod identity;
 mod ipc;
 mod lifecycle;
+mod lsp;
 mod node;
 mod persist;
 mod principal;

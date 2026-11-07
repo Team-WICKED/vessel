@@ -19,6 +19,7 @@ mod forward;
 mod harness;
 mod id;
 mod key;
+pub mod lsp;
 mod name;
 mod node;
 mod pairing;
