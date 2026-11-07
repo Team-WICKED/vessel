@@ -30,6 +30,10 @@
 //! drops, replays, reorders, corrupts or delays messages on command
 //! (milestone 3).
 //!
+//! With the `upstream` feature, [`upstream::FakeUpstream`] is a model
+//! provider on loopback that answers with scripted streams, error statuses,
+//! drops, silences and hangs, and records what it was asked (milestone 5).
+//!
 //! This crate is a dev-dependency only; nothing in `vesseld` links it.
 //!
 //! [Decision Log]
@@ -80,6 +84,8 @@ use tokio::time::error::Elapsed;
 #[cfg(feature = "relay")]
 pub mod relay;
 mod report;
+#[cfg(feature = "upstream")]
+pub mod upstream;
 mod vesseld;
 
 pub use report::write_report;

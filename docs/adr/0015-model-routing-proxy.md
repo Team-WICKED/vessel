@@ -84,7 +84,11 @@ untyped JSON trees, one crate per job).
    with `ring`, the system's roots), with connect, first-byte and
    between-chunks timeouts and a bound on non-streaming bodies. It replaces
    writing an HTTP/1.1 and HTTP/2 client with pooling and streaming on
-   `hyper-util`; its TLS is the stack the workspace already uses.
+   `hyper-util`; its TLS is the stack the workspace already uses: reqwest's
+   `rustls-no-provider` feature takes the config Vessel builds (`ring`,
+   the roots from `rustls-native-certs`, ALPN for HTTP/2) whole, so no
+   process-wide crypto provider is installed. Redirects are off and no
+   proxy is used.
 10. Every upstream call becomes a **`ModelCall` event** in the session's
     log (protocol 7): route, upstream model, API, token counts, stop
     reason, duration and an error class; never prompt or completion

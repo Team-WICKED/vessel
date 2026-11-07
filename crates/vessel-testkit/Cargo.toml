@@ -28,9 +28,13 @@ path = "src/bin/fake_tool.rs"
 # The misbehaving relay (`relay` module): a websocket proxy, so only tests
 # that need it pay for the websocket stack (the fake binaries do not).
 relay = ["dep:futures-util", "dep:tokio-tungstenite"]
+# The fake model provider (`upstream` module, milestone 5): an HTTP server,
+# so only the tests that call a provider pay for it.
+upstream = ["dep:axum", "dep:futures-util", "tokio/net", "tokio/time"]
 
 [dependencies]
 agent-client-protocol.workspace = true
+axum = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true, features = ["sink"] }
 serde_json.workspace = true
 thiserror.workspace = true

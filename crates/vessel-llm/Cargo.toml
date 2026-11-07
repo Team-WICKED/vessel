@@ -11,11 +11,19 @@ repository.workspace = true
 vessel-proto.workspace = true
 
 bytes.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
 uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+vessel-testkit = { workspace = true, features = ["upstream"] }
 
 [lints]
 workspace = true

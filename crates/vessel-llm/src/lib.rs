@@ -21,8 +21,11 @@
 //! - [`upstream`]: the APIs providers speak, out of and into it.
 //! - [`passthrough`]: the same API on both sides, the request as the
 //!   harness wrote it, less what decision 8 of ADR 0015 forbids.
+//! - [`client`]: the call to a provider: TLS, timeouts, bounds, retries
+//!   before the first byte, failures classified.
 //! - [`error`]: what translation refuses, and what it leaves out.
 
+pub mod client;
 pub mod error;
 #[cfg(test)]
 mod fixtures;
