@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useFleet } from "../context";
 import { userInput } from "../data/terminal-input";
+import { openExternal } from "../data/links";
 import { decodeBytes, encodeText } from "../data/terminal";
 import { Banner } from "../ui/parts";
 import type { StreamState } from "../wire/bridge";
@@ -56,6 +57,15 @@ export function TerminalView({
       cursorStyle: "block",
       convertEol: false,
       scrollback: 5000,
+      // OSC 8 hyperlinks from the session follow the timeline's link
+      // policy (data/links.ts): http(s) only, after a confirm showing the
+      // URL, in a new isolated tab; the UI tab is never navigated.
+      linkHandler: {
+        activate: (_event, uri) => {
+          openExternal(uri);
+        },
+        allowNonHttpProtocols: false,
+      },
       theme: {
         background: token("--term-bg"),
         foreground: token("--term-fg"),
