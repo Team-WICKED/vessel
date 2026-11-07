@@ -1,0 +1,72 @@
+[
+  {
+    "name": "agent message chunk",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Hello! How can I help?"}}},
+    "expected": {"event": "message_chunk", "content": {"type": "text", "text": "Hello! How can I help?"}}
+  },
+  {
+    "name": "agent thought chunk",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "The user wants a greeting."}}},
+    "expected": {"event": "thought_chunk", "content": {"type": "text", "text": "The user wants a greeting."}}
+  },
+  {
+    "name": "message chunk with a resource link",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "resource_link", "uri": "file:///work/src/main.rs", "name": "main.rs", "mimeType": "text/x-rust"}}},
+    "expected": {"event": "message_chunk", "content": {"type": "resource_link", "uri": "file:///work/src/main.rs", "name": "main.rs"}}
+  },
+  {
+    "name": "tool call announced with locations and raw input",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "tool_call", "toolCallId": "toolu_01ABC", "title": "Read src/main.rs", "kind": "read", "status": "pending", "locations": [{"path": "/work/src/main.rs", "line": 12}], "rawInput": {"file_path": "/work/src/main.rs", "limit": 40}}},
+    "expected": {"event": "tool_call", "id": "toolu_01ABC", "title": "Read src/main.rs", "kind": "read", "status": "pending", "content": [], "locations": [{"path": "/work/src/main.rs", "line": 12}], "raw_input": {"file_path": "/work/src/main.rs", "limit": 40}}
+  },
+  {
+    "name": "tool call with defaults for missing kind and status",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "tool_call", "toolCallId": "toolu_02", "title": "Think"}},
+    "expected": {"event": "tool_call", "id": "toolu_02", "title": "Think", "kind": "other", "status": "pending", "content": [], "locations": []}
+  },
+  {
+    "name": "tool call update completing with text content and raw output",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_01ABC", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "fn main() {}"}}], "rawOutput": {"lines": 1}}},
+    "expected": {"event": "tool_call_update", "id": "toolu_01ABC", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "fn main() {}"}}], "raw_output": {"lines": 1}}
+  },
+  {
+    "name": "tool call update with a diff",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_03", "title": "Edit README.md", "kind": "edit", "content": [{"type": "diff", "path": "/work/README.md", "oldText": "# Old", "newText": "# New"}]}},
+    "expected": {"event": "tool_call_update", "id": "toolu_03", "title": "Edit README.md", "kind": "edit", "content": [{"type": "diff", "path": "/work/README.md", "old_text": "# Old", "new_text": "# New"}]}
+  },
+  {
+    "name": "tool call update creating a file (no old text)",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_04", "status": "failed", "content": [{"type": "diff", "path": "/work/new.txt", "newText": "hello"}]}},
+    "expected": {"event": "tool_call_update", "id": "toolu_04", "status": "failed", "content": [{"type": "diff", "path": "/work/new.txt", "new_text": "hello"}]}
+  },
+  {
+    "name": "plan",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "plan", "entries": [{"content": "Read the code", "priority": "high", "status": "completed"}, {"content": "Write the fix", "priority": "medium", "status": "in_progress"}, {"content": "Run tests", "priority": "low", "status": "pending"}]}},
+    "expected": {"event": "plan", "entries": [{"content": "Read the code", "priority": "high", "status": "completed"}, {"content": "Write the fix", "priority": "medium", "status": "in_progress"}, {"content": "Run tests", "priority": "low", "status": "pending"}]}
+  },
+  {
+    "name": "notice becomes a harness log line",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "notice", "severity": "warning", "title": "Rate limited", "description": "retrying in 5s"}},
+    "expected": {"event": "harness_log", "line": "warning: Rate limited: retrying in 5s"}
+  },
+  {
+    "name": "replayed user message is forwarded",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "hi"}}},
+    "expected": {"event": "user_message_chunk", "content": {"type": "text", "text": "hi"}}
+  },
+  {
+    "name": "tool call update carrying the raw input",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "toolu_05", "rawInput": {"command": "cargo test", "timeout": 120}}},
+    "expected": {"event": "tool_call_update", "id": "toolu_05", "raw_input": {"command":"cargo test","timeout":120}}
+  },
+  {
+    "name": "available commands are skipped",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "compact", "description": "Compact the conversation"}]}},
+    "skipped": "AvailableCommands"
+  },
+  {
+    "name": "mode change is skipped",
+    "notification": {"sessionId": "s1", "update": {"sessionUpdate": "current_mode_update", "currentModeId": "plan"}},
+    "skipped": "CurrentMode"
+  }
+]

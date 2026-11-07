@@ -1,0 +1,39 @@
+[package]
+name = "vessel-fleet"
+description = "Vessel fleet bundles: content-addressed manifests, the materialiser that writes them into harness homes, and MCP secret resolution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Each harness's home layout (instruction file, skills directory).
+vessel-harness.workspace = true
+vessel-proto.workspace = true
+
+# Random suffixes for temporary files beside the ones being replaced.
+getrandom.workspace = true
+serde.workspace = true
+# `managed.json`, the record of what the materialiser wrote.
+serde_json.workspace = true
+# Blob hashes (the manifest's `BlobHash` is a SHA-256).
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# Names that are one file on macOS and Windows (case, NFC/NFD) are
+# detected as collisions instead of overwriting each other.
+unicode-normalization.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Directory-relative opens (`openat` with `O_NOFOLLOW | O_DIRECTORY`,
+# `mkdirat`, `renameat`, `unlinkat`), so a place is acted on in the very
+# directory that was checked (`dir.rs`); safe wrappers, already in the
+# workspace (vessel-testkit).
+rustix = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,354 @@
+//! The node's local socket (ADR 0007): how `vesseld attach` reaches the
+//! node on its own machine.
+//!
+//! A Unix socket at `<data_dir>/vesseld.sock` (0600, inside the 0700 data
+//! directory), or on Windows a named pipe named after the node id. Frames
+//! are `vessel-rpc`'s `Framed` (PROTOCOL.md version 3). The first frame of
+//! every connection must be the node's token; a wrong or missing one is
+//! answered with `rejected` (`unauthorized`) and the connection closes
+//! before any call is served. After that, the connection is served exactly
+//! like a websocket one, by the same `vessel-rpc` server and limits.
+//!
+//! [Decision Log]
+//! - Purpose: SSH reaches a node through a proxy on the node's machine;
+//!   that proxy needs a local endpoint which needs no TCP port, so a node
+//!   can run with no listening port at all (`--bind none`).
+//! - Why a token on a local socket: ADR 0005 keeps one rule for every
+//!   connection. The socket's file mode already keeps other users out on
+//!   Unix, but a Windows pipe's default ACL lets other local users open it,
+//!   and checking peer credentials portably would need `unsafe` FFI. The
+//!   proxy runs as the node's user and reads the token file, which is
+//!   exactly the capability the token stands for.
+//! - The answer to a bad token is the protocol's own `rejected` frame, so
+//!   both the proxy (to exit with `ProxyExit::Refused`) and the client
+//!   behind it (as a refused handshake) understand it.
+//!
+//! [Decision Log: agents] (protocol 5, ADR 0013)
+//! - A session's `vessel mcp` presents its session's credential instead of
+//!   the token: a JSON object (`AgentAuth`), told apart by its first
+//!   character, since a token is never one. A credential that is unknown,
+//!   wrong, or of an ended session gets the same `rejected` answer as a
+//!   bad token, saying nothing about which part was wrong.
+//! - Admitted, the connection runs with its own closing token, registered
+//!   with the agent (`agents::Registration`), so it closes when its session
+//!   ends, the way a revoked device's connections close.
+
+use std::io;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures_util::{SinkExt as _, StreamExt as _};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use vessel_proto::{AgentAuth, ErrorCode, NodeId, NodeInfo, ServerFrame, WireError};
+use vessel_rpc::{Framed, MAX_FRAME, Server, ServerConfig};
+use vessel_store::{DataDir, NodeToken};
+
+use crate::agents::{Agents, Registration};
+use crate::guard::Guarded;
+use crate::principal::Principal;
+use crate::service::Connection;
+
+/// How long a new local connection has to present the token.
+const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long to wait after a failed `accept` (for example when the process
+/// is out of file descriptors) before accepting again, so a lasting error
+/// does not spin a core.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
+/// Where the local socket is: a file path on Unix, a pipe name on Windows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Endpoint(PathBuf);
+
+impl Endpoint {
+    /// The local endpoint of the node of `dir`, whose id is `node`.
+    #[cfg(unix)]
+    #[must_use]
+    pub(crate) fn of(dir: &DataDir, _node: NodeId) -> Self {
+        Self(dir.socket_path())
+    }
+
+    /// The local endpoint of the node of `dir`, whose id is `node`.
+    #[cfg(windows)]
+    #[must_use]
+    pub(crate) fn of(_dir: &DataDir, node: NodeId) -> Self {
+        Self(PathBuf::from(format!(r"\\.\pipe\vessel-node-{node}")))
+    }
+
+    /// The local endpoint of whatever node serves `dir`, for a client of
+    /// it (`vesseld attach`); `None` when no node has ever run there (on
+    /// Windows the pipe name needs the node id). Blocking.
+    #[cfg_attr(
+        unix,
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Windows reads the node id, which can fail"
+        )
+    )]
+    pub(crate) fn find(dir: &DataDir) -> Result<Option<Self>, vessel_store::StoreError> {
+        #[cfg(unix)]
+        {
+            Ok(Some(Self(dir.socket_path())))
+        }
+        #[cfg(windows)]
+        {
+            Ok(dir.read_node_id()?.map(|node| Self::of(dir, node)))
+        }
+    }
+
+    /// The socket path or pipe name.
+    #[must_use]
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+/// The client end of a local connection.
+#[cfg(unix)]
+pub(crate) type LocalClient = tokio::net::UnixStream;
+/// The client end of a local connection.
+#[cfg(windows)]
+pub(crate) type LocalClient = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// Connect to a node's local endpoint.
+#[cfg(unix)]
+pub(crate) async fn connect(endpoint: &Endpoint) -> io::Result<LocalClient> {
+    tokio::net::UnixStream::connect(endpoint.path()).await
+}
+
+/// Connect to a node's local endpoint.
+///
+/// Between a client taking the waiting pipe instance and the node creating
+/// the next one, every instance is busy and Windows answers
+/// `ERROR_PIPE_BUSY`. That is retried for about a second, as the Win32 and
+/// tokio documentation advise; any other error (no pipe at all: no node)
+/// is returned at once.
+#[cfg(windows)]
+pub(crate) async fn connect(endpoint: &Endpoint) -> io::Result<LocalClient> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+    /// `winerror.h`; not worth a `windows-sys` dependency for one number.
+    const ERROR_PIPE_BUSY: i32 = 231;
+    const ATTEMPTS: u32 = 50;
+    const PAUSE: Duration = Duration::from_millis(20);
+    for _ in 0..ATTEMPTS {
+        match ClientOptions::new().open(endpoint.path()) {
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                tokio::time::sleep(PAUSE).await;
+            }
+            opened => return opened,
+        }
+    }
+    ClientOptions::new().open(endpoint.path())
+}
+
+/// A connected local stream.
+#[cfg(unix)]
+pub(crate) type LocalStream = tokio::net::UnixStream;
+/// A connected local stream.
+#[cfg(windows)]
+pub(crate) type LocalStream = tokio::net::windows::named_pipe::NamedPipeServer;
+
+/// The bound local endpoint.
+#[derive(Debug)]
+pub(crate) struct LocalListener {
+    endpoint: Endpoint,
+    #[cfg(unix)]
+    listener: tokio::net::UnixListener,
+    /// The pipe instance the next client will connect to.
+    #[cfg(windows)]
+    next: tokio::net::windows::named_pipe::NamedPipeServer,
+}
+
+impl LocalListener {
+    /// Bind `endpoint`. The caller holds the node lock, so a socket file
+    /// left by an earlier node is stale and is replaced.
+    #[cfg(unix)]
+    pub(crate) fn bind(endpoint: Endpoint) -> io::Result<Self> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        match std::fs::remove_file(endpoint.path()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let listener = tokio::net::UnixListener::bind(endpoint.path())?;
+        // The directory is 0700 already; the socket itself is owner-only
+        // too, in case the directory is ever opened up.
+        std::fs::set_permissions(endpoint.path(), std::fs::Permissions::from_mode(0o600))?;
+        Ok(Self { endpoint, listener })
+    }
+
+    /// Create the first pipe instance. `first_pipe_instance` fails if
+    /// another process already serves this name.
+    #[cfg(windows)]
+    pub(crate) fn bind(endpoint: Endpoint) -> io::Result<Self> {
+        let next = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(endpoint.path())?;
+        Ok(Self { endpoint, next })
+    }
+
+    pub(crate) const fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    #[cfg(unix)]
+    async fn accept(&mut self) -> io::Result<LocalStream> {
+        self.listener
+            .accept()
+            .await
+            .map(|(stream, _address)| stream)
+    }
+
+    /// Wait for a client on the current instance, then create the next one
+    /// before handing this one out, so a client never finds no instance.
+    #[cfg(windows)]
+    async fn accept(&mut self) -> io::Result<LocalStream> {
+        self.next.connect().await?;
+        let fresh =
+            tokio::net::windows::named_pipe::ServerOptions::new().create(self.endpoint.path())?;
+        Ok(std::mem::replace(&mut self.next, fresh))
+    }
+}
+
+/// What every local connection needs.
+#[derive(Debug, Clone)]
+pub(crate) struct LocalGateway {
+    pub(crate) rpc: Arc<Server<Guarded>>,
+    pub(crate) token: Arc<NodeToken>,
+    pub(crate) connections: TaskTracker,
+    pub(crate) agents: AgentGateway,
+}
+
+/// What an agent's connection needs: its own server, closed with its
+/// session.
+#[derive(Debug, Clone)]
+pub(crate) struct AgentGateway {
+    pub(crate) agents: Arc<Agents>,
+    pub(crate) service: Arc<Guarded>,
+    pub(crate) info: watch::Receiver<NodeInfo>,
+    pub(crate) config: ServerConfig,
+    /// The node's closing; each agent connection's token is a child.
+    pub(crate) closing: CancellationToken,
+}
+
+impl AgentGateway {
+    pub(crate) fn new(
+        agents: Arc<Agents>,
+        secure: &crate::secure::SecureGateway,
+        config: ServerConfig,
+    ) -> Self {
+        Self {
+            agents,
+            service: Arc::clone(&secure.service),
+            info: secure.lifecycle.watch_info(),
+            config,
+            closing: secure.closing.clone(),
+        }
+    }
+}
+
+/// Who a local connection's first frame says it is.
+enum Admitted {
+    /// The node's token.
+    Owner,
+    /// A session's agent, closed when its session ends.
+    Agent(Principal, Registration),
+}
+
+/// Accept local connections until `stop` is cancelled.
+pub(crate) async fn serve(
+    mut listener: LocalListener,
+    gateway: LocalGateway,
+    stop: CancellationToken,
+) {
+    loop {
+        let accepted = tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            accepted = listener.accept() => accepted,
+        };
+        match accepted {
+            Ok(stream) => {
+                drop(
+                    gateway
+                        .connections
+                        .spawn(connection(stream, gateway.clone())),
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot accept a local connection");
+                tokio::time::sleep(ACCEPT_RETRY).await;
+            }
+        }
+    }
+    #[cfg(unix)]
+    if let Err(error) = std::fs::remove_file(listener.endpoint().path()) {
+        tracing::debug!(%error, "local socket already gone");
+    }
+}
+
+/// One local connection: the token or agent preamble, then the protocol.
+async fn connection<S>(stream: S, gateway: LocalGateway)
+where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
+    let (reader, writer) = tokio::io::split(stream);
+    let mut framed = Framed::new(reader, writer, MAX_FRAME);
+    let presented = tokio::time::timeout(PREAMBLE_TIMEOUT, framed.next()).await;
+    let admitted = match &presented {
+        Ok(Some(Ok(frame))) => admit(&gateway, frame),
+        Ok(Some(Err(_)) | None) | Err(_) => None,
+    };
+    let Some(admitted) = admitted else {
+        tracing::info!("refused a local connection without the right token or credential");
+        let rejected = ServerFrame::Rejected {
+            error: WireError::new(ErrorCode::Unauthorized, "missing or wrong token"),
+        };
+        // Best effort: the peer may already be gone.
+        if let Ok(text) = serde_json::to_string(&rejected)
+            && framed.send(text).await.is_err()
+        {
+            tracing::debug!("refused local peer left before the answer");
+        }
+        return;
+    };
+    let served = match admitted {
+        Admitted::Owner => gateway.rpc.serve(framed, Connection::owner).await,
+        Admitted::Agent(principal, registration) => {
+            let agent = &gateway.agents;
+            let server = Server::new(
+                Arc::clone(&agent.service),
+                agent.info.clone(),
+                agent.config.clone(),
+                registration.closing().clone(),
+            );
+            let result = server
+                .serve(framed, move |peer| Connection::new(peer, principal))
+                .await;
+            drop(registration);
+            result
+        }
+    };
+    if let Err(error) = served {
+        tracing::info!(error = %error, "local connection ended abnormally");
+    }
+}
+
+/// The node's token, or a live session's credential (`AgentAuth`, a JSON
+/// object); `None` for anything else.
+fn admit(gateway: &LocalGateway, frame: &str) -> Option<Admitted> {
+    if frame.starts_with('{') {
+        let auth: AgentAuth = serde_json::from_str(frame).ok()?;
+        let (principal, registration) = gateway
+            .agents
+            .agents
+            .admit(&auth, &gateway.agents.closing)?;
+        return Some(Admitted::Agent(principal, registration));
+    }
+    gateway.token.verify(frame).then_some(Admitted::Owner)
+}

@@ -1,0 +1,27 @@
+[package]
+name = "vessel-agent"
+description = "Vessel's ACP client: drives a harness or adapter over stdio and maps ACP to Vessel's agent timeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proc.workspace = true
+vessel-proto.workspace = true
+
+agent-client-protocol.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+vessel-testkit.workspace = true
+
+[lints]
+workspace = true

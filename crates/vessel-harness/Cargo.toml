@@ -1,0 +1,42 @@
+[package]
+name = "vessel-harness"
+description = "Everything harness-specific in Vessel: discovery, version probes, terminal and ACP launch commands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[features]
+# Helpers that install testkit fakes under real harness binary names, for
+# other crates' tests. Never enabled in `vesseld`.
+fakes = []
+
+[dependencies]
+vessel-proc.workspace = true
+vessel-proto.workspace = true
+
+dirs.workspace = true
+futures-util.workspace = true
+getrandom.workspace = true
+# Telling "already linked" from "another file" in `link_session`, Windows
+# included (see the workspace manifest).
+same-file.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "time"] }
+toml_edit.workspace = true
+tracing.workspace = true
+which.workspace = true
+
+[dev-dependencies]
+dirs.workspace = true
+# Throwaway homes for the memory and rebase tests.
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+vessel-harness = { workspace = true, features = ["fakes"] }
+vessel-testkit.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,986 @@
+//! Devices end to end inside the node: invitations, the preamble on a
+//! channel (an in-memory pair standing in for a secure channel), the scope
+//! check, and revocation closing connections.
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU16;
+use std::time::Duration;
+
+use futures_util::{SinkExt as _, StreamExt as _};
+use tempfile::TempDir;
+use vessel_client::pairing::{self, PreambleError};
+use vessel_client::secure;
+use vessel_harness::Lookup;
+use vessel_proto::{
+    ClientInfo, CopySecret, CreateSession, Deliver, DeviceId, DeviceInfo, DeviceSecret, ErrorCode,
+    GetNode, HarnessKind, InviteDevice, ListDevices, ListSessions, NodeClose, NodeId,
+    NodePublicKey, Origin, OriginBy, PairingOffer, Preamble, PreambleReply, RefusalReason,
+    RelayCall, Request, RevokeDevice, Scope, SessionId, SessionInput, SessionMode, SessionSpec,
+    TerminalSize,
+};
+use vessel_relay::NodeCarrier;
+use vessel_rpc::memory::{self, MemoryTransport};
+use vessel_rpc::{CallError, ClientConfig, Connection};
+use vessel_secure::{MemoryCarrier, NodeKeypair, SecureChannel, SecureError, memory_pair};
+use vessel_store::{CredentialHash, DataDir};
+
+use super::*;
+use crate::secure::{
+    Budget, MAX_UNADMITTED, MAX_UNADMITTED_PER_ADDRESS, NotServed, Route, relay_budget,
+};
+use crate::{Config, Node};
+
+async fn node() -> (TempDir, Node) {
+    node_in(tempfile::tempdir().unwrap()).await
+}
+
+/// A node with its data directory at `<temp>/data`.
+async fn node_in(temp: TempDir) -> (TempDir, Node) {
+    let mut config = Config::new(
+        DataDir::new(temp.path().join("data")),
+        vessel_harness::HarnessEnv::new(temp.path().join("user")),
+    );
+    config.bind = None;
+    config.harness_lookup = Lookup::new(Vec::<PathBuf>::new());
+    config.relays = vec!["wss://relay.example/vessel".parse().unwrap()];
+    config.relay_token_file = Some(temp.path().join("relay-token"));
+    std::fs::write(temp.path().join("relay-token"), "shared").unwrap();
+    config.public = vec!["ws://203.0.113.5:7077".parse().unwrap()];
+    let node = Node::start(config).await.unwrap();
+    (temp, node)
+}
+
+fn client() -> ClientInfo {
+    ClientInfo {
+        name: "devices-test".to_owned(),
+        version: "0".to_owned(),
+    }
+}
+
+/// A channel to the node's device gateway, as a secure channel would be,
+/// from an address no other test channel uses (each in a /48 of its own,
+/// so the per-address budget never gets in a test's way).
+fn channel(node: &Node) -> MemoryTransport {
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    channel_from(
+        node,
+        IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, n, 0, 0, 0, 0, 1)),
+    )
+}
+
+/// [`channel`], from `peer` over the direct route.
+fn channel_from(node: &Node, peer: IpAddr) -> MemoryTransport {
+    served(node, Route::Direct(peer))
+}
+
+/// [`channel`], as a client a relay spliced through the link of `budget`.
+fn relayed(node: &Node, budget: &Budget) -> MemoryTransport {
+    served(node, Route::Relayed(Arc::clone(budget)))
+}
+
+fn served(node: &Node, route: Route) -> MemoryTransport {
+    let (client_end, node_end) = memory::pair(NonZeroUsize::new(16).unwrap());
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(
+        async move { gateway.serve(node_end, route).await },
+    ));
+    client_end
+}
+
+/// Whether `channel` was dropped at once, unanswered.
+async fn dropped_at_once(channel: &mut MemoryTransport) -> bool {
+    let next = tokio::time::timeout(Duration::from_secs(1), channel.next()).await;
+    matches!(next, Ok(None))
+}
+
+/// Send `preamble` and read the node's answer.
+async fn preamble(channel: &mut MemoryTransport, preamble: &Preamble) -> PreambleReply {
+    channel
+        .send(serde_json::to_string(preamble).unwrap())
+        .await
+        .unwrap();
+    let reply = channel.next().await.unwrap().unwrap();
+    serde_json::from_str(&reply).unwrap()
+}
+
+fn invite(node: &Node, label: Option<&str>) -> PairingOffer {
+    node.secure
+        .devices
+        .invite(&InviteDevice {
+            label: label.map(str::to_owned),
+            ttl_secs: 600,
+            scopes: None,
+        })
+        .unwrap()
+        .link
+        .decode()
+        .unwrap()
+}
+
+/// Pair through a fresh channel with the client's own `pair`; returns the
+/// device, its secret, and the protocol connection that follows on the same
+/// channel.
+async fn pair(node: &Node, offer: PairingOffer) -> (DeviceId, DeviceSecret, Connection) {
+    let (paired, channel) = pairing::pair(channel(node), &offer, "laptop")
+        .await
+        .unwrap();
+    assert_eq!(paired.node.id, node.info().id);
+    let connection = Connection::connect(channel, client(), &ClientConfig::default())
+        .await
+        .unwrap();
+    (
+        paired.credential.device,
+        paired.credential.secret,
+        connection,
+    )
+}
+
+/// Authenticate through a fresh channel with the client's `authenticate`.
+async fn authenticate(
+    node: &Node,
+    device: DeviceId,
+    secret: &DeviceSecret,
+) -> Result<Connection, RefusalReason> {
+    let info = node.info();
+    let key = info.public_key.unwrap();
+    let credential = pairing::credential(info.id, key, device, secret.clone());
+    match pairing::authenticate(channel(node), &credential).await {
+        Ok(channel) => Ok(
+            Connection::connect(channel, client(), &ClientConfig::default())
+                .await
+                .unwrap(),
+        ),
+        Err(PreambleError::Refused(reason)) => Err(reason),
+        Err(other) => panic!("expected an answer, got {other}"),
+    }
+}
+
+#[tokio::test]
+async fn an_invitation_is_a_link_to_this_node_with_its_routes() {
+    let (_temp, node) = node().await;
+    let offer = invite(&node, Some("phone"));
+    assert_eq!(offer.node, node.info().id);
+    assert_eq!(Some(offer.key), node.info().public_key);
+    assert_eq!(offer.relays[0].as_str(), "wss://relay.example/vessel");
+    assert_eq!(offer.direct[0].as_str(), "ws://203.0.113.5:7077");
+    let ttl = offer.expires - Utc::now();
+    assert!(ttl > TimeDelta::seconds(590) && ttl <= TimeDelta::seconds(600));
+
+    let capped = node
+        .secure
+        .devices
+        .invite(&InviteDevice {
+            label: None,
+            ttl_secs: u32::MAX,
+            scopes: None,
+        })
+        .unwrap();
+    assert!(capped.expires - Utc::now() <= MAX_INVITATION_TTL);
+    assert!(matches!(
+        node.secure.devices.invite(&InviteDevice {
+            label: None,
+            ttl_secs: 0,
+            scopes: None,
+        }),
+        Err(ServiceError::InvalidTtl)
+    ));
+    node.stop().await.unwrap();
+}
+
+/// The node's key is `node.key`'s: the same across restarts, and published
+/// in `NodeInfo` for clients already connected (token or SSH).
+#[tokio::test]
+async fn the_node_key_comes_from_node_key_and_survives_a_restart() {
+    let temp = tempfile::tempdir().unwrap();
+    let start = || {
+        let mut config = Config::new(
+            DataDir::new(temp.path()),
+            vessel_harness::HarnessEnv::new(temp.path().join("user")),
+        );
+        config.bind = None;
+        Node::start(config)
+    };
+    let node = start().await.unwrap();
+    let key = node.info().public_key.unwrap();
+    let secret = DataDir::new(temp.path()).read_node_key().unwrap();
+    assert_eq!(&key, NodeKeypair::from_secret(*secret.expose()).public());
+    node.stop().await.unwrap();
+    let again = start().await.unwrap();
+    assert_eq!(again.info().public_key, Some(key));
+    again.stop().await.unwrap();
+}
+
+/// An in-memory carrier the node can close with a code, as it closes
+/// websockets: the code is recorded for the test to read.
+struct Closable {
+    carrier: MemoryCarrier,
+    closed: Arc<Mutex<Option<NodeClose>>>,
+}
+
+impl futures_util::Stream for Closable {
+    type Item = std::io::Result<bytes::Bytes>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_next(cx)
+    }
+}
+
+impl futures_util::Sink<bytes::Bytes> for Closable {
+    type Error = std::io::Error;
+
+    fn poll_ready(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_ready(cx)
+    }
+
+    fn start_send(self: std::pin::Pin<&mut Self>, item: bytes::Bytes) -> std::io::Result<()> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).start_send(item)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_flush(cx)
+    }
+
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().carrier).poll_close(cx)
+    }
+}
+
+impl NodeCarrier for Closable {
+    async fn close_with(self, close: NodeClose) {
+        *self.closed.lock().unwrap() = Some(close);
+    }
+}
+
+/// The node's gateway answering on one end of a new in-memory pair; the
+/// other end, and how the node closed it (if it did).
+fn carrier(node: &Node) -> (MemoryCarrier, Arc<Mutex<Option<NodeClose>>>) {
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let closed = Arc::new(Mutex::new(None));
+    let node_end = Closable {
+        carrier: node_end,
+        closed: Arc::clone(&closed),
+    };
+    let gateway = node.secure.clone();
+    drop(tokio::spawn(async move {
+        gateway
+            .accept(node_end, Route::Direct(Ipv4Addr::LOCALHOST.into()))
+            .await
+    }));
+    (client_end, closed)
+}
+
+/// A secure channel to the node: a carrier the gateway answers with the
+/// node's key, and the client's end after its handshake to `key`.
+async fn secure(
+    node: &Node,
+    key: &NodePublicKey,
+) -> (
+    Result<SecureChannel<MemoryCarrier>, SecureError>,
+    tokio::task::JoinHandle<Result<(), NotServed>>,
+    Arc<Mutex<Option<NodeClose>>>,
+) {
+    let (client_end, node_end) = memory_pair(NonZeroUsize::new(16).unwrap());
+    let closed = Arc::new(Mutex::new(None));
+    let node_end = Closable {
+        carrier: node_end,
+        closed: Arc::clone(&closed),
+    };
+    let gateway = node.secure.clone();
+    let accepted = tokio::spawn(async move {
+        gateway
+            .accept(node_end, Route::Direct(Ipv4Addr::LOCALHOST.into()))
+            .await
+    });
+    (
+        vessel_secure::initiate(client_end, key).await,
+        accepted,
+        closed,
+    )
+}
+
+/// Pairing and authenticating through the real Noise channel, as `/secure`
+/// and relays will carry it, with the client's own `secure::pair` and
+/// `secure::open`.
+#[tokio::test]
+async fn devices_pair_and_authenticate_over_the_secure_channel() {
+    let (_temp, node) = node().await;
+    let offer = invite(&node, None);
+    let config = ClientConfig::default();
+
+    let (client_end, _closed) = carrier(&node);
+    let (paired, connection) = secure::pair(client_end, &offer, "laptop", client(), &config)
+        .await
+        .unwrap();
+    assert_eq!(paired.node.id, node.info().id);
+    assert_eq!(connection.devices().await.unwrap().len(), 1);
+
+    let (client_end, _closed) = carrier(&node);
+    let connection = secure::open(
+        client_end,
+        &offer.key,
+        offer.node,
+        &paired.credential,
+        client(),
+        &config,
+    )
+    .await
+    .unwrap();
+    assert!(connection.sessions().await.unwrap().is_empty());
+
+    // Spent: the same link again is refused, and that is final.
+    let (client_end, _closed) = carrier(&node);
+    let error = secure::pair(client_end, &offer, "again", client(), &config)
+        .await
+        .unwrap_err();
+    assert!(error.is_final(), "{error}");
+    node.stop().await.unwrap();
+}
+
+/// A client that pinned another key never gets a channel, and the node
+/// closes the carrier with 4401 so the client knows it is final.
+#[tokio::test]
+async fn a_client_with_another_key_gets_no_channel() {
+    let (_temp, node) = node().await;
+    let other = *NodeKeypair::generate().unwrap().public();
+    let (channel, accepted, closed) = secure(&node, &other).await;
+    assert!(channel.is_err());
+    assert!(matches!(
+        accepted.await.unwrap(),
+        Err(NotServed::Handshake(SecureError::Handshake(_)))
+    ));
+    assert_eq!(*closed.lock().unwrap(), Some(NodeClose::HandshakeFailed));
+    node.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn pairing_creates_a_device_once_and_its_credential_authenticates_it() {
+    let (_temp, node) = node().await;
+    let offer = invite(&node, Some("work laptop"));
+    let (device, secret, paired) = pair(&node, offer.clone()).await;
+
+    // The channel that paired goes on to serve the protocol, with every scope.
+    let devices: Vec<DeviceInfo> = paired.call(ListDevices).await.unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].id, device);
+    assert_eq!(
+        devices[0].label, "work laptop",
+        "the invitation's label wins"
+    );
+    assert_eq!(devices[0].scopes, Scope::DEVICE_DEFAULT.to_vec());
+
+    // The invitation is spent.
+    let mut again = channel(&node);
+    assert_eq!(
+        preamble(
+            &mut again,
+            &Preamble::PairRequest {
+                invite: offer.invite,
+                device_name: "intruder".to_owned()
+            }
+        )
+        .await,
+        PreambleReply::Refused {
+            reason: RefusalReason::InvalidInvitation
+        }
+    );
+    assert!(again.next().await.is_none(), "closed after refusing");
+
+    // The credential works; a wrong one and an unknown device do not, and
+    // are indistinguishable.
+    let connection = authenticate(&node, device, &secret).await.unwrap();
+    assert!(connection.call(ListSessions).await.unwrap().is_empty());
+    let wrong = DeviceSecret::from_bytes([0; 32]);
+    assert_eq!(
+        authenticate(&node, device, &wrong).await.unwrap_err(),
+        RefusalReason::UnknownDevice
+    );
+    assert_eq!(
+        authenticate(&node, DeviceId::random(), &secret)
+            .await
+            .unwrap_err(),
+        RefusalReason::UnknownDevice
+    );
+    node.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn revoking_a_device_closes_its_connections_and_refuses_it_after() {
+    let (_temp, node) = node().await;
+    let (laptop, laptop_secret, laptop_paired) = pair(&node, invite(&node, None)).await;
+    let (_phone, _phone_secret, phone) = pair(&node, invite(&node, None)).await;
+    let laptop_again = authenticate(&node, laptop, &laptop_secret).await.unwrap();
+
+    // The phone revokes the laptop.
+    let _ack = phone.call(RevokeDevice { device: laptop }).await.unwrap();
+    laptop_paired.closed().await;
+    laptop_again.closed().await;
+    assert_eq!(
+        laptop_again.call(ListSessions).await,
+        Err(CallError::Disconnected)
+    );
+    assert_eq!(
+        authenticate(&node, laptop, &laptop_secret)
+            .await
+            .unwrap_err(),
+        RefusalReason::Revoked
+    );
+
+    // The phone is unaffected, and still lists the laptop as revoked.
+    let listed = phone.call(ListDevices).await.unwrap();
+    let revoked = listed.iter().find(|device| device.id == laptop).unwrap();
+    assert!(revoked.revoked_at.is_some());
+    assert_eq!(
+        phone
+            .call(RevokeDevice {
+                device: DeviceId::random()
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        Some(ErrorCode::NotFound)
+    );
+    node.stop().await.unwrap();
+}
+
+/// A device holds only its scopes; the check applies to every method.
+#[tokio::test]
+async fn a_device_without_a_scope_is_forbidden_that_method() {
+    let (_temp, node) = node().await;
+    let viewer = DeviceInfo {
+        id: DeviceId::random(),
+        label: "viewer".to_owned(),
+        created_at: Utc::now(),
+        last_seen: None,
+        scopes: vec![Scope::Read],
+        revoked_at: None,
+    };
+    let secret = DeviceSecret::from_bytes([9; 32]);
+    node.secure
+        .devices
+        .store
+        .add_device(viewer.clone(), CredentialHash::of(&secret))
+        .await
+        .unwrap();
+    let connection = authenticate(&node, viewer.id, &secret).await.unwrap();
+    assert!(connection.call(ListSessions).await.is_ok());
+    let create = CreateSession {
+        spec: SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Terminal {
+                args: Vec::new(),
+                size: TerminalSize::default(),
+            },
+        ),
+    };
+    for refused in [
+        connection.call(create).await.unwrap_err(),
+        connection.call(ListDevices).await.map(drop).unwrap_err(),
+    ] {
+        assert_eq!(refused.code(), Some(ErrorCode::Forbidden));
+    }
+    node.stop().await.unwrap();
+}
+
+/// Protocol 6: passing calls on needs `relay`, which `sync` does not
+/// include; past the check, the home's handler answers (this node is no
+/// home), and a secret this node does not have is not copied anywhere.
+#[tokio::test]
+async fn relaying_needs_its_own_scope_and_a_missing_secret_is_not_copied() {
+    let (_temp, node) = node().await;
+    let mut members = Vec::new();
+    for scopes in [
+        vec![Scope::Sync],
+        vec![Scope::Read, Scope::Admin, Scope::Sync, Scope::Relay],
+    ] {
+        let member = DeviceInfo {
+            id: DeviceId::random(),
+            label: "member".to_owned(),
+            created_at: Utc::now(),
+            last_seen: None,
+            scopes,
+            revoked_at: None,
+        };
+        let secret = DeviceSecret::from_bytes([7; 32]);
+        node.secure
+            .devices
+            .store
+            .add_device(member.clone(), CredentialHash::of(&secret))
+            .await
+            .unwrap();
+        members.push(authenticate(&node, member.id, &secret).await.unwrap());
+    }
+    let relay = || RelayCall {
+        node: NodeId::random(),
+        call: Box::new(Request::into_call(GetNode)),
+        origin: Origin {
+            node: NodeId::random(),
+            by: OriginBy::Owner,
+            scopes: vec![Scope::Read],
+        },
+    };
+    let refused = members[0].call(relay()).await.unwrap_err();
+    assert_eq!(refused.code(), Some(ErrorCode::Forbidden));
+    assert!(refused.to_string().contains("`relay`"), "{refused}");
+    let no_home = members[1].call(relay()).await.unwrap_err();
+    assert_eq!(no_home.code(), Some(ErrorCode::Unavailable), "{no_home}");
+
+    let missing = members[1]
+        .call(CopySecret {
+            name: "DOCS_TOKEN".parse().unwrap(),
+            to: NodeId::random(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), Some(ErrorCode::NotFound), "{missing}");
+    assert!(missing.to_string().contains("DOCS_TOKEN"), "{missing}");
+    node.stop().await.unwrap();
+}
+
+/// Protocol 6: a member runs a delivered call only from its home's device
+/// (the one its grant made), as that device cut down to the origin.
+#[tokio::test]
+async fn a_member_takes_delivered_calls_from_its_home_device_only() {
+    // A member of a home it granted the first device to, as `links` and
+    // `vessel fleet join` would have left it: written before the node
+    // starts, so its fleet loop never looks at them half written.
+    let ids = [DeviceId::random(), DeviceId::random()];
+    let home = NodeId::random();
+    let temp = tempfile::tempdir().unwrap();
+    let fleet = temp.path().join("data").join("fleet");
+    std::fs::create_dir_all(&fleet).unwrap();
+    let key = *NodeKeypair::generate().unwrap().public();
+    std::fs::write(
+        fleet.join("member.json"),
+        serde_json::json!({
+            "home": home,
+            "key": key,
+            "joined_at": Utc::now(),
+            "grant": ["read", "operate"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        fleet.join("granted.json"),
+        serde_json::json!({
+            "home": home,
+            "device": ids[0],
+            "scopes": ["read", "operate"],
+            "since": Utc::now(),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (_temp, node) = node_in(temp).await;
+    // The home's device under the label its grant gives it, which the
+    // fleet loop keeps because it is the one on record.
+    let mut devices = Vec::new();
+    for (id, label) in ids
+        .into_iter()
+        .zip([format!("fleet home {home}"), "phone".to_owned()])
+    {
+        let device = DeviceInfo {
+            id,
+            label,
+            created_at: Utc::now(),
+            last_seen: None,
+            scopes: vec![Scope::Read, Scope::Operate],
+            revoked_at: None,
+        };
+        let secret = DeviceSecret::from_bytes([5; 32]);
+        node.secure
+            .devices
+            .store
+            .add_device(device.clone(), CredentialHash::of(&secret))
+            .await
+            .unwrap();
+        devices.push((device.id, secret));
+    }
+    let home_device = authenticate(&node, devices[0].0, &devices[0].1)
+        .await
+        .unwrap();
+    let phone = authenticate(&node, devices[1].0, &devices[1].1)
+        .await
+        .unwrap();
+    let deliver = |call: vessel_proto::Call, scopes: Vec<Scope>| Deliver {
+        call: Box::new(call),
+        origin: Origin {
+            node: NodeId::random(),
+            by: OriginBy::Owner,
+            scopes,
+        },
+    };
+
+    let refused = phone
+        .call(deliver(Request::into_call(GetNode), vec![Scope::Read]))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(ErrorCode::Forbidden));
+    let ran = home_device
+        .call(deliver(Request::into_call(GetNode), vec![Scope::Read]))
+        .await
+        .unwrap();
+    assert!(matches!(*ran.reply, vessel_proto::Reply::NodeInfo(_)));
+    // The origin lacks `operate`, so the home's device does too, here.
+    let create = CreateSession {
+        spec: SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Terminal {
+                args: Vec::new(),
+                size: TerminalSize::default(),
+            },
+        ),
+    };
+    let cut_down = home_device
+        .call(deliver(Request::into_call(create), vec![Scope::Read]))
+        .await
+        .unwrap_err();
+    assert_eq!(cut_down.code(), Some(ErrorCode::Forbidden));
+    // Administration does not travel.
+    let admin = home_device
+        .call(deliver(
+            Request::into_call(ListDevices),
+            Scope::ALL.to_vec(),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(admin.code(), Some(ErrorCode::InvalidRequest));
+    node.stop().await.unwrap();
+}
+
+/// A channel whose first frame is not a preamble gets no answer.
+#[tokio::test]
+async fn a_channel_without_a_preamble_is_dropped_unanswered() {
+    let (_temp, node) = node().await;
+    let channel = channel(&node);
+    let refused = Connection::connect(channel, client(), &ClientConfig::default()).await;
+    assert!(refused.is_err(), "{refused:?}");
+    node.stop().await.unwrap();
+}
+
+/// Anyone who reaches the node can open channels; at most
+/// `MAX_UNADMITTED` wait for their preamble, one more is dropped at once,
+/// and a slot comes back when a waiting one leaves.
+#[tokio::test]
+async fn channels_waiting_for_their_preamble_are_capped() {
+    let (_temp, node) = node().await;
+    let permits = || node.secure.unadmitted.available_permits();
+    let mut waiting: Vec<MemoryTransport> = (0..MAX_UNADMITTED).map(|_| channel(&node)).collect();
+    while permits() > 0 {
+        tokio::task::yield_now().await;
+    }
+    let mut extra = channel(&node);
+    assert!(extra.next().await.is_none(), "dropped at once");
+
+    drop(waiting.pop());
+    while permits() == 0 {
+        tokio::task::yield_now().await;
+    }
+    let (_device, _secret, connection) = pair(&node, invite(&node, None)).await;
+    assert_eq!(connection.call(ListDevices).await.unwrap().len(), 1);
+    drop(waiting);
+    node.stop().await.unwrap();
+}
+
+/// The security review's rounds 9 and 10: each relay link's channels
+/// waiting for their preamble have a budget of their own
+/// (`RELAYED_UNADMITTED`), so a crowd through one relay leaves the other
+/// links and the direct route all of their room.
+#[tokio::test]
+async fn each_relay_link_waits_in_a_budget_of_its_own() {
+    let (_temp, node) = node().await;
+    let (crowded, other) = (relay_budget(), relay_budget());
+    let mut waiting: Vec<MemoryTransport> = (0..vessel_relay::RELAYED_UNADMITTED)
+        .map(|_| relayed(&node, &crowded))
+        .collect();
+    let filled = tokio::time::timeout(Duration::from_secs(1), async {
+        while crowded.available_permits() > 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(filled.is_ok(), "the link's budget is not used");
+    assert_eq!(
+        node.secure.unadmitted.available_permits(),
+        MAX_UNADMITTED,
+        "relayed channels took direct room"
+    );
+    let mut extra = relayed(&node, &crowded);
+    assert!(dropped_at_once(&mut extra).await, "past the link's budget");
+    // Another link's client waits as usual (no answer until its preamble).
+    let mut elsewhere = relayed(&node, &other);
+    assert!(!dropped_at_once(&mut elsewhere).await, "another link");
+    // The direct route is served all the while.
+    let (_device, _secret, connection) = pair(&node, invite(&node, None)).await;
+    assert_eq!(connection.call(ListDevices).await.unwrap().len(), 1);
+    waiting.clear();
+    node.stop().await.unwrap();
+}
+
+/// The security review's round 10: one address holds only a few of the
+/// direct route's places for channels waiting for their preamble, counted
+/// as a relay counts (an IPv4 address or an IPv6 `/64`; a `/56` twice, a
+/// `/48` four times), so one host cannot hold them all.
+#[tokio::test]
+async fn one_address_holds_few_of_the_direct_routes_places() {
+    let (_temp, node) = node().await;
+    let host: IpAddr = "192.0.2.7".parse().unwrap();
+    let mut waiting: Vec<MemoryTransport> = (0..MAX_UNADMITTED_PER_ADDRESS)
+        .map(|_| channel_from(&node, host))
+        .collect();
+    let mut extra = channel_from(&node, host);
+    assert!(
+        dropped_at_once(&mut extra).await,
+        "past the address's share"
+    );
+    let mut neighbour = channel_from(&node, "192.0.2.8".parse().unwrap());
+    assert!(!dropped_at_once(&mut neighbour).await, "another address");
+    // A /48: its /64s in two /56s, then no more from any of it.
+    for from in [
+        "2001:db8:9:1::1",
+        "2001:db8:9:2::1",
+        "2001:db8:9:101::1",
+        "2001:db8:9:102::1",
+    ] {
+        let from: IpAddr = from.parse().unwrap();
+        waiting.extend((0..MAX_UNADMITTED_PER_ADDRESS).map(|_| channel_from(&node, from)));
+    }
+    let mut more = channel_from(&node, "2001:db8:9:201::1".parse().unwrap());
+    assert!(dropped_at_once(&mut more).await, "past the /48's share");
+    // Gone, their places come back.
+    waiting.clear();
+    drop((extra, neighbour, more));
+    let back = tokio::time::timeout(Duration::from_secs(5), async {
+        while !lock_counts(&node).is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(back.is_ok(), "the places were not given back");
+    node.stop().await.unwrap();
+}
+
+fn lock_counts(node: &Node) -> std::sync::MutexGuard<'_, vessel_relay::address::BlockCounts> {
+    node.secure.unadmitted_per_address.lock().unwrap()
+}
+
+/// One `/48`'s share of the direct places stays under half of them, as a
+/// relay's startup check keeps its own limits (`Limits::check`).
+#[test]
+fn one_48_holds_less_than_half_of_the_direct_places() {
+    let scale = usize::try_from(vessel_relay::address::WIDEST).unwrap();
+    assert!(MAX_UNADMITTED_PER_ADDRESS * scale * 2 < MAX_UNADMITTED);
+}
+
+/// A relayed channel has `RELAYED_ADMISSION` to be admitted, handshake
+/// and preamble together, not the direct route's ten seconds: what a relay
+/// counts on to tell an admitted client from one held open.
+#[tokio::test]
+async fn a_relayed_channel_has_seconds_to_be_admitted() {
+    let (_temp, node) = node().await;
+    let mut silent = relayed(&node, &relay_budget());
+    let started = std::time::Instant::now();
+    let ended = tokio::time::timeout(
+        vessel_relay::RELAYED_ADMISSION + Duration::from_secs(2),
+        silent.next(),
+    )
+    .await;
+    assert!(matches!(ended, Ok(None)), "still open: {ended:?}");
+    assert!(started.elapsed() < preamble::PREAMBLE_TIMEOUT);
+    node.stop().await.unwrap();
+}
+
+/// Pairing registers its connection under the new device's id before the
+/// device is stored (the order `DeviceAuth` uses), so a revocation that
+/// finds the device also finds the connection.
+#[tokio::test]
+async fn a_pairing_connection_is_registered_under_the_device_it_stores() {
+    let (_temp, node) = node().await;
+    let devices = &node.secure.devices;
+    let closing = CancellationToken::new();
+    let registration = devices.connect(DeviceId::random(), &closing);
+    let offer = invite(&node, None);
+    let (_secret, scopes) = devices
+        .pair(&registration, &offer.invite, "laptop")
+        .await
+        .unwrap();
+    assert_eq!(scopes, Scope::DEVICE_DEFAULT.to_vec());
+    let stored = devices.list().await.unwrap();
+    assert_eq!(stored[0].id, registration.device());
+    devices.revoke(registration.device()).await.unwrap();
+    assert!(registration.closing().is_cancelled());
+    node.stop().await.unwrap();
+}
+
+#[test]
+fn labels_lose_control_and_invisible_formatting_characters() {
+    // A right-to-left override would show "laptop\u{202E}exe.txt" as
+    // "laptoptxt.exe"; zero-width and isolate characters hide in names.
+    assert_eq!(label("lap\u{202E}top\u{200B}\u{2066}\u{2069}"), "laptop");
+    assert_eq!(label("\u{FEFF}work\u{00AD}\u{E0041}\tlaptop"), "worklaptop");
+    assert_eq!(label("\u{200D}\u{2060} \n"), "device");
+    assert_eq!(label("Pixel 9 (José)"), "Pixel 9 (José)");
+}
+
+/// Until the preamble is answered a frame may be 64 KiB at most: a
+/// stranger's larger first frame closes the channel unanswered. Once
+/// admitted, a device may send the usual large frames.
+#[tokio::test]
+async fn frames_are_small_until_the_device_is_admitted() {
+    let (_temp, node) = node().await;
+    let key = node.info().public_key.unwrap();
+    let big = "x".repeat(100 * 1024);
+
+    // A valid pairing request, made large by its device name: without the
+    // limit the node would pair it.
+    let offer = invite(&node, None);
+    let oversized = serde_json::to_string(&Preamble::PairRequest {
+        invite: offer.invite.clone(),
+        device_name: big.clone(),
+    })
+    .unwrap();
+    let (client_end, _closed) = carrier(&node);
+    let mut stranger = vessel_secure::initiate(client_end, &key).await.unwrap();
+    stranger.send(oversized).await.unwrap();
+    assert!(
+        !matches!(stranger.next().await, Some(Ok(_))),
+        "the node read an oversized first frame"
+    );
+
+    // The invitation was never read, so it still pairs.
+    let (client_end, _closed) = carrier(&node);
+    let (_paired, connection) = secure::pair(
+        client_end,
+        &offer,
+        "laptop",
+        client(),
+        &ClientConfig::default(),
+    )
+    .await
+    .unwrap();
+    let input = SessionInput::Prompt {
+        content: vec![vessel_proto::ContentBlock::Text { text: big }],
+    };
+    let answered = connection.send(SessionId::random(), input).await;
+    assert!(
+        !matches!(answered, Err(CallError::Disconnected)),
+        "an admitted device's large frame was refused: {answered:?}"
+    );
+    node.stop().await.unwrap();
+}
+
+/// An invitation that names scopes grants exactly those (sorted, without
+/// repeats); one that names none is refused.
+#[tokio::test]
+async fn an_invitation_grants_the_scopes_it_names() {
+    let (_temp, node) = node().await;
+    let devices = &node.secure.devices;
+    let member = devices
+        .invite(&InviteDevice {
+            label: Some("member".to_owned()),
+            ttl_secs: 600,
+            scopes: Some(vec![Scope::Sync, Scope::Read, Scope::Sync]),
+        })
+        .unwrap()
+        .link
+        .decode()
+        .unwrap();
+    let closing = CancellationToken::new();
+    let registration = devices.connect(DeviceId::random(), &closing);
+    let (_secret, scopes) = devices
+        .pair(&registration, &member.invite, "member")
+        .await
+        .unwrap();
+    assert_eq!(scopes, [Scope::Read, Scope::Sync]);
+    assert!(matches!(
+        devices.invite(&InviteDevice {
+            label: None,
+            ttl_secs: 600,
+            scopes: Some(Vec::new()),
+        }),
+        Err(ServiceError::NoScopes)
+    ));
+    node.stop().await.unwrap();
+}
+
+/// Review round 5, the reviewer's race kept as a regression test.
+/// `fleet.forget` withdraws every invitation and then lists the devices
+/// that exist as the ones that may not take the forgotten id. A pairing
+/// that redeemed its invitation before the withdrawal can store its device
+/// after that list; `pair` must then revoke it and refuse, or a device made
+/// from an invitation older than the forget would be "paired after" it.
+///
+/// Many pairings race one withdrawal per round. Whether a round lands a
+/// device after the list depends on scheduling (about one round in six on
+/// the reviewer's machine), so the test does not require it; it requires
+/// that no round ends with such a device live or its pairing answered.
+/// With `pair`'s generation check taken out it failed within the first
+/// dozen rounds every time, on one CPU too; all 150 take well under a
+/// second. The deterministic half, an invitation withdrawn by a forget,
+/// is `e2e/grants.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_pairing_that_raced_a_withdrawal_outlives_it() {
+    const ROUNDS: usize = 150;
+    const PAIRINGS: usize = 12;
+    let (_temp, node) = node().await;
+    let devices = Arc::clone(&node.secure.devices);
+    for round in 0..ROUNDS {
+        let offers: Vec<PairingOffer> = (0..PAIRINGS).map(|_| invite(&node, None)).collect();
+        let pairings: Vec<_> = offers
+            .into_iter()
+            .map(|offer| {
+                let devices = Arc::clone(&devices);
+                tokio::spawn(async move {
+                    let closing = CancellationToken::new();
+                    let registration = devices.connect(DeviceId::random(), &closing);
+                    let paired = devices.pair(&registration, &offer.invite, "racer").await;
+                    (registration.device(), paired.is_ok())
+                })
+            })
+            .collect();
+        tokio::task::yield_now().await;
+        let _withdrawn = devices.withdraw_all();
+        let before: Vec<DeviceId> = devices
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|device| device.id)
+            .collect();
+        for pairing in pairings {
+            let (id, paired) = pairing.await.unwrap();
+            assert!(
+                !paired || before.contains(&id),
+                "round {round}: device {id} was stored after the list and its pairing answered"
+            );
+        }
+        let live_after: Vec<DeviceId> = devices
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|device| device.revoked_at.is_none() && !before.contains(&device.id))
+            .map(|device| device.id)
+            .collect();
+        assert!(
+            live_after.is_empty(),
+            "round {round}: devices stored after the list stay live: {live_after:?}"
+        );
+    }
+    node.stop().await.unwrap();
+}

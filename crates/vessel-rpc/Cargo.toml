@@ -1,0 +1,27 @@
+[package]
+name = "vessel-rpc"
+description = "Vessel protocol frames over any transport: handshake, call correlation, subscriptions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proto.workspace = true
+
+bytes.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+tracing.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tokio = { workspace = true, features = ["io-util", "test-util"] }
+
+[lints]
+workspace = true

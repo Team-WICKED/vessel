@@ -1,9 +1,29 @@
 name: CI
 
+# [Decision Log] (2026-11-06)
+# - Purpose: check the gate (AGENTS.md section 1) on Linux, Windows and macOS.
+# - History: while the repository was private, hosted minutes counted against
+#   the organisation's 2,000 a month (Windows 2x, macOS 10x), and three OSes
+#   on every push used the month in two days. Runs were then manual only.
+# - Now: the repository is public, and standard GitHub-hosted runners are
+#   free for public repositories, so every push to `main` and `backend/**`
+#   (track branches get Windows and macOS results without a pull request;
+#   agents cannot run those platforms locally) and every pull request runs
+#   all three again. A run can also be started by hand.
+# - Guard rails kept from the private period: a newer run on the same ref
+#   cancels the older one, and each job times out at 45 minutes. If the
+#   repository ever goes private again, return to manual runs first.
 on:
   push:
-    branches: [main]
+    branches: [main, "backend/**"]
   pull_request:
+  workflow_dispatch:
+
+# A newer run on the same ref replaces an older one instead of queueing
+# behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,6 +32,7 @@ jobs:
   check:
     name: fmt / clippy / test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -25,4 +46,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # The fake harnesses, under vessel-testkit's own feature set: the first
+      # build of that set compiles about 30 crates, and doing it here keeps
+      # it out of the test timings (see vessel_testkit::within).
+      - run: cargo build -p vessel-testkit --bins
+      # The node binary for tests outside vessel-node (vessel_testkit::vesseld),
+      # under vessel-node's own feature set, for the same reason.
+      - run: cargo build -p vessel-node --bin vesseld
+      # Every test binary runs even after one fails, so a single failure
+      # does not hide the state of the rest (on Windows it hid all of it).
+      - run: cargo test --workspace --no-fail-fast

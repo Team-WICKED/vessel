@@ -1,10 +1,10 @@
 [package]
 name = "vessel-node"
-description = "Vessel node daemon: runs agent harnesses on one machine and exposes them over HTTP/WS"
+description = "Vessel node daemon (vesseld): runs agent harness sessions on one machine and serves them to clients over the Vessel protocol"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license-file.workspace = true
 repository.workspace = true
 
 [[bin]]
@@ -12,21 +12,60 @@ name = "vesseld"
 path = "src/main.rs"
 
 [dependencies]
-vessel-core.workspace = true
+# A member's calls to its fleet's home (`fleet.*` over the secure channel,
+# pairing with a `sync` invitation): the same client every device uses.
+vessel-client.workspace = true
+# Bundling on the home, materialising on members (ADR 0012).
+vessel-fleet.workspace = true
+vessel-harness.workspace = true
+vessel-proto.workspace = true
+vessel-relay.workspace = true
+vessel-rpc.workspace = true
+vessel-secure.workspace = true
+vessel-session.workspace = true
+vessel-store.workspace = true
 
 axum.workspace = true
+bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
+# The node user's home, for `~/` in profiles.toml (ADR 0011); already in
+# the workspace through vessel-harness.
 dirs.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+# Device credentials and invitation secrets (ADR 0010); already in the
+# workspace through vessel-store.
+getrandom.workspace = true
+hostname.workspace = true
+# An empty root store for `ws://`-only relays on a machine with no system
+# roots (`vessel_relay::TlsConfig::with_roots`); already built for
+# vessel-relay.
+rustls.workspace = true
+# The fleet's own files (`fleet/*.json`).
 serde.workspace = true
 serde_json.workspace = true
+# Invitations are kept by the hash of their secret (ADR 0010).
+sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+# `fleet.toml`: typed reading, and `vessel fleet init` writing it with
+# correct quoting; already in the workspace (the node book).
+toml_edit.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-which.workspace = true
-hostname.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+vessel-harness = { workspace = true, features = ["fakes"] }
+# An agent's `vessel` tools driven across a fleet (e2e `across`). Not a
+# cycle: vessel-mcp itself needs only vessel-client and vessel-proto.
+vessel-mcp.workspace = true
+# A relay client that says, through a trusted proxy's header, which
+# address it comes from (e2e `crowd`); already built for vessel-relay.
+tokio-tungstenite.workspace = true
+# The misbehaving relay (feature `relay`) for the secure e2e tests.
+vessel-testkit = { workspace = true, features = ["relay"] }
 
 [lints]
 workspace = true

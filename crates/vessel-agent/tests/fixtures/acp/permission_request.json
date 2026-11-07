@@ -1,0 +1,9 @@
+{
+  "sessionId": "s1",
+  "toolCall": {"toolCallId": "toolu_05", "title": "Run cargo test", "kind": "execute", "status": "pending", "rawInput": {"command": "cargo test"}},
+  "options": [
+    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+    {"optionId": "allow_always", "name": "Always Allow", "kind": "allow_always"},
+    {"optionId": "reject", "name": "Reject", "kind": "reject_once"}
+  ]
+}

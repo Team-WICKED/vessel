@@ -1,0 +1,139 @@
+# Release builds of `vesseld` for remote installs (ADR 0008, plan C7).
+#
+# On a `v<version>` tag: one `vesseld-<version>-<target>.tar.gz` per target,
+# holding `vesseld` at its root, and a `SHA256SUMS` over them, attached to a
+# GitHub release of that tag. `vessel node install` downloads the archive for
+# the remote's platform with `gh release download` and checks it against
+# `SHA256SUMS`, here and again on the remote.
+#
+# - Linux binaries are static musl (plan decision 4), built with
+#   cargo-zigbuild, which also gives the bundled SQLite a C toolchain for
+#   the cross target. Both Linux targets build on the x86_64 runner: hosted
+#   arm64 Linux runners are not available to every private repository, and
+#   zig cross-compiles without one.
+# - Both macOS targets build on the arm64 macOS runner; Apple's toolchain
+#   cross-compiles to x86_64.
+# - Each binary that can run on its build runner prints its `version` line
+#   before it is packaged, and the line must name the tag's version and the
+#   target: the client installs `vesseld-<its own version>` and checks that
+#   line on the remote too.
+# - Signing (`SHA256SUMS.minisig`) is not here yet: it waits for the
+#   owner's decision on public releases (plan decision 1).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: vesseld (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            zig: true
+            runs_here: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            zig: true
+            runs_here: false
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            zig: false
+            runs_here: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            zig: false
+            runs_here: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93"
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Version from the tag
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          workspace=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$version" != "$workspace" ]; then
+            echo "tag $GITHUB_REF_NAME does not match the workspace version $workspace" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install cargo-zigbuild
+        if: matrix.zig
+        run: |
+          pip3 install ziglang==0.14.1
+          cargo install --locked cargo-zigbuild@0.24.1
+      - name: Build (zig)
+        if: matrix.zig
+        run: cargo zigbuild --release --locked -p vessel-node --bin vesseld --target ${{ matrix.target }}
+      - name: Build
+        if: ${{ !matrix.zig }}
+        run: cargo build --release --locked -p vessel-node --bin vesseld --target ${{ matrix.target }}
+      - name: Check the version line
+        if: matrix.runs_here
+        shell: bash
+        run: |
+          line=$("target/${{ matrix.target }}/release/vesseld" version)
+          expected="${{ steps.version.outputs.version }} ${{ matrix.target }}"
+          if [ "$line" != "$expected" ]; then
+            echo "vesseld version says '$line', expected '$expected'" >&2
+            exit 1
+          fi
+      - name: Package
+        shell: bash
+        run: |
+          archive="vesseld-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "target/${{ matrix.target }}/release" vesseld
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vesseld-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating the release and attaching its files.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vesseld-*
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          sha256sum vesseld-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "vesseld $GITHUB_REF_NAME for remote installs (\`vessel node install\`)." \
+            $prerelease \
+            vesseld-*.tar.gz SHA256SUMS

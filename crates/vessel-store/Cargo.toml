@@ -1,0 +1,35 @@
+[package]
+name = "vessel-store"
+description = "Vessel node data directory: identity, access token, and the SQLite session event log"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proto.workspace = true
+
+base64.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+getrandom.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# SHA-256 of device credentials (ADR 0010); already used by vessel-remote.
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# Wipes the store's copy of `node.key` from memory (ADR 0009).
+zeroize.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+futures-util.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

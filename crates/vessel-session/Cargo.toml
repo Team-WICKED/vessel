@@ -1,0 +1,30 @@
+[package]
+name = "vessel-session"
+description = "Vessel's session runtime: one actor per session, gap-free event numbering, ring cache, fan-out"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-agent.workspace = true
+vessel-harness.workspace = true
+vessel-proto.workspace = true
+vessel-pty.workspace = true
+
+bytes.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+vessel-harness = { workspace = true, features = ["fakes"] }
+vessel-testkit.workspace = true
+
+[lints]
+workspace = true

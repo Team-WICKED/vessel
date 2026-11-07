@@ -1,0 +1,134 @@
+//! HTTP: `GET /health` (open, for probes), `GET /rpc` (the protocol
+//! websocket, token required) and `GET /secure` (a paired device's secure
+//! channel, ADR 0009: no token; the device proves itself inside the
+//! channel, after the handshake proved the node).
+//!
+//! Each websocket connection runs `vessel-rpc`'s server until it ends. The
+//! connections are tracked so shutdown can wait for them to flush their last
+//! frames; axum's own graceful shutdown does not cover upgraded
+//! connections.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use axum::Router;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{ConnectInfo, State};
+use axum::http::header::WWW_AUTHENTICATE;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse as _, Response};
+use axum::routing::get;
+use tokio_util::task::TaskTracker;
+use vessel_relay::address::ClientAddress;
+use vessel_relay::{AxumCarrier, Keepalive};
+use vessel_rpc::Server;
+use vessel_store::NodeToken;
+
+use crate::auth;
+use crate::guard::Guarded;
+use crate::secure::{Route, SecureGateway};
+use crate::service::Connection;
+use crate::transport::WsTransport;
+
+/// Largest websocket message accepted from a client. Requests are small;
+/// this only stops a broken or hostile client from making the node buffer
+/// without bound.
+const MAX_MESSAGE: usize = 16 * 1024 * 1024;
+
+/// What every request handler needs.
+#[derive(Debug, Clone)]
+pub(crate) struct Gateway {
+    pub(crate) rpc: Arc<Server<Guarded>>,
+    pub(crate) token: Arc<NodeToken>,
+    pub(crate) secure: SecureGateway,
+    /// Pings and the silence limit for `/secure` connections.
+    pub(crate) keepalive: Keepalive,
+    pub(crate) connections: TaskTracker,
+    /// Where a `/secure` client counts: behind a trusted reverse proxy, by
+    /// its header (`Config::client_address_header`); else the peer.
+    pub(crate) clients: ClientAddress,
+}
+
+pub(crate) fn router(gateway: Gateway) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/rpc", get(rpc))
+        .route(SECURE_PATH, get(secure))
+        .with_state(gateway)
+}
+
+async fn health() -> &'static str {
+    "ok"
+}
+
+async fn rpc(
+    State(gateway): State<Gateway>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    if !auth::authorized(&headers, &gateway.token) {
+        tracing::info!("refused a connection without the right token");
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(WWW_AUTHENTICATE, "Bearer")],
+            "missing or wrong token",
+        )
+            .into_response();
+    }
+    let connection = gateway.connections.token();
+    upgrade
+        .max_message_size(MAX_MESSAGE)
+        .on_upgrade(move |socket| async move {
+            let _tracked = connection;
+            if let Err(error) = gateway
+                .rpc
+                .serve(WsTransport::new(socket), Connection::owner)
+                .await
+            {
+                tracing::info!(error = %error, "connection ended abnormally");
+            }
+        })
+}
+
+/// Where paired devices reach the node directly; clients add it to a
+/// direct route (`ws://host:port`).
+pub(crate) const SECURE_PATH: &str = "/secure";
+
+/// A secure channel straight to the node. Messages and frames are capped
+/// at one record ([`vessel_secure::MAX_RECORD`]), so an oversized message
+/// is refused from its header, before the node buffers it. Nobody else
+/// pings a direct connection, so the node does: a half-open one (a client
+/// that slept, a NAT mapping that expired) is dropped after the silence
+/// limit, as a relay drops relayed ones.
+///
+/// Behind a trusted reverse proxy the per-address budget counts the client
+/// its header names (one bare address, else `400`; without it, the proxy
+/// itself), as a relay does (`vessel_relay::address::ClientAddress`).
+async fn secure(
+    State(gateway): State<Gateway>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let client = match gateway.clients.of(peer.ip(), &headers) {
+        Ok(client) => client,
+        Err(bad) => {
+            tracing::info!(proxy = %peer.ip(), "refused a secure connection: {bad}");
+            return (StatusCode::BAD_REQUEST, bad.to_string()).into_response();
+        }
+    };
+    let connection = gateway.connections.token();
+    upgrade
+        .max_message_size(vessel_secure::MAX_RECORD)
+        .max_frame_size(vessel_secure::MAX_RECORD)
+        .on_upgrade(move |socket| async move {
+            let _tracked = connection;
+            gateway
+                .secure
+                .accept_logged(
+                    AxumCarrier::new(socket, Some(gateway.keepalive)),
+                    Route::Direct(client.address),
+                )
+                .await;
+        })
+}

@@ -1,0 +1,31 @@
+[package]
+name = "vessel-proc"
+description = "Process primitives for Vessel: command specs, process groups, group kill"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+process-wrap.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
+vessel-testkit.workspace = true
+
+# The macOS-only test watches a child's exit without reaping it (kqueue's
+# NOTE_EXIT); nix is already a dependency on Unix.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+nix = { workspace = true, features = ["event"] }
+
+[lints]
+workspace = true
