@@ -1,10 +1,11 @@
 # Changelog
 
-Notable changes are grouped by release, newest first. The workspace version is
-`0.1.0`; no release has been tagged yet. The changes below are unreleased and
-include backend milestones 1–4 ([#2](https://github.com/Team-WICKED/vessel/pull/2)).
+All notable changes to this project will be documented in this file.
 
-## Unreleased
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
 
 ### Added
 
