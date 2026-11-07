@@ -197,13 +197,18 @@ browser tab ──ws /api/ws (JSON frames)──> vessel ui (bridge)
                                             └─ streams: follow_resuming per (tab, session)
 ```
 
-1. **Load.** The page loads `index.html` and its assets without
-   authentication: they hold no secrets. The script reads `#token=` from
-   the URL fragment and keeps it in `localStorage` for this origin. Origin
-   includes the port, so one launch's token is not another's. The script
-   then removes the fragment from the address bar.
-2. **Connect.** The page opens `/api/ws`. The upgrade must carry the exact
-   Origin. The first frame must be `hello { token }` within 5 s.
+1. **Load.** Each launch prints a fresh random `*.localhost` origin (128-bit
+   hostname entropy) to avoid old HTML caches and service workers. This requires
+   Chrome/Edge/Firefox or another supporting browser; Safari is unsupported.
+   Static files hold no secrets. The no-store index references
+   SRI-protected scripts/styles, whose cached bytes must revalidate. The page
+   reads and removes `#bootstrap=`; only a one-time code can remain in history.
+2. **Connect.** `/api/ws` requires the exact Origin. Both peers prove a key
+   with HMAC over fresh nonces and the launch id (ADR 0017). First use consumes
+   the bootstrap and issues an independent session key kept in the tab's
+   `sessionStorage`. Reconnects never transmit that key; a bad proof or new
+   launch stops the tab. Reloads work; a new independent context needs a new
+   UI launch. Calls wait until the welcome's proof is verified.
 3. **Calls.** `call { id, node, call }`, where `call` is the protocol's own
    `Call`, goes to that node's shared connection. The bridge dials it on
    first use and keeps it. The answer comes back as
@@ -331,20 +336,25 @@ can drive the fleet. So:
 
 1. **Loopback only.** It binds `127.0.0.1` by default, or `[::1]`, and
    refuses any other address. Remote use is an SSH forward, out of scope.
-2. **A per-launch token.**
-   - 256 random bits, base64url, minted at start and never written to
-     disk.
-   - It is given in the URL fragment, which is not sent to servers, not
-     logged, and not in `Referer`.
-   - It is required on every API request (`Authorization: Bearer`) and as
-     the websocket's first frame.
-   - Compared in constant time.
+2. **A one-time bootstrap and an independent session key.**
+   - Each has 256 random bits, encoded as lowercase hex. The bootstrap alone
+     appears in the URL fragment, printed terminal and private Unix handoff
+     file (directory 0700, file 0600 at creation). `XDG_RUNTIME_DIR` is preferred.
+   - SIGINT/SIGTERM/SIGHUP remove the handoff; forced kills may leave a dead
+     code. Windows prints the URL without creating an unprotected handoff file.
+   - The websocket proves possession in both directions with fresh nonces and
+     a launch id; consumed URL codes cannot authenticate again. No calls precede
+     verified welcome. The tab keeps only its session key in `sessionStorage`.
+   - Rust compares proofs/keys in constant time. HTTP status accepts only an
+     issued session key; the UI itself uses no bearer HTTP calls.
 3. **DNS rebinding.** Every request's `Host` must be exactly
-   `127.0.0.1:PORT`, `localhost:PORT` or `[::1]:PORT`, else `421`.
+   `127.0.0.1:PORT`, `localhost:PORT`, `[::1]:PORT`, or this launch's
+   exact random hostname and port, else `421`.
 4. **Cross-origin.**
-   - The websocket upgrade and every API request must carry
-     `Origin: http://<one of those hosts>:PORT`; a missing `Origin` is
-     refused (browsers always send it on a websocket).
+   - The websocket upgrade requires
+     `Origin: http://<one of those hosts>:PORT`; a missing Origin is refused.
+     Other API requests reject foreign origins but permit omission for CLI
+     callers with an issued session bearer.
    - No CORS headers are sent, ever.
    - With the token in a header and no cookie, a cross-site page cannot
      make an authenticated request at all.
@@ -357,15 +367,22 @@ can drive the fleet. So:
      takes no nonce; scripts stay `'self'` only;
    - `X-Content-Type-Options: nosniff`;
    - `Referrer-Policy: no-referrer`;
-   - `Cache-Control: no-store` on `index.html`.
+   - `Cache-Control: no-store` on `index.html`, `no-cache` and content ETags
+     for assets; SHA-384 SRI on every script and stylesheet in the index;
+   - COOP and CORP `same-origin`.
+   - TCP accept limits: 128 overall, 32 unauthenticated; headers within 5 s,
+     16 KiB buffer. Upgrade and hello deadlines: 5 s each. Websocket frame
+     and message limits: 4 KiB before hello, 4 MiB after authentication.
 
    The CSP has no inline script; the build emits none.
 6. **Untrusted content.**
    - What agents and terminals print is input from whatever the agent
      read.
    - Messages render as Markdown with raw HTML disabled.
-   - Links get `rel="noopener noreferrer"` and only `http(s)` schemes.
-   - Terminal output goes to xterm.js, which draws text, not HTML.
+   - Only absolute `http(s)` links become anchors, with `target="_blank"` and
+     `rel="noopener noreferrer"`; other links are text.
+   - Terminal output goes to xterm.js. Only its user-input provenance signal
+     may send session input; replay/live device-query replies are dropped.
    - Nothing from a node reaches `innerHTML`; the lint rule
      `react/no-danger` is on.
 7. **Secrets.**
@@ -421,10 +438,10 @@ Settled by the coordinator on 2026-11-07, all as recommended below
   difference; it holds no `any`, and every `unknown` is fixed at its
   source or recorded in the ADR.
 - 3b: `vessel` is released too, with the UI embedded.
-- 4: a fresh token per launch; the fragment is removed with
-  `history.replaceState` right after it is read; tokens are compared in
-  constant time; a websocket whose first frame is not a valid token
-  within a short deadline is refused.
+- 4 (amended by the security review): a one-use bootstrap in the fragment,
+  then an independent tab session key; mutual challenge/response on every
+  connection, constant-time Rust proof checks, and bounded authentication.
+  The fragment is removed immediately, without claiming history DB erasure.
 - 5: as in "Contract changes" above.
 
 The options as weighed:
@@ -480,17 +497,15 @@ The options as weighed:
        platforms;
      - meanwhile, the README says to run `npm ci && npm run build` in
        `web/` before `cargo install` from a checkout.
-4. **The token's home in the browser.**
-   - **Recommendation:** the URL fragment, then `localStorage`, sent as a
-     header and as the websocket's first frame. **No cookie.**
-   - Cookies are scoped by host, not by port. A cookie for `127.0.0.1`
-     goes to every server on `127.0.0.1`, so another local web server
-     the browser visits, another user's for instance, would receive it.
-   - `localStorage` is per origin, port included. It survives a reload
-     and is shared by the launch's tabs. A token left there after the
-     process exits is useless: the next launch mints another.
-   - **A cookie with `SameSite=Strict` and a per-port name**: it still
-     leaks to other local ports.
+4. **The credential's home in the browser (security amendment).**
+   - Chosen: one-use fragment code, exchanged for an independent random
+     session key in `sessionStorage`, verified through mutual HMAC proofs.
+   - Rejected: the original reusable token in `localStorage`. Reusing a port
+     reuses an origin, and browser history can retain replaced fragments.
+   - Cookies remain unsuitable because they ignore ports. Memory-only storage
+     would lose the session on every reload. Session storage keeps reloads
+     working but is not isolation from malicious first-load same-origin code;
+     SRI and no-store index are separate necessary boundaries.
 5. **What the bridge speaks to the browser.**
    - **Recommendation:** the protocol's own `Call`, `Reply`, `Outcome` and
      `EventRecord`, in a thin envelope: `call`, `reply`, `follow`, `event`,
@@ -569,7 +584,9 @@ Decided while building:
 - **What `vessel ui` lists.** The book's nodes by name and this machine's
   node (as `_here`, which no book name can be), nothing else: a page
   cannot make the UI dial an address or start `ssh` to a host the user did
-  not put in the book. `--node` and `--token` are ignored, so a token
+  not put in the book for ordinary calls. `Op::Pair` deliberately dials the
+  user-supplied link before adding it to the book (ADR 0017). `--node` and
+  `--token` are ignored, so a token
   given for one node is never sent to another.
 - **One connection per node.** A supervisor per node redials with the
   CLI's backoff and pushes its state; calls fail at once while a node is
@@ -596,6 +613,30 @@ sessions nested as the protocol records them, but the e2e fleet has no
 agent creating sessions (the fakes do not call `vessel mcp`), so the tree
 is covered by the unit-level `tree` helper only; `vesseld --web`
 (decision 11) stays a follow-up.
+
+## Security review regression coverage (2026-11-07)
+
+- Private handoff and signal cleanup: CLI `opener_is_private_and_removed_on_termination`.
+- Cached HTML/service-worker isolation: Playwright `a new launch escapes cached HTML...`.
+- Cached script substitution: Playwright `a persistent poisoned asset cache...`;
+  Rust `assets_revalidate_by_content_and_index_never_revalidates`.
+- Stale-tab impostor, wrong launch, replayed welcome, old-socket events:
+  `web/src/bridge/client.test.ts`; real handshakes in Rust UI tests.
+- History code reuse and reload: Playwright `history retains only a consumed code...`;
+  Rust single-use/concurrent redemption tests in `auth`.
+- Terminal query replies: Playwright `terminal replay cannot answer device queries...`,
+  including real keys and Korean text insertion after replay.
+- Pre-auth frames/fragments, idle/partial HTTP, separate pending/total budgets:
+  `crates/vessel-web/tests/ui/server.rs` (large post-auth request control included).
+- Markdown: `web/src/data/markdown.test.tsx` (encoded schemes and relative links too).
+- Pairing visibility: device e2e, hidden-state screenshot assertions. Playwright
+  trace/video/failure screenshots are off; only reviewed screenshots are uploaded.
+- Registry: more than 256 invalid names do not evict a valid node, and removing
+  a book entry removes its initial state push to new tabs.
+
+`npm run screens` accepts `VESSEL_SCREEN_DIR` for an output directory outside
+this public checkout. The full Rust/web gates and platform CI remain the
+release conditions. Real-account/manual harness smokes stay with the coordinator.
 
 ## Grounding
 
