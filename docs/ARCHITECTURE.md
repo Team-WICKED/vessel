@@ -162,10 +162,11 @@ they started.
 - **Milestone 4** (the fleet; `docs/plans/backend-m4.md`, ADRs 0011 to
   0013, protocols 5 and 6): Tracks H, F and X are merged on `backend/m4`,
   green on Linux, macOS and Windows. An independent security review of
-  the fleet and the envelope (Track R) ran five rounds and is closed; its
-  findings and fixes are recorded round by round in the plan.
-  Still to do by hand: the plan's two smokes (four profiles on one node; a
-  fresh machine joining), with the scripts in `docs/smoke/`.
+  the fleet, the envelope, relay tickets and the relay's and node's
+  admission limits ran eleven rounds and closed on 2026-11-06; its
+  findings, fixes and accepted residuals are recorded in the plan. Both
+  manual smokes passed on 2026-11-07 (three real accounts; a fresh machine
+  joining), recorded under the plan's done criteria.
 
 ### By crate
 

@@ -30,7 +30,7 @@ docs/smoke/profiles.sh \
     --profile second=/path/to/second-account-home \
     --profile third=/path/to/third-account-home \
     --profile fourth=/path/to/fourth-account-home \
-    --model <a small model>
+    --model haiku
 ```
 
 - Each home is a Claude Code configuration directory (what
@@ -42,8 +42,13 @@ docs/smoke/profiles.sh \
   or data directory (`VESSEL_*`) and minus `CLAUDE_CONFIG_DIR`; it listens
   on a free loopback port with a temporary data directory, which is
   removed at the end (`--keep` keeps it).
-- Costs: five short turns, one per account and one more on the first,
-  each on that account's quota. `--model` picks the model.
+- Costs: one short turn per account and one more on the first, each on
+  that account's quota. `--model` picks the model by the ACP agent's own
+  ids or aliases (`haiku`, `sonnet`, ...), not the API's model ids: a model
+  the agent does not offer fails the session at the handshake, and the
+  script stops there with the agent's list of what it offers.
+- Two or more profiles work; the done criterion was drafted with four, and
+  the operator's machine has three accounts.
 - What stays: each move hard-links the conversation's files into the next
   account's home, as a move does (ADR 0011), so the smoke's conversation
   remains under `projects/` in every account's home, named after a

@@ -172,7 +172,24 @@ log() { vessel log "$id" 2>&1; }
 # writer's broken pipe would read as "not there".
 logged() { log | grep -F -- "$1" >/dev/null; }
 turns() { log | grep -cE '^\[turn (ended|failed)' || true; }
-until_true "the session becoming ready" logged "[ready: harness session"
+# Ready, or stop at once with the reason when the session failed first
+# (a model the agent does not offer fails the handshake within a second;
+# waiting out the deadline would only hide that line). `until_true` sends
+# the check's output to /dev/null, so the reason goes through a file and
+# the check ends the wait; the script stops after it.
+ready_or_failed() {
+    local text
+    text=$(log)
+    if printf '%s\n' "$text" | grep '^\[session failed' | tail -n 1 >"$root/failed" \
+        && [ -s "$root/failed" ]; then
+        return 0
+    fi
+    printf '%s\n' "$text" | grep -F -- "[ready: harness session" >/dev/null
+}
+until_true "the session becoming ready" ready_or_failed
+if [ -s "$root/failed" ]; then
+    die "the session failed before it was ready: $(cat "$root/failed")"
+fi
 # Claude Code keeps a conversation as projects/<working directory, every
 # character but a letter or digit made '-'>/<session>.jsonl in its home.
 encoded=$(printf '%s' "$work" | sed 's/[^A-Za-z0-9]/-/g')
