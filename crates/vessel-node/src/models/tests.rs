@@ -875,6 +875,109 @@ async fn a_whole_answer_quoting_the_key_is_redacted() {
     .await;
 }
 
+/// The verification round: an event that holds the key once decoded (an
+/// escaped key in a text delta, the key in an event name) is never
+/// written, same API or translated; the call ends there with an error in
+/// the front's form.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_event_quoting_the_key_ends_the_call() {
+    within(async {
+        let fixture = Fixture::new().await;
+        let escaped = KEY.replace('-', "\\u002d");
+        let start = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\
+                     \"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\
+                     \"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
+        let same_api = [
+            format!(
+                "{start}event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\
+                 \"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{escaped}\"}}}}\n\n"
+            ),
+            format!("{start}event: ping-{KEY}\ndata: {{\"type\":\"ping\"}}\n\n"),
+        ];
+        let (sonnet, token, records) = fixture.session("sonnet").await;
+        for body in same_api {
+            fixture.upstream.reply(Reply::Stream {
+                body: Bytes::from(body),
+                piece: 3,
+            });
+            let got = fixture
+                .call(
+                    "POST /v1/messages",
+                    &[("authorization", &format!("Bearer {token}"))],
+                    &streamed(),
+                )
+                .await;
+            assert!(got.body.contains("event: message_start"), "{got:?}");
+            assert!(got.body.contains("event: error"), "{got:?}");
+            assert!(got.body.contains("quoted the call's key"), "{got:?}");
+            assert!(!got.body.contains("u002d"), "{got:?}");
+            assert!(!got.body.contains(KEY), "{got:?}");
+        }
+        let calls = model_calls(&sonnet, records).await;
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.failure == Some(ModelFailure::UpstreamError)),
+            "{calls:?}"
+        );
+
+        let (qwen, token, records) = fixture.session("qwen").await;
+        fixture.upstream.reply(Reply::Stream {
+            body: Bytes::from(format!(
+                "data: {{\"id\":\"c1\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{escaped}\"}},\
+                 \"finish_reason\":null}}]}}\n\n"
+            )),
+            piece: 3,
+        });
+        let request = r#"{"model":"qwen/qwen3-coder","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}"#;
+        let got = fixture
+            .call(
+                "POST /v1/messages",
+                &[("authorization", &format!("Bearer {token}"))],
+                request,
+            )
+            .await;
+        assert!(got.body.contains("event: error"), "{got:?}");
+        assert!(got.body.contains("quoted the call's key"), "{got:?}");
+        assert!(!got.body.contains(KEY), "{got:?}");
+        let calls = model_calls(&qwen, records).await;
+        assert_eq!(calls[0].failure, Some(ModelFailure::UpstreamError));
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// The verification round: a same-API stream that ends cleanly before its
+/// answer did (no `message_stop`) is reported to the harness as an error
+/// event, and recorded as truncated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stream_cut_short_is_reported_to_the_harness() {
+    within(async {
+        let fixture = Fixture::new().await;
+        let (handle, token, records) = fixture.session("sonnet").await;
+        fixture.upstream.reply(Reply::Stream {
+            body: deltas(2, 8),
+            piece: 17,
+        });
+        let got = fixture
+            .call(
+                "POST /v1/messages",
+                &[("authorization", &format!("Bearer {token}"))],
+                &streamed(),
+            )
+            .await;
+        assert_eq!(got.status, 200, "{got:?}");
+        assert!(got.body.contains("event: content_block_delta"), "{got:?}");
+        assert!(got.body.contains("event: error"), "{got:?}");
+        assert!(got.body.contains("ended before the message did"), "{got:?}");
+        let calls = model_calls(&handle, records).await;
+        assert_eq!(calls[0].failure, Some(ModelFailure::Truncated));
+        fixture.stop().await;
+    })
+    .await;
+}
+
 /// Past [`super::listen::MAX_CONNECTIONS`] a connection is answered 503
 /// and closed before any byte is read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

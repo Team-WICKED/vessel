@@ -60,6 +60,30 @@
 //!   idle timeout ([`Bounds::send`]); a harness that stops reading is
 //!   treated as gone, and the provider cut off. A same-API stream Vessel
 //!   cannot decode is a classified failure, not passed on unread.
+//!
+//! [Decision Log] (the verification round on the review's fixes)
+//! - Problem: a same-API stream was classified first (is this an error
+//!   event?) and only an error event's JSON was decoded; anything else
+//!   had its raw text matched. An escaped `"\u0065rror"` type, an event
+//!   name of the provider's choosing, or an escaped key in a text delta
+//!   reached the harness, which decodes them, at every piece size. And a
+//!   same-API stream that simply stopped (a clean end after a delta, no
+//!   `message_stop`) was passed on as if it had ended.
+//! - Choice: nothing is classified before it is checked. Every event the
+//!   provider sends, same API or translated, has its name and its data
+//!   checked once, the data decoded as JSON, member names included
+//!   (`Redactor::holds`, [`quotes_key`]). An event holding the key is not
+//!   written at all: the call ends there with a classified failure in the
+//!   front's form, the provider's own if the event was an error (its
+//!   message redacted), else [`quoted`]. A same-API stream's end is read
+//!   by its decoder as well: an answer that never ended is reported to
+//!   the harness as an error event and recorded as truncated.
+//! - Alternative: rewrite such an event with the key replaced. The answer
+//!   would go on, looking whole, with a hole where the provider wrote the
+//!   key; a provider quoting the key is broken, and the harness is better
+//!   told so.
+//! - Cost: each event's data is decoded once more when it holds a
+//!   backslash (without one, decoding changes no string).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -914,8 +938,9 @@ async fn pass(
     sse_body(Body::from_stream(tokio_stream(receiver)))
 }
 
-/// A whole answer with the key removed from its JSON strings (or from its
-/// text, if it is not JSON); the provider's bytes when it holds none.
+/// A whole answer with the key removed from its JSON strings and member
+/// names (or from its text, if it is not JSON); the provider's bytes when
+/// it holds none.
 fn redact_whole(redactor: &Redactor, body: Bytes) -> Bytes {
     let text = String::from_utf8_lossy(&body);
     match redactor.json(&text) {
@@ -924,21 +949,67 @@ fn redact_whole(redactor: &Redactor, body: Bytes) -> Bytes {
     }
 }
 
-/// One event of a same-API stream as the harness gets it: written again,
-/// its data redacted; an error event's JSON strings decoded to find the
-/// key however escaped. `None` for an event name SSE cannot carry (the
-/// decoder never yields one).
-fn release(event: &SseEvent, redactor: &Redactor) -> Option<Bytes> {
-    let error = matches!(
-        event.event.as_deref(),
-        Some("error" | "response.failed" | "response.incomplete")
-    ) || event.data.contains("\"error\"");
-    let data = if error {
-        redactor.json(&event.data)
+/// Whether a provider's event holds the call's key anywhere: in its name,
+/// or in its data as written or decoded as JSON, member names included.
+fn quotes_key(redactor: &Redactor, event: &SseEvent) -> bool {
+    event
+        .event
+        .as_deref()
+        .is_some_and(|name| redactor.holds(name))
+        || redactor.holds(&event.data)
+}
+
+/// The failure written in place of an event that quoted the key: the
+/// provider's own, redacted, if the event was one; else [`quoted`].
+fn withheld(redactor: &Redactor, own: Option<ir::Failure>) -> ir::Failure {
+    own.map_or_else(quoted, |failure| redactor.failure(failure))
+}
+
+/// The failure in place of an answer's event that quoted the call's key.
+fn quoted() -> ir::Failure {
+    ir::Failure::new(
+        ir::FailureClass::UpstreamError,
+        "the provider's answer quoted the call's key; the proxy withheld it and ended the call",
+    )
+}
+
+fn failure_of(event: ir::Event) -> Option<ir::Failure> {
+    if let ir::Event::Failed(failure) = event {
+        Some(failure)
     } else {
-        redactor.text(&event.data)
-    };
-    encode_event(event.event.as_deref(), &data).ok()
+        None
+    }
+}
+
+/// A same-API stream's decoded `frames` as the harness gets them, into
+/// `out`: each event written again as it came (the tap reads it into
+/// `events` for the record), a comment as a keepalive. An event quoting
+/// the key is not written: what replaces it comes back, and the frames
+/// after it are dropped.
+fn release(
+    frames: &mut Vec<SseFrame>,
+    tap: &mut Tap,
+    redactor: &Redactor,
+    events: &mut Vec<ir::Event>,
+    out: &mut Vec<Bytes>,
+) -> Option<ir::Failure> {
+    for frame in frames.drain(..) {
+        match frame {
+            SseFrame::Event(event) => {
+                let before = events.len();
+                tap.push(&event, events);
+                if quotes_key(redactor, &event) {
+                    let own = events.drain(before..).find_map(failure_of);
+                    return Some(withheld(redactor, own));
+                }
+                // `None` only for a name SSE cannot carry, which the
+                // decoder never yields.
+                out.extend(encode_event(event.event.as_deref(), &event.data).ok());
+            }
+            SseFrame::Comment => out.push(encode_comment("keepalive")),
+        }
+    }
+    None
 }
 
 /// A non-streamed answer's usage and stop.
@@ -1025,8 +1096,8 @@ impl Tap {
 
 /// Copy a same-API stream to the harness event by event (see [`release`]),
 /// reading it alongside for the record, within [`Bounds`]; a stream that
-/// cannot be decoded, or grows past the bound, ends in a failure in the
-/// front's form.
+/// cannot be decoded, grows past the bound, quotes the key or ends before
+/// its answer did ends in a failure in the front's form.
 async fn relay(
     answer: Answer,
     front: Front,
@@ -1046,7 +1117,7 @@ async fn relay(
     let mut budget = bounds.answer;
     let mut chunks = chunks(answer);
     loop {
-        let (ended, failure) = match chunks.next().await {
+        let (ended, mut failure) = match chunks.next().await {
             None => (
                 true,
                 std::mem::take(&mut sse)
@@ -1065,21 +1136,27 @@ async fn relay(
             },
         };
         let mut out = Vec::new();
-        for frame in frames.drain(..) {
-            match frame {
-                SseFrame::Event(event) => {
-                    tap.push(&event, &mut events);
-                    out.extend(release(&event, &redactor));
-                }
-                SseFrame::Comment => out.push(encode_comment("keepalive")),
-            }
+        if let Some(withheld) = release(&mut frames, &mut tap, &redactor, &mut events, &mut out) {
+            failure = Some(withheld);
         }
-        for event in events.drain(..) {
+        if ended && failure.is_none() {
+            // A clean end: the tap knows whether the answer ended first,
+            // and the harness is told if it did not.
+            let mut last = Vec::new();
+            tap.finish(&mut last);
+            failure = last.into_iter().find_map(failure_of);
+        }
+        for mut event in events.drain(..) {
+            // Only the record reads these; it keeps no key either.
+            if let ir::Event::Failed(failure) = &mut event {
+                *failure = redactor.failure(failure.clone());
+            }
             outcome.see(&event);
         }
         if let Some(failure) = &failure {
-            outcome.see(&ir::Event::Failed(redactor.failure(failure.clone())));
-            out.extend(failure_frames(front, &redactor.failure(failure.clone())));
+            let failure = redactor.failure(failure.clone());
+            out.extend(failure_frames(front, &failure));
+            outcome.see(&ir::Event::Failed(failure));
         }
         if !deliver(&sender, out, bounds.send).await {
             // The harness went away, or stopped reading.
@@ -1088,14 +1165,8 @@ async fn relay(
             }
             break;
         }
-        if ended {
+        if ended || failure.is_some() {
             break;
-        }
-    }
-    if outcome.failure.is_none() && outcome.stop.is_none() {
-        tap.finish(&mut events);
-        for event in events.drain(..) {
-            outcome.see(&event);
         }
     }
     record.finish(&outcome);
@@ -1448,7 +1519,15 @@ impl Pump {
                     }
                     for frame in frames {
                         if let SseFrame::Event(event) = frame {
+                            let before = neutral.len();
                             self.decoder.push(&event, &mut neutral);
+                            if quotes_key(&self.redactor, &event) {
+                                // Decoded, it would be written in the
+                                // front's form with the key spelled out.
+                                let own = neutral.drain(before..).find_map(failure_of);
+                                neutral.push(ir::Event::Failed(withheld(&self.redactor, own)));
+                                break;
+                            }
                         }
                     }
                 }
