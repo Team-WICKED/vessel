@@ -174,9 +174,29 @@ struct Slot {
     root: PathBuf,
     /// Asks the server to stop between queries, keeping any in-flight one.
     retire: CancellationToken,
-    retiring: bool,
+    /// Set once the slot is being freed for a parked admission. From then
+    /// on the slot counts toward that admission's root, not its own.
+    retiring: Option<Replacement>,
     /// Admission order of the last query, for least-recently-used choice.
     used: u64,
+}
+
+/// Who a retiring slot is reserved for.
+#[derive(Debug)]
+struct Replacement {
+    root: PathBuf,
+    key: Key,
+}
+
+impl Slot {
+    /// The root this slot counts toward in the fairness tally.
+    fn holder(&self) -> &Path {
+        self.retiring
+            .as_ref()
+            .map_or(self.root.as_path(), |replacement| {
+                replacement.root.as_path()
+            })
+    }
 }
 
 /// [Decision Log]
@@ -192,14 +212,22 @@ struct Slot {
 ///   and are accounted to the allowed root. When all slots are taken, the
 ///   busiest root that holds more servers than the requesting root loses its
 ///   least recently used server; otherwise the requesting root recycles its
-///   own. The admission waits (parked, bounded) for that slot.
+///   own. The admission waits (parked, bounded) for that slot, and the
+///   retiring slot is reserved for it: it counts toward the waiting root, so
+///   a burst from one root cannot see itself as empty and take a second
+///   root's slot, and the freed slot goes to the admission it was freed for.
+///   Parking room is reserved before any server is retired.
 /// - Trade-off: retirement waits for an in-flight query; queries already
-///   queued on the retired server are answered `Unavailable`.
+///   queued on the retired server are answered `Unavailable`. Admissions
+///   parked without a reservation are retried, in arrival order, whenever a
+///   server ends.
 struct Pool {
     config: Config,
     shutdown: CancellationToken,
     servers: BTreeMap<Key, Slot>,
     parked: VecDeque<Admission>,
+    /// Keys whose reserved slot has just been freed; served first.
+    freed: Vec<Key>,
     tasks: JoinSet<()>,
     tools: Tools,
     clock: u64,
@@ -212,6 +240,7 @@ impl Pool {
             shutdown,
             servers: BTreeMap::new(),
             parked: VecDeque::new(),
+            freed: Vec::new(),
             tasks: JoinSet::new(),
             tools: Tools::default(),
             clock: 0,
@@ -235,9 +264,27 @@ impl Pool {
         while self.tasks.join_next().await.is_some() {}
     }
 
-    /// A server ended: retry parked admissions once, in arrival order.
+    /// Forget ended servers, remembering whose reserved slot they freed.
+    fn prune(&mut self) {
+        let freed = &mut self.freed;
+        self.servers.retain(|_, slot| {
+            let open = !slot.sender.is_closed();
+            if !open && let Some(replacement) = &slot.retiring {
+                freed.push(replacement.key.clone());
+            }
+            open
+        });
+    }
+
+    /// A server ended: retry parked admissions once. Those a freed slot was
+    /// reserved for go first; the rest keep their arrival order.
     fn unpark(&mut self) {
-        for admission in std::mem::take(&mut self.parked) {
+        self.prune();
+        let freed = std::mem::take(&mut self.freed);
+        let (first, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.parked)
+            .into_iter()
+            .partition(|admission| freed.contains(&admission.key));
+        for admission in first.into_iter().chain(rest) {
             if !admission.work.reply.is_closed() {
                 self.admit(admission);
             }
@@ -245,11 +292,11 @@ impl Pool {
     }
 
     fn admit(&mut self, admission: Admission) {
-        self.servers.retain(|_, slot| !slot.sender.is_closed());
+        self.prune();
         self.clock = self.clock.saturating_add(1);
         let Admission { key, root, work } = admission;
         if let Some(slot) = self.servers.get_mut(&key) {
-            if slot.retiring {
+            if slot.retiring.is_some() {
                 self.park(Admission { key, root, work });
             } else {
                 slot.used = self.clock;
@@ -263,16 +310,31 @@ impl Pool {
             self.spawn(key, root, work);
             return;
         }
-        if let Some(victim) = self.victim(&root) {
+        let admission = Admission { key, root, work };
+        // Room to wait comes first: never retire a server for an admission
+        // that would then be refused.
+        if self.parked.len() >= MAX_PARKED {
+            drop(admission.work.reply.send(Err(Error::Unavailable)));
+            return;
+        }
+        let reserved = self.servers.values().any(|slot| {
+            slot.retiring
+                .as_ref()
+                .is_some_and(|replacement| replacement.key == admission.key)
+        });
+        if !reserved && let Some(victim) = self.victim(&admission.root) {
             if let Some(slot) = self.servers.get_mut(&victim) {
-                slot.retiring = true;
+                slot.retiring = Some(Replacement {
+                    root: admission.root.clone(),
+                    key: admission.key.clone(),
+                });
                 slot.retire.cancel();
             }
-            self.park(Admission { key, root, work });
-        } else if self.servers.values().any(|slot| slot.retiring) {
-            self.park(Admission { key, root, work });
+            self.parked.push_back(admission);
+        } else if self.servers.values().any(|slot| slot.retiring.is_some()) {
+            self.parked.push_back(admission);
         } else {
-            drop(work.reply.send(Err(Error::Unavailable)));
+            drop(admission.work.reply.send(Err(Error::Unavailable)));
         }
     }
 
@@ -284,29 +346,36 @@ impl Pool {
         }
     }
 
-    /// The server to retire so `root` gets a slot: the least recently used
-    /// one of the busiest root holding more servers than `root`, else the
-    /// least recently used of `root`'s own. Retiring servers do not count.
+    /// The server to retire so `root` gets a slot: among roots holding more
+    /// than `root`, the busiest one's least recently used server; else the
+    /// least recently used of `root`'s own. A retiring slot counts toward
+    /// the root it is reserved for and is never chosen again.
     fn victim(&self, root: &Path) -> Option<Key> {
-        let live = || self.servers.iter().filter(|(_, slot)| !slot.retiring);
         let mut held: BTreeMap<&Path, usize> = BTreeMap::new();
-        for (_, slot) in live() {
-            let count = held.entry(slot.root.as_path()).or_default();
+        for slot in self.servers.values() {
+            let count = held.entry(slot.holder()).or_default();
             *count = count.saturating_add(1);
         }
-        let mine = held.get(root).copied().unwrap_or(0);
-        let most = held.values().copied().max().unwrap_or(0);
-        let from = |chosen: &dyn Fn(&Slot) -> bool| {
-            live()
-                .filter(|(_, slot)| chosen(slot))
-                .min_by_key(|(_, slot)| slot.used)
-                .map(|(key, _)| key.clone())
-        };
-        if most > mine {
-            from(&|slot| held.get(slot.root.as_path()) == Some(&most))
-        } else {
-            from(&|slot| slot.root == root)
-        }
+        let tally = |owner: &Path| held.get(owner).copied().unwrap_or(0);
+        let mine = tally(root);
+        let live = self
+            .servers
+            .iter()
+            .filter(|(_, slot)| slot.retiring.is_none());
+        let busier = live
+            .clone()
+            .filter(|(_, slot)| tally(&slot.root) > mine)
+            .max_by(|(_, left), (_, right)| {
+                tally(&left.root)
+                    .cmp(&tally(&right.root))
+                    .then(right.used.cmp(&left.used))
+            });
+        busier
+            .or_else(|| {
+                live.filter(|(_, slot)| slot.root == root)
+                    .min_by_key(|(_, slot)| slot.used)
+            })
+            .map(|(key, _)| key.clone())
     }
 
     fn spawn(&mut self, key: Key, root: PathBuf, work: Work) {
@@ -330,7 +399,7 @@ impl Pool {
                 sender,
                 root,
                 retire,
-                retiring: false,
+                retiring: None,
                 used: self.clock,
             },
         ));

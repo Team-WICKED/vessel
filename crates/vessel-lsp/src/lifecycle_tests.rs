@@ -333,3 +333,114 @@ async fn review_byte_eviction_during_refresh_keeps_server_healthy() {
     .await
     .unwrap();
 }
+
+/// Verification finding: with A and B holding one slot each, A's first
+/// replacement retired A's own server, and A's second then counted A as
+/// empty and retired B's. A reserved replacement now counts toward its root.
+#[tokio::test]
+async fn review_parked_replacements_do_not_steal_an_equal_roots_slot() {
+    let mut pool = super::Pool::new(
+        Config {
+            max_servers: NonZeroUsize::MIN.saturating_add(1),
+            ..Config::default()
+        },
+        CancellationToken::new(),
+    );
+    let a = PathBuf::from("/a");
+    let b = PathBuf::from("/b");
+    let key = |workspace: &str| Key {
+        workspace: PathBuf::from(workspace),
+        language: lsp::Language::Go,
+        full: false,
+    };
+    let (a_sender, _a_receiver) = mpsc::channel(8);
+    let (b_sender, _b_receiver) = mpsc::channel(8);
+    for (owned, root, sender) in [
+        (key("/a/old"), a.clone(), a_sender),
+        (key("/b/old"), b, b_sender),
+    ] {
+        drop(pool.servers.insert(
+            owned,
+            super::Slot {
+                sender,
+                root,
+                retire: CancellationToken::new(),
+                retiring: None,
+                used: 0,
+            },
+        ));
+    }
+    let mut responses = Vec::new();
+    for workspace in ["/a/new1", "/a/new2"] {
+        let (reply, response) = oneshot::channel();
+        responses.push(response);
+        pool.admit(super::Admission {
+            key: key(workspace),
+            root: a.clone(),
+            work: Work {
+                query: in_language(&PathBuf::from(workspace), lsp::Language::Go),
+                reply,
+            },
+        });
+    }
+    assert!(pool.servers[&key("/a/old")].retiring.is_some());
+    assert!(
+        pool.servers[&key("/b/old")].retiring.is_none(),
+        "A's second parked replacement retired B despite equal shares"
+    );
+    assert_eq!(pool.parked.len(), 2);
+}
+
+/// Parking room is reserved before a server is retired: with the queue
+/// full, a new root is refused and no server is cancelled for it.
+#[tokio::test]
+async fn no_server_is_retired_for_an_admission_that_cannot_wait() {
+    let mut pool = super::Pool::new(
+        Config {
+            max_servers: NonZeroUsize::MIN,
+            ..Config::default()
+        },
+        CancellationToken::new(),
+    );
+    let key = |workspace: &str| Key {
+        workspace: PathBuf::from(workspace),
+        language: lsp::Language::Go,
+        full: false,
+    };
+    let (sender, _receiver) = mpsc::channel(8);
+    drop(pool.servers.insert(
+        key("/a/old"),
+        super::Slot {
+            sender,
+            root: PathBuf::from("/a"),
+            retire: CancellationToken::new(),
+            retiring: None,
+            used: 0,
+        },
+    ));
+    let admission = |workspace: &str, root: &str| {
+        let (reply, response) = oneshot::channel();
+        let admission = super::Admission {
+            key: key(workspace),
+            root: PathBuf::from(root),
+            work: Work {
+                query: in_language(&PathBuf::from(workspace), lsp::Language::Go),
+                reply,
+            },
+        };
+        (admission, response)
+    };
+    let mut waiting = Vec::new();
+    for index in 0..super::MAX_PARKED {
+        let (parked, response) = admission(&format!("/c/{index}"), "/c");
+        pool.parked.push_back(parked);
+        waiting.push(response);
+    }
+    let (refused, mut response) = admission("/b/new", "/b");
+    pool.admit(refused);
+    assert!(pool.servers[&key("/a/old")].retiring.is_none());
+    assert!(matches!(
+        response.try_recv(),
+        Ok(Err(LspError::Unavailable))
+    ));
+}
