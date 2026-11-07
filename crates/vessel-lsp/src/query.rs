@@ -87,7 +87,7 @@ impl Process {
     async fn query_once(&mut self, query: Query, watcher: &Watcher) -> Result<Reply, Error> {
         // A native watcher can coalesce events or lose them. Rechecking the
         // bounded open set before each query preserves saved-file semantics.
-        self.refresh_all().await?;
+        self.refresh_all(watcher).await?;
         self.ready().await?;
         Ok(match query {
             Query::WorkspaceSymbols(request) => {

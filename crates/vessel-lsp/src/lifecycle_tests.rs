@@ -159,3 +159,38 @@ async fn the_global_server_bound_is_enforced() {
     .await
     .unwrap();
 }
+
+/// Review finding: open documents were never evicted, so 64 distinct files
+/// locked every new file out for as long as queries kept the server alive.
+#[tokio::test]
+async fn the_least_recently_used_document_makes_room_for_a_new_one() {
+    within(Duration::from_secs(90), async {
+        let dir = root();
+        let root = dir.path().canonicalize().unwrap();
+        for index in 0..=crate::process::MAX_DOCUMENTS {
+            std::fs::write(root.join(format!("f{index}.rs")), "pub fn target() {}\n").unwrap();
+        }
+        let file = |index: usize| {
+            Query::DocumentSymbols(lsp::DocumentSymbols {
+                workspace: lsp::Workspace {
+                    root: root.clone(),
+                    language: lsp::Language::Rust,
+                },
+                file: lsp::FilePath::try_from(PathBuf::from(format!("f{index}.rs"))).unwrap(),
+                page: lsp::PageRequest::default(),
+            })
+        };
+        let stop = CancellationToken::new();
+        let manager = Manager::start(config("normal"), stop.child_token());
+        for index in 0..=crate::process::MAX_DOCUMENTS {
+            let outcome = manager.query(root.clone(), false, file(index)).await;
+            assert!(outcome.is_ok(), "file {index}: {outcome:?}");
+        }
+        // The evicted first file can be opened again, evicting another.
+        assert!(manager.query(root.clone(), false, file(0)).await.is_ok());
+        stop.cancel();
+        manager.stopped().await;
+    })
+    .await
+    .unwrap();
+}

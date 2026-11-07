@@ -30,6 +30,8 @@ pub(crate) struct Document {
     pub(crate) path: PathBuf,
     pub(crate) text: std::sync::Arc<str>,
     pub(crate) version: i32,
+    /// Last use on the process's LRU clock; the oldest is closed for room.
+    pub(crate) used: u64,
 }
 
 #[derive(Debug)]
@@ -58,6 +60,9 @@ pub(crate) struct Process {
     rust_status: Option<init::RustStatus>,
     pub(crate) settings: init::Settings,
     pub(crate) request_timeout: Duration,
+    /// Monotonic use counter for document LRU. Saturating: 2^64 opens are
+    /// out of reach, and a stuck clock only makes eviction order arbitrary.
+    clock: u64,
 }
 
 impl Drop for Process {
@@ -129,6 +134,7 @@ impl Process {
             rust_status: None,
             settings: init::Settings::new(full),
             request_timeout,
+            clock: 0,
         };
         process.initialize(typescript_engine).await?;
         Ok(process)
@@ -216,6 +222,11 @@ impl Process {
             let message = self.inbox.recv().await.ok_or(Error::Protocol)??;
             self.event(message).await?;
         }
+    }
+
+    pub(crate) fn tick(&mut self) -> u64 {
+        self.clock = self.clock.saturating_add(1);
+        self.clock
     }
 
     pub(crate) fn indexing(&self) -> Indexing {

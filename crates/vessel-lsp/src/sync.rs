@@ -1,6 +1,6 @@
 //! Sync bounded saved snapshots; incremental servers receive one full-range edit.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -11,6 +11,9 @@ use vessel_proto::lsp::{FilePath, Language};
 use crate::error::LspError as Error;
 use crate::position::Utf16Position;
 use crate::process::{Document, MAX_DOCUMENTS, Process};
+
+/// Saved text all open documents of one server may hold together.
+const MAX_OPEN_BYTES: usize = 32 * 1024 * 1024;
 use crate::protocol::data;
 
 /// Coalescing events is safe: each wake rereads the bounded open document set.
@@ -20,7 +23,8 @@ pub(crate) struct Watcher(Arc<Mutex<NativeWatches>>);
 #[derive(Debug)]
 struct NativeWatches {
     watcher: RecommendedWatcher,
-    parents: BTreeSet<PathBuf>,
+    /// Watched parent directories and how many open documents need each.
+    parents: BTreeMap<PathBuf, usize>,
 }
 
 impl Watcher {
@@ -37,32 +41,75 @@ impl Watcher {
         Ok((
             Self(Arc::new(Mutex::new(NativeWatches {
                 watcher,
-                parents: BTreeSet::new(),
+                parents: BTreeMap::new(),
             }))),
             receiver,
         ))
     }
 
-    pub(crate) async fn add(&self, path: &Path) -> Result<(), Error> {
-        let parent = path.parent().ok_or(Error::Path)?.to_owned();
-        let watcher = Arc::clone(&self.0);
-        // Parent watches survive atomic saves. Nonrecursive bounded watches
-        // avoid allocating one watch per dependency or build-output directory.
+    /// Run `change` on the watch set off the async workers.
+    async fn with(
+        &self,
+        change: impl FnOnce(&mut NativeWatches) -> Result<(), Error> + Send + 'static,
+    ) -> Result<(), Error> {
+        let watches = Arc::clone(&self.0);
         tokio::task::spawn_blocking(move || {
-            let mut watcher = watcher.lock().map_err(|_poisoned| Error::Unavailable)?;
-            if watcher.parents.contains(&parent) {
-                return Ok(());
-            }
-            if watcher.parents.len() >= MAX_DOCUMENTS {
-                return Err(Error::Limit);
-            }
-            watcher
-                .watcher
-                .watch(&parent, RecursiveMode::NonRecursive)?;
-            let _inserted = watcher.parents.insert(parent);
-            Ok::<(), Error>(())
+            let mut watches = watches.lock().map_err(|_poisoned| Error::Unavailable)?;
+            change(&mut watches)
         })
         .await?
+    }
+
+    pub(crate) async fn add(&self, path: &Path) -> Result<(), Error> {
+        let parent = path.parent().ok_or(Error::Path)?.to_owned();
+        // Parent watches survive atomic saves. Nonrecursive bounded watches
+        // avoid allocating one watch per dependency or build-output directory.
+        self.with(move |watches| {
+            if let Some(count) = watches.parents.get_mut(&parent) {
+                *count = count.saturating_add(1);
+                return Ok(());
+            }
+            if watches.parents.len() >= MAX_DOCUMENTS {
+                return Err(Error::Limit);
+            }
+            watches
+                .watcher
+                .watch(&parent, RecursiveMode::NonRecursive)?;
+            let _previous = watches.parents.insert(parent, 1);
+            Ok(())
+        })
+        .await
+    }
+
+    /// Release one document's need for its parent watch.
+    pub(crate) async fn remove(&self, path: &Path) -> Result<(), Error> {
+        let parent = path.parent().ok_or(Error::Path)?.to_owned();
+        self.with(move |watches| {
+            let remaining = watches.parents.get_mut(&parent).map(|count| {
+                *count = count.saturating_sub(1);
+                *count
+            });
+            if remaining == Some(0) {
+                let _count = watches.parents.remove(&parent);
+                // The directory may already be gone; its watch is then too.
+                drop(watches.watcher.unwatch(&parent));
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Forget every watch. A new server generation starts with no open
+    /// documents, so counts from the previous one must not leak toward the
+    /// bound.
+    pub(crate) async fn reset(&self) -> Result<(), Error> {
+        self.with(|watches| {
+            for parent in std::mem::take(&mut watches.parents).into_keys() {
+                drop(watches.watcher.unwatch(&parent));
+            }
+            Ok(())
+        })
+        .await
     }
 }
 
@@ -74,15 +121,14 @@ impl Process {
     ) -> Result<String, Error> {
         let path = crate::documents::resolve(&self.root, file).await?;
         let uri = crate::documents::uri(&path)?;
-        if self.documents.contains_key(&uri) {
-            self.refresh(&uri).await?;
+        let used = self.tick();
+        if let Some(document) = self.documents.get_mut(&uri) {
+            document.used = used;
+            self.refresh(&uri, watcher).await?;
             return Ok(uri);
         }
-        if self.documents.len() >= MAX_DOCUMENTS {
-            return Err(Error::Limit);
-        }
         let text = crate::documents::read(&path).await?;
-        self.document_budget(text.len(), None)?;
+        self.make_room(text.len(), None, watcher).await?;
         let sync = self
             .capabilities
             .text_document_sync
@@ -112,32 +158,77 @@ impl Process {
                 path,
                 text: Arc::from(text),
                 version: 1,
+                used,
             },
         ));
         Ok(uri)
     }
 
-    pub(crate) async fn refresh_all(&mut self) -> Result<(), Error> {
+    /// [Decision Log]
+    /// - Purpose: a long-lived server keeps serving new files.
+    /// - Before: 64 open documents locked every new file out for as long as
+    ///   queries kept the server from idling (review finding).
+    /// - Chosen: close least-recently-used documents (`didClose`, drop their
+    ///   diagnostics and watch) until the new text fits the count and byte
+    ///   budgets. `keep` protects a document being refreshed. A query opens
+    ///   at most one document, so the one it uses is never the victim.
+    async fn make_room(
+        &mut self,
+        size: usize,
+        keep: Option<&str>,
+        watcher: &Watcher,
+    ) -> Result<(), Error> {
+        loop {
+            let count = self
+                .documents
+                .keys()
+                .filter(|uri| Some(uri.as_str()) != keep)
+                .count();
+            let fits = count < MAX_DOCUMENTS
+                && self.open_bytes(keep).saturating_add(size) <= MAX_OPEN_BYTES;
+            if fits {
+                return Ok(());
+            }
+            let oldest = self
+                .documents
+                .iter()
+                .filter(|(uri, _)| Some(uri.as_str()) != keep)
+                .min_by_key(|(_, document)| document.used)
+                .map(|(uri, _)| uri.clone())
+                .ok_or(Error::Limit)?;
+            self.close(&oldest, watcher).await?;
+        }
+    }
+
+    pub(crate) async fn refresh_all(&mut self, watcher: &Watcher) -> Result<(), Error> {
         let uris: Vec<_> = self.documents.keys().cloned().collect();
         for uri in uris {
-            self.refresh(&uri).await?;
+            self.refresh(&uri, watcher).await?;
         }
         Ok(())
     }
 
-    async fn refresh(&mut self, uri: &str) -> Result<(), Error> {
+    async fn refresh(&mut self, uri: &str, watcher: &Watcher) -> Result<(), Error> {
         let document = self.documents.get(uri).ok_or(Error::Protocol)?;
         // A saved file may have been replaced by an escaping symlink. Close
         // and forget it instead of continuing to expose its old diagnostics.
         let path = match crate::documents::resolve(&self.root, &document.file).await {
             Ok(path) if path == document.path => path,
-            Ok(_) | Err(_) => return self.close(uri).await,
+            Ok(_) | Err(_) => return self.close(uri, watcher).await,
         };
         let text = crate::documents::read(&path).await?;
-        if text == document.text.as_ref() {
+        if text
+            == self
+                .documents
+                .get(uri)
+                .ok_or(Error::Protocol)?
+                .text
+                .as_ref()
+        {
             return Ok(());
         }
-        self.document_budget(text.len(), Some(uri))?;
+        self.make_room(text.len(), Some(uri), watcher).await?;
+        let document = self.documents.get(uri).ok_or(Error::Protocol)?;
         let version = document.version.checked_add(1).ok_or(Error::Limit)?;
         let sync_kind = self
             .capabilities
@@ -170,9 +261,12 @@ impl Process {
         Ok(())
     }
 
-    async fn close(&mut self, uri: &str) -> Result<(), Error> {
-        drop(self.documents.remove(uri));
+    async fn close(&mut self, uri: &str, watcher: &Watcher) -> Result<(), Error> {
+        let document = self.documents.remove(uri);
         drop(self.diagnostics.remove(uri));
+        if let Some(document) = document {
+            watcher.remove(&document.path).await?;
+        }
         self.notify(
             "textDocument/didClose",
             data::DocumentParams {
@@ -184,17 +278,12 @@ impl Process {
         .await
     }
 
-    fn document_budget(&self, new_size: usize, replacing: Option<&str>) -> Result<(), Error> {
-        let current = self
-            .documents
+    fn open_bytes(&self, except: Option<&str>) -> usize {
+        self.documents
             .iter()
-            .filter(|(uri, _)| Some(uri.as_str()) != replacing)
-            .map(|(_, doc)| doc.text.len())
-            .fold(0_usize, usize::saturating_add);
-        if current.saturating_add(new_size) > 32 * 1024 * 1024 {
-            return Err(Error::Limit);
-        }
-        Ok(())
+            .filter(|(uri, _)| Some(uri.as_str()) != except)
+            .map(|(_, document)| document.text.len())
+            .fold(0_usize, usize::saturating_add)
     }
 }
 

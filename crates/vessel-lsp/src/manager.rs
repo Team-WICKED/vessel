@@ -176,7 +176,7 @@ async fn server(
                 if event.is_err() { break; }
                 drop(changes.borrow_and_update());
                 if let Some(server) = &mut process {
-                    let result = tokio::time::timeout(config.request_timeout, server.refresh_all()).await;
+                    let result = tokio::time::timeout(config.request_timeout, server.refresh_all(&watcher)).await;
                     if !matches!(result, Ok(Ok(()))) { process = None; }
                 }
             }
@@ -208,6 +208,8 @@ async fn server(
                 if configuration.is_some_and(|previous| previous != stamp) { process = None; }
                 configuration = Some(stamp);
                 if process.is_none() {
+                    // The previous generation's documents are gone with its process.
+                    if let Err(error) = watcher.reset().await { drop(work.reply.send(Err(error))); continue; }
                     let registry = config.registry.clone();
                     let copy = key.clone();
                     let command = tokio::task::spawn_blocking(move || {
