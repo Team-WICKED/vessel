@@ -79,6 +79,8 @@ pub(crate) async fn plan(
         from_home,
         to_home,
         force: request.force,
+        // A routed session's route is the caller's (`Models::begin_move`).
+        model_proxy: None,
     })
 }
 

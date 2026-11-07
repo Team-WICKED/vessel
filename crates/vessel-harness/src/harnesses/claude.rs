@@ -42,6 +42,7 @@ use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, FileForm, McpError, TerminalMcp};
 use crate::memory::{MemoryFilesError, RebaseError};
+use crate::routing::{ModelProxy, Routed};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -68,7 +69,42 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     rebase: Some(rebase),
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
+    model_proxy: Some(model_proxy),
 };
+
+/// A routed session (ADR 0015): Claude Code's documented gateway
+/// variables. `ANTHROPIC_BASE_URL` without `/v1` (Claude Code adds the
+/// path) and the session's token as `ANTHROPIC_AUTH_TOKEN`, which it sends
+/// as `Authorization: Bearer` and prefers to every login but a cloud
+/// provider's; so the cloud switches and an inherited `ANTHROPIC_API_KEY`
+/// are removed (with both keys set it warns, and the route must not lose
+/// to an account's key). Every model setting is pinned to the route's
+/// models, so it asks for nothing the proxy would refuse: the main model,
+/// the aliases (`opus`, `sonnet` to the model, `haiku` to the small model),
+/// the background model and subagents.
+fn model_proxy(proxy: &ModelProxy) -> Routed {
+    let model = proxy.model.as_str().to_owned();
+    let small = proxy.small().as_str().to_owned();
+    Routed {
+        env: vec![
+            ("ANTHROPIC_BASE_URL", proxy.base_url.clone()),
+            ("ANTHROPIC_AUTH_TOKEN", proxy.token.clone()),
+            ("ANTHROPIC_MODEL", model.clone()),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", model.clone()),
+            ("ANTHROPIC_DEFAULT_SONNET_MODEL", model.clone()),
+            ("ANTHROPIC_DEFAULT_HAIKU_MODEL", small.clone()),
+            ("ANTHROPIC_SMALL_FAST_MODEL", small),
+            ("CLAUDE_CODE_SUBAGENT_MODEL", model),
+        ],
+        unset: &[
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+        ],
+        args: Vec::new(),
+    }
+}
 
 /// The longest slug Claude Code keeps whole.
 const SLUG_MAX: usize = 200;

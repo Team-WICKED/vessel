@@ -36,9 +36,12 @@ built:
   (<failure>)`.
 - `model.list` (read, forwardable) returns `ModelRoute[]`: `{ name,
   provider, api, model, small_model? }`, the routes the node offers. No base
-  URL, header or secret name crosses the wire. (Answered `unsupported`, "not
-  built on this node yet", until the node's proxy lands.) There is no usage
-  row: usage is in each session's log, and clients sum it.
+  URL, header or secret name crosses the wire. There is no usage row:
+  usage is in each session's log, and clients sum it.
+- `session.create` under a profile naming a route the node's
+  `models.toml` does not have: `invalid_request`, the route named.
+  `session.move_profile` keeps a session's route: a move to a profile of
+  another route, or between a route and none, is `unsupported`.
 
 ## Version 6 (2026-11-06)
 

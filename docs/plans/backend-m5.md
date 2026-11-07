@@ -368,7 +368,20 @@ commits.
    listener, tokens, routing, secrets, limits, `ModelCall` events.
 7. **B7 harness wiring** (open decision 8): Claude Code and Codex
    descriptors, `Profile.model`, launch; Codex's resume and profile moves
-   checked with a routed profile.
+   checked with a routed profile. As built: `vessel_harness::ModelProxy`
+   and each descriptor's `model_proxy` renderer, applied after the
+   profile's own changes (a routed profile setting one of the route's
+   variables is refused when `profiles.toml` is read). Claude Code also
+   loses `CLAUDE_CODE_USE_BEDROCK`, `_VERTEX` and `_FOUNDRY` (they would
+   win over the base URL) and pins `CLAUDE_CODE_SUBAGENT_MODEL`. Codex's
+   provider is `vessel` in both modes: `codex-acp` takes the same `-c`
+   overrides. The node mints the token by session id before the launch,
+   binds it when the session starts, and gives a move a second token (as
+   agent credentials, `agents`). A session keeps its route: a move to a
+   profile of another route, or between a route and none, is refused
+   (`unsupported`; see "Follow-ups"). A profile naming a route
+   `models.toml` lacks is a warning at start and reload, and its sessions
+   are refused with the route named.
 8. **B8 CLI and end to end:** `vessel models`, routes in `profiles`, model
    calls in `log`; e2e: a routed session's fake harness calls the proxy,
    the fake upstream answers, the event lands in the log; the canary
@@ -432,6 +445,20 @@ commits.
   for the key.
 - **S2** (optional, with an Anthropic key): Codex through an Anthropic
   route, one turn with a tool call.
+
+## Follow-ups
+
+- **Switching a live session's model route** (a move between profiles of
+  different routes, or between a route and none). Refused in milestone 5:
+  the session's record names its route, and Codex files each thread under
+  its model provider (`vessel` for every routed Codex session, its own
+  `openai` otherwise), so a thread resumed under another provider is not
+  found. Claude Code does not file conversations by provider, so it could
+  come first: only the record (`SessionInfo.model`, a new event saying the
+  route changed) and the token's route would need to follow. The
+  passthrough's stripping of foreign thinking (decision 9) stays either
+  way, since an operator may point a route at another API under a live
+  session by editing `models.toml`.
 
 ## Decisions (coordinator, 2026-11-07)
 

@@ -31,15 +31,17 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use vessel_harness::{ModelProxy, Profile};
 use vessel_llm::client::{ApiKey, Client};
-use vessel_proto::{ModelRoute, ModelRouteName, SecretName, SessionId};
+use vessel_proto::{ModelRoute, ModelRouteName, ProfileInfo, SecretName, SessionId, SessionModel};
 use vessel_session::SessionHandle;
 use vessel_store::DataDir;
 
+use crate::error::ServiceError;
 use crate::fleet::FleetFiles;
 pub use config::ModelsError;
 use config::{Provider, Route, Routes};
-use token::{Holder, ModelToken, Tokens};
+use token::{Holder, ModelToken, MoveTokenError, Tokens};
 
 /// Calls one session may have open at once.
 pub(crate) const PER_SESSION: usize = 4;
@@ -118,24 +120,106 @@ impl Models {
         Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// A token for the calls of session `id`, about to be launched on
-    /// `route`; it opens nothing until [`started`](Self::started).
+    /// What a session of `profile` is launched with when the profile has
+    /// a model route (ADR 0015): the route as recorded, and the proxy with
+    /// a fresh token for session `id`, which opens nothing until the
+    /// session has [`started`](Self::started). `None` for a profile
+    /// without a route.
     ///
     /// # Errors
-    /// No random bytes.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "launching a routed session mints its token (M5 step B7)"
-        )
-    )]
-    pub(crate) fn mint(
+    /// The route is not in `models.toml`, or no random bytes.
+    pub(crate) fn launch(
+        &self,
+        profile: Option<&Profile>,
+        id: SessionId,
+    ) -> Result<Option<(SessionModel, ModelProxy)>, ServiceError> {
+        let Some(name) = profile.and_then(Profile::model) else {
+            return Ok(None);
+        };
+        let (route, _provider) = self
+            .route(name)
+            .ok_or_else(|| missing_route(profile, name))?;
+        let token = self
+            .tokens
+            .mint(id, name.clone())
+            .map_err(ServiceError::Random)?;
+        let proxy = self.proxy(&route, &token)?;
+        Ok(Some((
+            SessionModel {
+                route: name.clone(),
+                model: route.model,
+            },
+            proxy,
+        )))
+    }
+
+    /// A profile move of session `id`, now on `current` (its recorded
+    /// route), to `target` begins: the proxy and a second token for the
+    /// agent the move starts, when the session is routed. A session keeps
+    /// its route: moving it between profiles of different routes (or a
+    /// route and none) is refused, since its record and its harness's
+    /// threads (Codex files them under the provider) belong to the route.
+    ///
+    /// # Errors
+    /// Different routes, a route no longer in `models.toml`, another move
+    /// running, or no random bytes.
+    pub(crate) fn begin_move(
         &self,
         id: SessionId,
-        route: ModelRouteName,
-    ) -> Result<ModelToken, getrandom::Error> {
-        self.tokens.mint(id, route)
+        current: Option<&ModelRouteName>,
+        target: &Profile,
+    ) -> Result<Option<ModelProxy>, ServiceError> {
+        if current != target.model() {
+            return Err(ServiceError::MoveRoute {
+                from: current.cloned(),
+                to: target.model().cloned(),
+            });
+        }
+        let Some(name) = current else {
+            return Ok(None);
+        };
+        let (route, _provider) = self
+            .route(name)
+            .ok_or_else(|| missing_route(Some(target), name))?;
+        let token = match self.tokens.begin_move(id) {
+            Ok(Some(token)) => token,
+            // A live routed session has its token from launch.
+            Ok(None) => return Err(ServiceError::Unrouted(id)),
+            Err(MoveTokenError::Running) => return Err(ServiceError::MoveRunning(id)),
+            Err(MoveTokenError::Random(error)) => return Err(ServiceError::Random(error)),
+        };
+        self.proxy(&route, &token).map(Some)
+    }
+
+    /// The move begun with [`begin_move`](Self::begin_move) ended.
+    pub(crate) fn end_move(&self, id: SessionId, moved: bool) {
+        self.tokens.end_move(id, moved);
+    }
+
+    fn proxy(&self, route: &Route, token: &ModelToken) -> Result<ModelProxy, ServiceError> {
+        Ok(ModelProxy {
+            base_url: self.base_url().ok_or(ServiceError::ModelProxyDown)?,
+            token: token.to_string(),
+            model: route.model.clone(),
+            small_model: route.small_model.clone(),
+        })
+    }
+
+    /// Warn about profiles whose route `models.toml` does not have: their
+    /// sessions are refused until it does.
+    pub(crate) fn check_profiles(&self, profiles: &[ProfileInfo]) {
+        let routes = self.snapshot();
+        for profile in profiles {
+            if let Some(name) = &profile.model
+                && routes.get(name).is_none()
+            {
+                tracing::warn!(
+                    profile = %profile.name,
+                    route = %name,
+                    "a profile names a model route models.toml does not have; its sessions are refused"
+                );
+            }
+        }
     }
 
     /// Session `id` has started: its token, if it has one, opens its calls.
@@ -207,13 +291,6 @@ impl Models {
 
     /// The proxy's base URL for harnesses (`http://127.0.0.1:<port>`), once
     /// it listens.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "a routed session's harness is pointed here (M5 step B7)"
-        )
-    )]
     pub(crate) fn base_url(&self) -> Option<String> {
         self.addr.get().map(|addr| format!("http://{addr}"))
     }
@@ -234,6 +311,13 @@ impl Models {
         )
         .unwrap();
         Self::load(dir.clone(), FleetFiles::new(dir), client).unwrap()
+    }
+}
+
+fn missing_route(profile: Option<&Profile>, name: &ModelRouteName) -> ServiceError {
+    ServiceError::UnknownRoute {
+        profile: profile.map(|profile| profile.name().clone()),
+        route: name.clone(),
     }
 }
 

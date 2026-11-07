@@ -85,6 +85,15 @@ impl fmt::Display for ModelToken {
     }
 }
 
+/// Why a move's token could not be made.
+#[derive(Debug)]
+pub(crate) enum MoveTokenError {
+    /// Another move of the session is running.
+    Running,
+    /// No random bytes.
+    Random(getrandom::Error),
+}
+
 /// A token's session and route.
 #[derive(Debug, Clone)]
 pub(crate) struct Holder {
@@ -94,7 +103,9 @@ pub(crate) struct Holder {
 
 #[derive(Debug)]
 struct Entry {
-    hash: [u8; 32],
+    /// The session's token; two during a profile move (the running agent's
+    /// and the one it starts), until the move ends.
+    hashes: Vec<[u8; 32]>,
     route: ModelRouteName,
     /// Set once the session has started; until then the token opens
     /// nothing.
@@ -125,7 +136,7 @@ impl Tokens {
         let _replaced = self.lock().insert(
             id,
             Entry {
-                hash: token.hash(),
+                hashes: vec![token.hash()],
                 route,
                 session: None,
             },
@@ -148,8 +159,10 @@ impl Tokens {
         let entries = self.lock();
         let mut found = None;
         for entry in entries.values() {
-            if bool::from(entry.hash.ct_eq(&hash)) {
-                found = Some(entry);
+            for known in &entry.hashes {
+                if bool::from(known.ct_eq(&hash)) {
+                    found = Some(entry);
+                }
             }
         }
         let entry = found?;
@@ -161,6 +174,42 @@ impl Tokens {
             session: session.clone(),
             route: entry.route.clone(),
         })
+    }
+
+    /// A profile move of `id` begins: a second token, for the agent it
+    /// starts (as `Agents::begin_move` does for the agent's credential).
+    /// `None` when the session has no token.
+    ///
+    /// # Errors
+    /// Another move of the session is running, or no random bytes.
+    pub(crate) fn begin_move(&self, id: SessionId) -> Result<Option<ModelToken>, MoveTokenError> {
+        let mut entries = self.lock();
+        let Some(entry) = entries.get_mut(&id) else {
+            return Ok(None);
+        };
+        if entry.hashes.len() > 1 {
+            return Err(MoveTokenError::Running);
+        }
+        let token = ModelToken::random().map_err(MoveTokenError::Random)?;
+        entry.hashes.push(token.hash());
+        Ok(Some(token))
+    }
+
+    /// The move begun with [`begin_move`](Self::begin_move) ended: keep the
+    /// new token if the session moved, the old one if not. A no-op when no
+    /// move began.
+    pub(crate) fn end_move(&self, id: SessionId, moved: bool) {
+        let mut entries = self.lock();
+        let Some(entry) = entries.get_mut(&id) else {
+            return;
+        };
+        if entry.hashes.len() == 2 {
+            let _retired = if moved {
+                entry.hashes.remove(0)
+            } else {
+                entry.hashes.swap_remove(1)
+            };
+        }
     }
 
     /// Forget session `id`'s token: the session ended, or never started.

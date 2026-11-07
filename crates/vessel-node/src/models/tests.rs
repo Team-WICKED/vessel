@@ -103,7 +103,11 @@ impl Fixture {
         .with_cwd(self.data.path().to_path_buf());
         let created = self.runtime.create(spec).await.unwrap();
         let id = created.handle.id();
-        let token = self.models.mint(id, route.parse().unwrap()).unwrap();
+        let profile = routed_profile(route);
+        let (model, proxy) = self.models.launch(Some(&profile), id).unwrap().unwrap();
+        assert_eq!(model.route.as_str(), route);
+        assert_eq!(proxy.base_url, format!("http://{}", self.proxy));
+        let token = proxy.token;
         // Minted for a session not started yet, it opens nothing.
         let early = self
             .call(
@@ -122,7 +126,7 @@ impl Fixture {
             }
             records
         });
-        (created.handle, token.to_string(), records)
+        (created.handle, token, records)
     }
 
     async fn call(&self, request_line: &str, headers: &[(&str, &str)], body: &str) -> Answer {
@@ -133,6 +137,16 @@ impl Fixture {
         self.stop.cancel();
         self.runtime.shutdown().await;
     }
+}
+
+/// A Claude Code profile on `route`.
+fn routed_profile(route: &str) -> vessel_harness::Profile {
+    let text = format!("[profiles.routed]\nharness = \"claude\"\nmodel = \"{route}\"\n");
+    vessel_harness::parse_profiles(&text, None)
+        .unwrap()
+        .get(&"routed".parse().unwrap())
+        .cloned()
+        .unwrap()
 }
 
 /// `models.toml`, owner-only, with one provider of each API at the fake.

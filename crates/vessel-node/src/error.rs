@@ -3,7 +3,9 @@
 
 use std::net::SocketAddr;
 
-use vessel_proto::{ErrorCode, EventSeq, HarnessKind, ProfileName, SessionId, WireError};
+use vessel_proto::{
+    ErrorCode, EventSeq, HarnessKind, ModelRouteName, ProfileName, SessionId, WireError,
+};
 use vessel_rpc::OutboundError;
 use vessel_session::SessionError;
 use vessel_store::StoreError;
@@ -216,6 +218,39 @@ pub(crate) enum ServiceError {
     /// 6).
     #[error(transparent)]
     Transfer(#[from] crate::transfers::TransferError),
+    /// A profile names a model route this node's `models.toml` does not
+    /// have (ADR 0015).
+    #[error("{}model route `{route}` is not in this node's models.toml (see `model.list`)", profile.as_ref().map_or_else(String::new, |profile| format!("profile `{profile}`: ")))]
+    UnknownRoute {
+        /// The profile, if one names it.
+        profile: Option<ProfileName>,
+        /// The route.
+        route: ModelRouteName,
+    },
+    /// A move would change the session's model route (ADR 0015).
+    #[error("a session keeps its model route: it is on {}, the profile on {}", route_text(from.as_ref()), route_text(to.as_ref()))]
+    MoveRoute {
+        /// The session's route.
+        from: Option<ModelRouteName>,
+        /// The target profile's.
+        to: Option<ModelRouteName>,
+    },
+    /// A routed session has no model token (a bug: one is minted at
+    /// launch).
+    #[error("session {0} is routed but has no model token")]
+    Unrouted(SessionId),
+    /// The model proxy is not listening (a bug: it listens before sessions
+    /// start).
+    #[error("the node's model proxy is not listening")]
+    ModelProxyDown,
+}
+
+/// A route as a sentence names it.
+fn route_text(route: Option<&ModelRouteName>) -> String {
+    route.map_or_else(
+        || "its harness's own provider".to_owned(),
+        |route| format!("route `{route}`"),
+    )
 }
 
 impl ServiceError {
@@ -242,7 +277,9 @@ impl ServiceError {
             | Self::InvalidTtl
             | Self::NoScopes
             | Self::UnknownProfile(_)
+            | Self::UnknownRoute { .. }
             | Self::ProfileHarness { .. } => ErrorCode::InvalidRequest,
+            Self::MoveRoute { .. } => ErrorCode::Unsupported,
             Self::Session(error) => error.code(),
             Self::Transfer(error) => error.code(),
             Self::Store(error) | Self::Profiles(ProfilesFileError::Read(error)) => error.code(),
@@ -252,7 +289,9 @@ impl ServiceError {
             | Self::Random(_)
             | Self::Link(_)
             | Self::AgentTools(_)
-            | Self::AgentToolsPath => ErrorCode::Internal,
+            | Self::AgentToolsPath
+            | Self::Unrouted(_)
+            | Self::ModelProxyDown => ErrorCode::Internal,
         };
         let mut message = self.to_string();
         let mut source = std::error::Error::source(self);

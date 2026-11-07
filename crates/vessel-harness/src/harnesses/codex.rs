@@ -33,6 +33,7 @@ use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, McpError, TerminalMcp};
 use crate::memory::MemoryFilesError;
+use crate::routing::{ModelProxy, Routed};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -59,6 +60,7 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     rebase: None,
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
+    model_proxy: Some(model_proxy),
 };
 
 /// `memories/`: Codex's memory has no project in its path, so only all of
@@ -211,6 +213,42 @@ fn terminal_mcp(servers: &ResolvedMcpServers) -> Result<TerminalMcp, McpError> {
     }
     mcp.env = env.values.into_values().collect();
     Ok(mcp)
+}
+
+/// The variable holding a routed session's token in Codex's environment
+/// (its provider's `env_key`). Ending in `_SECRET`, Codex's default policy
+/// for the commands it runs leaves it out of theirs.
+const MODEL_SECRET: &str = "VESSEL_MODEL_SECRET";
+
+/// A routed session (ADR 0015): a custom model provider, `vessel`, in `-c`
+/// overrides (nothing is written to the home), speaking the Responses API
+/// at the proxy's `/v1`, its key read from [`MODEL_SECRET`]; the session
+/// uses it and the route's model. Codex files a thread under its provider,
+/// so a routed session's threads stay with `vessel`: resumed and moved
+/// between routed profiles of the same route, they find it again.
+/// `codex-acp` takes the same `-c` overrides, so structured sessions are
+/// routed alike.
+fn model_proxy(proxy: &ModelProxy) -> Routed {
+    let mut provider = InlineTable::new();
+    let _old = provider.insert("name", Value::from("Vessel"));
+    let _old = provider.insert(
+        "base_url",
+        Value::from(format!("{}/v1", proxy.base_url).as_str()),
+    );
+    let _old = provider.insert("wire_api", Value::from("responses"));
+    let _old = provider.insert("env_key", Value::from(MODEL_SECRET));
+    Routed {
+        env: vec![(MODEL_SECRET, proxy.token.clone())],
+        unset: &[],
+        args: vec![
+            "-c".to_owned(),
+            format!("model_provider={}", Value::from("vessel")),
+            "-c".to_owned(),
+            format!("model_providers.vessel={}", Value::InlineTable(provider)),
+            "-c".to_owned(),
+            format!("model={}", Value::from(proxy.model.as_str())),
+        ],
+    }
 }
 
 /// `VESSEL_MCP_<server>_<header>_SECRET`: indexes, since server and header

@@ -201,6 +201,7 @@ fn launch(
         &test_env(),
         &asking(spec.clone(), profile),
         profile,
+        None,
         mcp,
         dir,
     )
@@ -586,7 +587,8 @@ fn the_profile_must_be_the_one_the_spec_asks_for() {
     assert_eq!(
         format!(
             "{:?}",
-            vessel_harness::launch(&lookup, &test_env(), &spec, &alt, &none, None).unwrap_err()
+            vessel_harness::launch(&lookup, &test_env(), &spec, &alt, None, &none, None)
+                .unwrap_err()
         ),
         format!(
             "{:?}",
@@ -596,20 +598,41 @@ fn the_profile_must_be_the_one_the_spec_asks_for() {
             }
         )
     );
-    assert!(vessel_harness::launch(&lookup, &test_env(), &spec, &default, &none, None).is_ok());
+    assert!(
+        vessel_harness::launch(&lookup, &test_env(), &spec, &default, None, &none, None).is_ok()
+    );
     // The default named explicitly is the default.
     let named_default = asking(spec.clone(), &default);
     assert!(
-        vessel_harness::launch(&lookup, &test_env(), &named_default, &default, &none, None).is_ok()
+        vessel_harness::launch(
+            &lookup,
+            &test_env(),
+            &named_default,
+            &default,
+            None,
+            &none,
+            None
+        )
+        .is_ok()
     );
     // A named profile: that one, not the default.
     let wants_alt = asking(spec, &alt);
-    assert!(vessel_harness::launch(&lookup, &test_env(), &wants_alt, &alt, &none, None).is_ok());
+    assert!(
+        vessel_harness::launch(&lookup, &test_env(), &wants_alt, &alt, None, &none, None).is_ok()
+    );
     assert_eq!(
         format!(
             "{:?}",
-            vessel_harness::launch(&lookup, &test_env(), &wants_alt, &default, &none, None)
-                .unwrap_err()
+            vessel_harness::launch(
+                &lookup,
+                &test_env(),
+                &wants_alt,
+                &default,
+                None,
+                &none,
+                None
+            )
+            .unwrap_err()
         ),
         format!(
             "{:?}",
@@ -633,12 +656,272 @@ fn a_harness_that_needs_an_mcp_file_needs_a_directory() {
     assert_eq!(
         format!(
             "{:?}",
-            vessel_harness::launch(&lookup, &test_env(), &spec, &default, &servers(), None)
-                .unwrap_err()
+            vessel_harness::launch(
+                &lookup,
+                &test_env(),
+                &spec,
+                &default,
+                None,
+                &servers(),
+                None
+            )
+            .unwrap_err()
         ),
         format!("{:?}", HarnessError::NoMcpDirectory)
     );
     // Without servers, or for a harness without a file, none is needed.
     let none = ResolvedMcpServers::new();
-    assert!(vessel_harness::launch(&lookup, &test_env(), &spec, &default, &none, None).is_ok());
+    assert!(
+        vessel_harness::launch(&lookup, &test_env(), &spec, &default, None, &none, None).is_ok()
+    );
+}
+
+/// Helpers for the routing tests (ADR 0015).
+#[cfg(test)]
+mod routing {
+    use super::{
+        HarnessError, Launch, Lookup, Profile, ResolvedMcpServers, SessionSpec, asking, test_env,
+    };
+
+    /// A session's model token, as the node would mint it.
+    pub(super) const MODEL_TOKEN: &str = "vslm-test-model-token-5c1d";
+
+    const ROUTED: &str = r#"
+    [profiles.claude-qwen]
+    harness = "claude"
+    model = "qwen-coder"
+    env = { CLAUDE_CONFIG_DIR = "~/.claude-alt" }
+    args = ["--verbose"]
+
+    [profiles.codex-qwen]
+    harness = "codex"
+    model = "qwen-coder"
+    "#;
+
+    pub(super) fn routed(name: &str) -> Profile {
+        vessel_harness::parse_profiles(ROUTED, Some(std::path::Path::new("/home/u")))
+            .unwrap()
+            .get(&name.parse().unwrap())
+            .cloned()
+            .unwrap()
+    }
+
+    pub(super) fn proxy() -> vessel_harness::ModelProxy {
+        vessel_harness::ModelProxy {
+            base_url: "http://127.0.0.1:4321".to_owned(),
+            token: MODEL_TOKEN.to_owned(),
+            model: vessel_proto::ModelId::new("qwen/qwen3-coder"),
+            small_model: Some(vessel_proto::ModelId::new("qwen/qwen3-coder-flash")),
+        }
+    }
+
+    pub(super) fn launch_routed(
+        lookup: &Lookup,
+        spec: &SessionSpec,
+        profile: &Profile,
+        proxy: Option<&vessel_harness::ModelProxy>,
+    ) -> Result<Launch, HarnessError> {
+        vessel_harness::launch(
+            lookup,
+            &test_env(),
+            &asking(spec.clone(), profile),
+            profile,
+            proxy,
+            &ResolvedMcpServers::new(),
+            None,
+        )
+    }
+
+    pub(super) fn args(launch: &Launch) -> Vec<String> {
+        launch
+            .command
+            .args
+            .iter()
+            .map(|arg| arg.to_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// The token is in the harness's environment only: never on the command
+    /// line, never in `Debug`.
+    pub(super) fn assert_token_hidden(launch: &Launch) {
+        assert!(args(launch).iter().all(|arg| !arg.contains(MODEL_TOKEN)));
+        assert!(!format!("{launch:?}").contains(MODEL_TOKEN));
+    }
+}
+
+use routing::{MODEL_TOKEN, args, assert_token_hidden, launch_routed, proxy, routed};
+
+#[test]
+fn a_routed_claude_is_pointed_at_the_proxy_and_pinned_to_the_route() {
+    let bin = TempDir::new();
+    let tui = fake(vessel_testkit::Fake::Tui);
+    let acp = fake(vessel_testkit::Fake::Acp);
+    let _claude = install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap();
+    let _adapter = install(bin.path(), HarnessKind::ClaudeCode, Role::Structured, &acp).unwrap();
+    let lookup = Lookup::new([bin.path().to_owned()]);
+    let qwen = routed("claude-qwen");
+    assert_eq!(
+        qwen.info().model.map(|route| route.to_string()),
+        Some("qwen-coder".to_owned())
+    );
+
+    for spec in [
+        terminal(HarnessKind::ClaudeCode, &["hello"], bin.path()),
+        structured(HarnessKind::ClaudeCode, bin.path()),
+    ] {
+        let launched = launch_routed(&lookup, &spec, &qwen, Some(&proxy())).unwrap();
+        let command = &launched.command;
+        assert_token_hidden(&launched);
+        let model = Some("qwen/qwen3-coder");
+        let small = Some("qwen/qwen3-coder-flash");
+        for (variable, value) in [
+            ("ANTHROPIC_BASE_URL", Some("http://127.0.0.1:4321")),
+            ("ANTHROPIC_AUTH_TOKEN", Some(MODEL_TOKEN)),
+            ("ANTHROPIC_MODEL", model),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", model),
+            ("ANTHROPIC_DEFAULT_SONNET_MODEL", model),
+            ("CLAUDE_CODE_SUBAGENT_MODEL", model),
+            ("ANTHROPIC_DEFAULT_HAIKU_MODEL", small),
+            ("ANTHROPIC_SMALL_FAST_MODEL", small),
+        ] {
+            assert_eq!(set(command, variable).as_deref(), value, "{variable}");
+        }
+        // An inherited key or a cloud switch would win over the route.
+        for variable in [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+        ] {
+            assert_eq!(
+                command.env_change(variable),
+                Some(&EnvValue::Remove),
+                "{variable}"
+            );
+        }
+        // The profile's own changes still apply.
+        assert_eq!(
+            set(command, "CLAUDE_CONFIG_DIR").as_deref(),
+            Some(under_home(".claude-alt").as_str())
+        );
+        if matches!(spec.mode, vessel_proto::SessionMode::Terminal { .. }) {
+            assert_eq!(args(&launched), ["--verbose", "hello"]);
+        } else {
+            assert!(args(&launched).is_empty());
+        }
+    }
+    assert!(!format!("{:?}", proxy()).contains(MODEL_TOKEN));
+
+    // A route without the session's proxy, or a proxy without a route, is
+    // never launched against the harness's own vendor instead.
+    let spec = terminal(HarnessKind::ClaudeCode, &[], bin.path());
+    assert!(matches!(
+        launch_routed(&lookup, &spec, &qwen, None),
+        Err(HarnessError::Unrouted { .. })
+    ));
+    assert!(matches!(
+        launch_routed(&lookup, &spec, &profile("claude-alt"), Some(&proxy())),
+        Err(HarnessError::Unrouted { .. })
+    ));
+}
+
+#[test]
+fn a_routed_codex_gets_a_vessel_provider_in_overrides_in_both_modes() {
+    let bin = TempDir::new();
+    let tui = fake(vessel_testkit::Fake::Tui);
+    let acp = fake(vessel_testkit::Fake::Acp);
+    let _codex = install(bin.path(), HarnessKind::Codex, Role::Terminal, &tui).unwrap();
+    let _adapter = install(bin.path(), HarnessKind::Codex, Role::Structured, &acp).unwrap();
+    let lookup = Lookup::new([bin.path().to_owned()]);
+    let profile = routed("codex-qwen");
+
+    for (spec, after) in [
+        (
+            terminal(HarnessKind::Codex, &["resume"], bin.path()),
+            vec!["resume".to_owned()],
+        ),
+        (structured(HarnessKind::Codex, bin.path()), Vec::new()),
+    ] {
+        let launched = launch_routed(&lookup, &spec, &profile, Some(&proxy())).unwrap();
+        assert_token_hidden(&launched);
+        assert_eq!(
+            set(&launched.command, "VESSEL_MODEL_SECRET").as_deref(),
+            Some(MODEL_TOKEN)
+        );
+        let args = args(&launched);
+        let (overrides, rest) = args.split_at(6);
+        assert_eq!(rest, after);
+        let mut settings = BTreeMap::new();
+        for pair in overrides.chunks_exact(2) {
+            let [flag, setting] = pair else {
+                panic!("pairs");
+            };
+            assert_eq!(flag, "-c");
+            let (key, value) = setting.split_once('=').unwrap();
+            let document: toml_edit::DocumentMut = format!("value = {value}").parse().unwrap();
+            let _old = settings.insert(key.to_owned(), document);
+        }
+        assert_eq!(settings["model_provider"]["value"].as_str(), Some("vessel"));
+        assert_eq!(
+            settings["model"]["value"].as_str(),
+            Some("qwen/qwen3-coder")
+        );
+        let provider = &settings["model_providers.vessel"]["value"];
+        assert_eq!(provider["name"].as_str(), Some("Vessel"));
+        assert_eq!(
+            provider["base_url"].as_str(),
+            Some("http://127.0.0.1:4321/v1")
+        );
+        assert_eq!(provider["wire_api"].as_str(), Some("responses"));
+        assert_eq!(provider["env_key"].as_str(), Some("VESSEL_MODEL_SECRET"));
+    }
+}
+
+#[test]
+fn routes_are_checked_when_profiles_are_read() {
+    let problem = |text: &str| match vessel_harness::parse_profiles(text, None) {
+        Err(vessel_harness::ProfilesError::Profile { problem, .. }) => problem,
+        other => panic!("{other:?}"),
+    };
+    assert!(matches!(
+        problem("[profiles.g]\nharness = \"gemini\"\nmodel = \"qwen-coder\"\n"),
+        vessel_harness::ProfileProblem::NotRoutable {
+            harness: HarnessKind::Gemini
+        }
+    ));
+    assert!(matches!(
+        problem("[profiles.c]\nharness = \"claude\"\nmodel = \"not a route\"\n"),
+        vessel_harness::ProfileProblem::InvalidRoute(_)
+    ));
+    // The route's variables are the route's: a profile setting one would
+    // be overridden without a word, so it is refused instead.
+    for (harness, variable) in [
+        ("claude", "ANTHROPIC_BASE_URL"),
+        ("claude", "anthropic_api_key"),
+        ("claude", "ANTHROPIC_MODEL"),
+        ("codex", "VESSEL_MODEL_SECRET"),
+    ] {
+        let text = format!(
+            "[profiles.p]\nharness = \"{harness}\"\nmodel = \"r\"\nenv = {{ {variable} = \"x\" }}\n"
+        );
+        assert!(
+            matches!(
+                problem(&text),
+                vessel_harness::ProfileProblem::RoutedVariable { .. }
+            ),
+            "{harness} {variable}"
+        );
+    }
+    // Without a route, the same variables are the profile's to set.
+    assert!(
+        vessel_harness::parse_profiles(
+            "[profiles.p]\nharness = \"claude\"\nenv = { ANTHROPIC_BASE_URL = \"x\" }\n",
+            None
+        )
+        .is_ok()
+    );
+    assert!(vessel_harness::routable(HarnessKind::ClaudeCode));
+    assert!(vessel_harness::routable(HarnessKind::Codex));
+    assert!(!vessel_harness::routable(HarnessKind::Gemini));
+    assert!(!vessel_harness::routable(HarnessKind::OpenCode));
 }

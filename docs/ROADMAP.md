@@ -101,7 +101,12 @@ Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
 
 ## Phase 3: model routing
 
-- [ ] Local routing proxy so every harness can use every model.
+- [ ] Local routing proxy so every harness can use every model (milestone
+      5, `docs/plans/backend-m5.md`, ADR 0015).
+- Follow-up, not scheduled: switching a live session's model route. A
+  session keeps the route it was launched with, since Codex files its
+  threads under the model provider; Claude Code does not, so it could
+  come first (the plan's "Follow-ups").
 
 ## Phase 4: IDE context
 

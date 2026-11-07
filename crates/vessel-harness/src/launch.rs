@@ -14,6 +14,7 @@ use crate::harnesses::{Structured, descriptor};
 use crate::lookup::Lookup;
 use crate::mcp::{McpError, McpFile, TerminalMcp};
 use crate::profile::{Profile, same_variable};
+use crate::routing::{ModelProxy, Routed};
 
 /// What [`launch`] decided: the command, and what it needs around it.
 /// `Debug` shows no value: `CommandSpec` and `McpFile` hide them.
@@ -33,7 +34,8 @@ pub struct Launch {
     pub unattached: Vec<McpServerName>,
 }
 
-/// The command that runs `spec` under `profile`, with `mcp` servers.
+/// The command that runs `spec` under `profile`, with `mcp` servers, and
+/// through `proxy` when the profile has a model route.
 ///
 /// `profile` must be the one the spec names (`spec.profile`, or the
 /// harness's default profile when it names none): the caller resolves the
@@ -47,7 +49,10 @@ pub struct Launch {
 /// `mcp` is not used, and neither are the profile's arguments. In both
 /// modes the harness inherits `env`'s account (its home variable as there,
 /// removed when unset there, and on Unix `HOME`), then the profile's
-/// variables are set and its `unset` ones removed.
+/// variables are set and its `unset` ones removed. A routed profile's
+/// harness is then pointed at `proxy` (ADR 0015): its routing variables
+/// set and removed last, so nothing before undoes them, and its routing
+/// arguments added (in terminal mode before the profile's).
 ///
 /// A terminal session's MCP configuration file goes in `mcp_dir`, an
 /// owner-only directory of the node's (ADR 0012); there is no fallback to
@@ -69,12 +74,15 @@ pub struct Launch {
 /// [`HarnessError::NoSuchDirectory`] for a bad working directory;
 /// [`HarnessError::Mcp`] when the servers cannot be given to this harness
 /// (two values for one variable); [`HarnessError::NoMcpDirectory`] when the
-/// harness needs a file and `mcp_dir` is `None`.
+/// harness needs a file and `mcp_dir` is `None`;
+/// [`HarnessError::Unrouted`] when a routed profile comes without a proxy
+/// or a proxy without a routed profile.
 pub fn launch(
     lookup: &Lookup,
     env: &HarnessEnv,
     spec: &SessionSpec,
     profile: &Profile,
+    proxy: Option<&ModelProxy>,
     mcp: &ResolvedMcpServers,
     mcp_dir: Option<&Path>,
 ) -> Result<Launch, HarnessError> {
@@ -97,6 +105,15 @@ pub fn launch(
         });
     }
     let descriptor = descriptor(harness);
+    let routed = match (profile.model(), proxy, descriptor.model_proxy) {
+        (None, None, _) => Routed::default(),
+        (Some(_), Some(proxy), Some(render)) => render(proxy),
+        (Some(_), None, _) | (None, Some(_), _) | (Some(_), Some(_), None) => {
+            return Err(HarnessError::Unrouted {
+                profile: profile.name().clone(),
+            });
+        }
+    };
     let installed = |binary: &'static str| {
         lookup
             .find(binary)
@@ -123,12 +140,15 @@ pub fn launch(
                 }
                 None => unattached.extend(mcp.keys().cloned()),
             }
-            command.args(profile.args()).args(args)
+            command
+                .args(routed.args.iter())
+                .args(profile.args())
+                .args(args)
         }
         SessionMode::Structured { .. } => match &descriptor.structured {
-            Structured::Native { args } => {
-                CommandSpec::new(installed(descriptor.binary)?).args(args.iter())
-            }
+            Structured::Native { args } => CommandSpec::new(installed(descriptor.binary)?)
+                .args(args.iter())
+                .args(routed.args.iter()),
             Structured::Adapter { binary, install } => {
                 let program =
                     lookup
@@ -137,12 +157,13 @@ pub fn launch(
                             harness,
                             reason: adapter_missing(binary, install),
                         })?;
-                CommandSpec::new(program)
+                CommandSpec::new(program).args(routed.args.iter())
             }
         },
     };
-    // This node's account first (`HarnessEnv`), then the profile's own.
-    let command = with_profile(env.apply(command, harness), profile);
+    // This node's account first (`HarnessEnv`), then the profile's own,
+    // then the route's.
+    let command = with_routing(with_profile(env.apply(command, harness), profile), &routed);
     let command = match working_dir(spec, env)? {
         Some(cwd) => command.cwd(cwd),
         None => command,
@@ -163,6 +184,16 @@ pub(crate) fn with_profile(command: CommandSpec, profile: &Profile) -> CommandSp
     profile.env().fold(command, |command, (name, value)| {
         command.env(name.as_str(), value)
     })
+}
+
+/// `command` pointed at the model proxy: the route's removals, then its
+/// variables.
+fn with_routing(command: CommandSpec, routed: &Routed) -> CommandSpec {
+    let command = routed.unset.iter().fold(command, CommandSpec::env_remove);
+    routed
+        .env
+        .iter()
+        .fold(command, |command, (name, value)| command.env(name, value))
 }
 
 /// An MCP variable goes into the harness's own environment (Codex), so it

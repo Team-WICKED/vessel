@@ -40,7 +40,7 @@ and 0013).
 | `vessel-proto` | Wire contract: ids, sessions, events, agent timeline, errors, typed RPC table; keys, devices, pairing links, relay control (milestone 3); validated names, profiles, creators, agent credentials, fleet manifests and MCP server definitions (milestone 4); protocol 6's envelope (`forward`: `Origin`, `fleet.forward`/`relay`/`deliver`), transfers (`transfer`, with the size limits) and secrets on the wire (`secret`: `SecretValue`, redacted). No I/O. | - |
 | `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. From protocol 5 it holds both sides to the negotiated version: a call newer than the connection (`Call::since`) is refused by the client before sending and by the server before dispatch, and outgoing frames are adapted to an older client where they are encoded (`ServerFrame::for_protocol`). | proto |
 | `vessel-proc` | Command specs, spawning in a process group (a kill-on-close job object on Windows), killing the group. | - |
-| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; `HarnessEnv` (the account harnesses run as, given by the binaries, never read from the process by a library); since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, a profile's memory files and renaming a path for another working directory (transfers, protocol 6), MCP servers for terminal sessions, and what `vessel init` offers (install and login commands, other accounts' homes). | proto, proc |
+| `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; `HarnessEnv` (the account harnesses run as, given by the binaries, never read from the process by a library); since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, a profile's memory files and renaming a path for another working directory (transfers, protocol 6), MCP servers for terminal sessions, and what `vessel init` offers (install and login commands, other accounts' homes); since milestone 5 a profile's `model` route and pointing its harness at the node's model proxy (`routing`: Claude Code by its gateway variables, Codex by a `vessel` provider in `-c` overrides). | proto, proc |
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize; on Windows, answers the pseudo console's startup cursor query. | proc |
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
@@ -388,7 +388,14 @@ In the crate table's order.
     every 15 s of silence. The provider's key is read from `secrets.toml`
     for each call. Each admitted call ends in one `ModelCall` record in
     its session's log (`SessionHandle::model_call`) and one log line,
-    metadata only.
+    metadata only. `session.create` under a routed profile mints the
+    session's token by id before the launch (`Models::launch`), records
+    the route in `SessionInfo.model`, and hands the harness a
+    `vessel_harness::ModelProxy`; the token opens calls once the session
+    has started. A move keeps the session's route (another is
+    `unsupported`) and gives the restarted agent a second token, the old
+    one kept until the move ends (`begin_move`/`end_move`, as agent
+    credentials).
 - `vessel-client`: the websocket connection with the bearer token (`wss://`
   refused for token connections: ADR 0005's amendment), one typed method
   per call, the gap-free `SessionStream`. `Connector` (`WsConnector`; the

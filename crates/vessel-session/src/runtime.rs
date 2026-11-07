@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::Instrument as _;
 use vessel_agent::{AgentProcess, AgentSetup};
-use vessel_harness::{McpFile, Profile};
+use vessel_harness::{McpFile, ModelProxy, Profile};
 use vessel_proto::{
     Creator, EventRecord, HarnessSessionId, ModelCall, ModelId, NodeId, ResolvedMcpServers,
     SessionId, SessionInfo, SessionMode, SessionModel, SessionOrigin, SessionSpec, TerminalSize,
@@ -105,6 +105,10 @@ pub struct LaunchOptions {
     /// node's proxy (protocol 7), recorded in `SessionInfo::model`; `None`
     /// for a session on its harness's own provider.
     pub model: Option<SessionModel>,
+    /// Where the harness of a profile with a model route sends its calls,
+    /// with the session's token (ADR 0015); given exactly when `profile`
+    /// has a route, or the launch is refused. Its `Debug` hides the token.
+    pub model_proxy: Option<ModelProxy>,
 }
 
 /// What a session records about its start besides its spec.
@@ -214,6 +218,7 @@ impl SessionRuntime {
             origin,
             via,
             model,
+            model_proxy,
         } = options;
         let id = id.unwrap_or_else(SessionId::random);
         if self.get(id).is_some() {
@@ -234,7 +239,8 @@ impl SessionRuntime {
                     servers: mcp_servers,
                     dir: mcp_dir,
                 };
-                self.create_terminal(spec, size, profile, mcp, record).await
+                self.create_terminal(spec, size, (profile, model_proxy), mcp, record)
+                    .await
             }
             SessionMode::Structured { model, resume } => {
                 let start = AgentStart {
@@ -242,7 +248,8 @@ impl SessionRuntime {
                     resume,
                     mcp_servers,
                 };
-                self.create_structured(spec, profile, start, record).await
+                self.create_structured(spec, (profile, model_proxy), start, record)
+                    .await
             }
         }
     }
@@ -251,7 +258,7 @@ impl SessionRuntime {
         &self,
         spec: SessionSpec,
         size: TerminalSize,
-        profile: Profile,
+        (profile, proxy): (Profile, Option<ModelProxy>),
         mcp: TerminalMcp,
         record: Record,
     ) -> Result<Created, SessionError> {
@@ -269,6 +276,7 @@ impl SessionRuntime {
                 &env,
                 &launch_spec,
                 &profile,
+                proxy.as_ref(),
                 &mcp.servers,
                 mcp.dir.as_deref(),
             )?;
@@ -311,7 +319,7 @@ impl SessionRuntime {
     async fn create_structured(
         &self,
         spec: SessionSpec,
-        profile: Profile,
+        (profile, proxy): (Profile, Option<ModelProxy>),
         start: AgentStart,
         record: Record,
     ) -> Result<Created, SessionError> {
@@ -322,8 +330,16 @@ impl SessionRuntime {
         let (command, cwd) = tokio::task::spawn_blocking(move || {
             // Structured sessions get their MCP servers over ACP, not here.
             let none = ResolvedMcpServers::new();
-            let command =
-                vessel_harness::launch(&lookup, &env, &launch_spec, &profile, &none, None)?.command;
+            let command = vessel_harness::launch(
+                &lookup,
+                &env,
+                &launch_spec,
+                &profile,
+                proxy.as_ref(),
+                &none,
+                None,
+            )?
+            .command;
             // ACP needs an explicit directory; the launch defaults it to
             // the home directory, and the node's own is the last resort.
             let cwd = command
@@ -407,6 +423,7 @@ impl SessionRuntime {
             mcp_servers,
             notices,
             force,
+            model_proxy,
         } = request;
         let to = (!profile.is_default()).then(|| profile.name().clone());
         let spec = info.spec.with_profile(profile.name().clone());
@@ -416,8 +433,16 @@ impl SessionRuntime {
         let from = from_home.clone();
         let (command, cwd, files) = tokio::task::spawn_blocking(move || {
             let none = ResolvedMcpServers::new();
-            let command =
-                vessel_harness::launch(&lookup, &env, &spec, &profile, &none, None)?.command;
+            let command = vessel_harness::launch(
+                &lookup,
+                &env,
+                &spec,
+                &profile,
+                model_proxy.as_ref(),
+                &none,
+                None,
+            )?
+            .command;
             let cwd = command
                 .cwd
                 .clone()

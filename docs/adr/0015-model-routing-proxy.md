@@ -126,6 +126,17 @@ session (or any local process) from using another's route.
   cannot tell each other's apart: after a move between them, the second
   refuses the first's, as it would without Vessel. Vessel's envelopes do
   name their provider.
+- A session keeps the route it was launched with. Its token is minted by
+  session id before the launch (it goes into the harness's environment)
+  and opens nothing until the session has started; a profile move gets a
+  second token for the agent it starts, and keeps whichever agent runs
+  afterwards. A move between profiles of different routes, or between a
+  route and none, is refused (`unsupported`): the session's record names
+  its route, and Codex files a thread under its provider, so resuming it
+  under another would not find it. Switching a live session's route is a
+  follow-up. Decision 8's stripping does not rely on this: an operator may
+  still edit `models.toml` and point a route at another API under a live
+  session.
 - Tool schemas pass through unchanged in milestone 5; a provider stricter
   than JSON Schema (Gemini's native API) needs rewriting later.
 - Subscription logins are not upstreams: a profile using its account's

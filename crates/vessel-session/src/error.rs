@@ -116,7 +116,9 @@ impl SessionError {
             | Self::Launch(
                 HarnessError::McpFile(_)
                 | HarnessError::ProfileNotRequested { .. }
-                | HarnessError::NoMcpDirectory,
+                | HarnessError::NoMcpDirectory
+                // The node pairs a routed profile with its proxy.
+                | HarnessError::Unrouted { .. },
             ) => ErrorCode::Internal,
         }
     }

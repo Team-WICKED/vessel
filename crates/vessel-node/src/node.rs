@@ -489,6 +489,9 @@ fn prepare(dir: &DataDir, env: HarnessEnv) -> Result<Prepared, NodeError> {
     let profiles = NodeProfiles::load(dir.clone(), env).map_err(NodeError::Profiles)?;
     let models = Models::load(dir.clone(), FleetFiles::new(dir), model_client()?)
         .map_err(NodeError::Models)?;
+    // A profile naming a route that is not there is not fatal: its
+    // sessions are refused, with the route named, until the file has it.
+    models.check_profiles(&profiles.list(None));
     Ok(Prepared {
         id,
         token,

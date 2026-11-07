@@ -36,4 +36,5 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     rebase: None,
     terminal_mcp: None,
     terminal_args: true,
+    model_proxy: None,
 };

@@ -273,9 +273,23 @@ impl NodeService {
             self.agents.forget(id);
             return Err(wire(&error));
         }
+        // A routed profile's harness calls the node's proxy with a token of
+        // the session's own (ADR 0015).
+        match self.models.launch(options.profile.as_ref(), id) {
+            Ok(Some((model, proxy))) => {
+                options.model = Some(model);
+                options.model_proxy = Some(proxy);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.agents.forget(id);
+                return Err(wire(&error));
+            }
+        }
         let created = self.sessions.create(spec, options).await;
         if created.is_err() {
             self.agents.forget(id);
+            self.models.retire(id);
         }
         created.map_err(|error| wire(&error))
     }
@@ -456,6 +470,7 @@ impl NodeService {
             // either file that cannot be used leaves its own in effect.
             let reloaded = profiles.reload().map_err(ServiceError::Profiles)?;
             models.reload().map_err(ServiceError::Models)?;
+            models.check_profiles(&reloaded);
             Ok(reloaded)
         })
         .await
@@ -476,12 +491,16 @@ impl NodeService {
         let launcher = &self.launcher;
         let lookup = &self.lookup;
         let agents = &self.agents;
+        let models = &self.models;
         let moved = self
             .sessions
             .move_profile(id, async |info: &SessionInfo| {
                 let mut plan = moving::plan(profiles, launcher, lookup, info, &request).await?;
                 // The restarted agent's `vessel mcp` gets a credential of
-                // its own (`agents`, Decision Log).
+                // its own (`agents`, Decision Log), and a routed session's
+                // agent a model token of its own, on the same route.
+                let route = info.model.as_ref().map(|model| &model.route);
+                plan.model_proxy = models.begin_move(id, route, &plan.profile)?;
                 if let Some(secret) = agents.begin_move(id)? {
                     launcher.attach_tools(&mut plan.mcp_servers, id, &secret)?;
                 }
@@ -489,6 +508,7 @@ impl NodeService {
             })
             .await;
         self.agents.end_move(id, moved.is_ok());
+        self.models.end_move(id, moved.is_ok());
         moved.map_err(|error| wire(&error))
     }
 

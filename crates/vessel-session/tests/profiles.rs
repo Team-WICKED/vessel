@@ -176,6 +176,7 @@ mod support {
                 mcp_servers: ResolvedMcpServers::new(),
                 notices: Vec::new(),
                 force,
+                model_proxy: None,
             }
         }
     }
@@ -709,6 +710,8 @@ async fn structured_sessions_get_the_profile_and_servers_over_acp() {
                 route: "qwen-coder".parse().unwrap(),
                 model: vessel_proto::ModelId::new("qwen/qwen3-coder"),
             }),
+            // Recorded only: `alt` has no route, so no proxy.
+            model_proxy: None,
         };
         let created = fixture
             .create(structured(None), options.clone())
