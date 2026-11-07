@@ -477,3 +477,26 @@ address (a list, a port, brackets or a repeated header are answered
 `400`), a request without it counted as the proxy, and no start with the
 header and no trusted proxy. The parsing is one implementation,
 `vessel_relay::address::ClientAddress`, used by both.
+
+## Amendment (2026-11-07): closing without a reset
+
+A Windows CI run lost a relay's `4413`: the client had sent a message over
+one record, the relay read only its frame header, sent its close and
+dropped the socket. A socket dropped with bytes it has not read is reset,
+not closed, and on Windows the reset throws away what is still in flight
+to the peer, the close frame among it, so the client never learned why.
+Any close with a code could meet the same end (a client still sending
+while refused as full, a node's `4401` with records pipelined behind a
+bad handshake).
+
+- The relay lets every socket it accepted linger: its write side is shut
+  (a FIN behind the close frame), and what the peer still sends is read
+  and discarded until the peer closes, for at most 1 s, or until the relay
+  stops. The socket keeps its place meanwhile, so lingering counts against
+  the per-address and unauthenticated limits like any open socket, and a
+  peer that keeps sending is dropped after that second.
+- A node's carriers do the same at the websocket level when they close
+  with a code (`NodeCarrier::close_with`, `4401`): the close, then reading
+  until the peer's close or end, all within the existing 1 s.
+- Draining bytes rather than websocket messages on the relay: after a
+  frame over the limit the stream cannot be parsed any further.

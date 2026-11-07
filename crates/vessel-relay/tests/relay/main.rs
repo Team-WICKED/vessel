@@ -41,7 +41,7 @@ use vessel_relay::{
 use vessel_secure::{NodeKeypair, SecureError, initiate, routing_id};
 
 use crate::support::{
-    EchoNode, Forwarder, RawNode, Relay, channel, close_code, connect_url, raw, raw_from,
+    EchoNode, Forwarder, RawNode, Relay, channel, close_code, closed, connect_url, raw, raw_from,
     receive_json, send_json, tls, token, within,
 };
 
@@ -357,19 +357,57 @@ async fn a_message_over_one_record_closes_with_4413() {
     let relay = Relay::start().await;
     let keypair = NodeKeypair::generate().unwrap();
     let mut node = RawNode::register(&relay.url, &keypair).await;
-    let mut client = raw(&connect_url(&relay.url, &routing_id(keypair.public()))).await;
+    let client = raw(&connect_url(&relay.url, &routing_id(keypair.public()))).await;
     let conn = node.incoming().await;
     let mut accepted = node.accept(conn).await;
-    client
-        .send(Message::Binary(Bytes::from(vec![0; 65_536])))
-        .await
-        .unwrap();
-    assert_eq!(
-        close_code(&mut client).await,
-        Some(RelayClose::TooLarge.code())
-    );
+    // Far more than one record, still being sent while the relay closes:
+    // the relay reads the frame's header only, so megabytes it never reads
+    // are left behind. Dropped like that, a socket is reset (on Windows the
+    // close frame in flight goes with it); the relay must end with a FIN,
+    // so the client reads 4413 on every platform.
+    let (mut sink, mut stream) = client.split();
+    let sending = sink.send(Message::Binary(Bytes::from(vec![0; 4 * 1024 * 1024])));
+    let (sent, (code, end)) = tokio::join!(sending, closed(&mut stream));
+    assert_eq!(code, Some(RelayClose::TooLarge.code()));
+    // A reset shows on whichever half meets it first.
+    assert!(sent.is_ok(), "the relay reset the connection: {sent:?}");
+    assert_eq!(end, Ok(()), "the relay reset the connection");
     // The node's side is closed too, without the relay's code.
     assert_eq!(close_code(&mut accepted).await, None);
+}
+
+#[tokio::test]
+async fn a_client_sending_while_the_relay_refuses_it_reads_why() {
+    let mut limits = Limits::default();
+    limits.max_clients = 1;
+    let relay = Relay::with_limits(limits).await;
+    let keypair = NodeKeypair::generate().unwrap();
+    let _node = RawNode::register(&relay.url, &keypair).await;
+    let url = connect_url(&relay.url, &routing_id(keypair.public()));
+    // The one client place, waiting for a node that never accepts.
+    let _waiting = raw(&url).await;
+    // The next client streams records from the start; the relay refuses
+    // it as full without reading any of them.
+    let (mut sink, mut stream) = raw(&url).await.split();
+    let sending = async {
+        let record = Bytes::from(vec![0; 60 * 1024]);
+        for _ in 0..256 {
+            if let Err(error) = sink.send(Message::Binary(record.clone())).await {
+                // Refusing to send after the close is the client's own
+                // doing; an I/O error is the connection reset.
+                return if let tokio_tungstenite::tungstenite::Error::Io(io) = error {
+                    Err(io.to_string())
+                } else {
+                    Ok(())
+                };
+            }
+        }
+        Ok(())
+    };
+    let (sent, (code, end)) = tokio::join!(sending, closed(&mut stream));
+    assert_eq!(code, Some(RelayClose::Full.code()));
+    assert_eq!(sent, Ok(()), "the relay reset the connection");
+    assert_eq!(end, Ok(()), "the relay reset the connection");
 }
 
 #[tokio::test]

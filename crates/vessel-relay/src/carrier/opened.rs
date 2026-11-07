@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::{Sink, Stream};
+use futures_util::{Sink, Stream, StreamExt as _};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use vessel_proto::NodeClose;
@@ -100,10 +100,12 @@ impl NodeCarrier for WsCarrier {
             code: close.code().into(),
             reason: "".into(),
         };
-        if tokio::time::timeout(CLOSE_TIMEOUT, self.socket.close(Some(frame)))
-            .await
-            .is_err()
-        {
+        let closing = async {
+            let _sent = self.socket.close(Some(frame)).await;
+            // Until the peer's close or the end: `NodeCarrier::close_with`.
+            while let Some(Ok(_unread)) = self.socket.next().await {}
+        };
+        if tokio::time::timeout(CLOSE_TIMEOUT, closing).await.is_err() {
             tracing::debug!(?close, "closing a connection timed out");
         }
     }

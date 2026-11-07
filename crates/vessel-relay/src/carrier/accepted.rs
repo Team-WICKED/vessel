@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use bytes::Bytes;
-use futures_util::{Sink, SinkExt as _, Stream};
+use futures_util::{Sink, SinkExt as _, Stream, StreamExt as _};
 use vessel_proto::NodeClose;
 
 use super::{
@@ -154,6 +154,8 @@ impl NodeCarrier for AxumCarrier {
         let closing = async {
             let _sent = self.socket.send(Message::Close(Some(frame))).await;
             let _closed = self.socket.close().await;
+            // Until the peer's close or the end: `NodeCarrier::close_with`.
+            while let Some(Ok(_unread)) = self.socket.next().await {}
         };
         if tokio::time::timeout(CLOSE_TIMEOUT, closing).await.is_err() {
             tracing::debug!(?close, "closing a connection timed out");

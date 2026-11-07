@@ -276,3 +276,49 @@ async fn a_spliced_client_has_seconds_for_its_first_record() {
         "a client that sent nothing was kept past its first-record deadline"
     );
 }
+
+#[tokio::test]
+async fn a_peer_that_keeps_sending_after_the_close_gives_its_place_back_soon() {
+    let mut limits = limits();
+    limits.max_connections_per_address = 1;
+    let relay = Relay::with_limits(limits).await;
+    // Upgraded by hand to a node that does not exist (closed with 4404),
+    // then junk sent without end, close or no close.
+    let mut stream = within(TcpStream::connect(relay.address)).await.unwrap();
+    let request = format!(
+        "GET {}?node={} HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\r\n",
+        vessel_relay::CONNECT_PATH,
+        vessel_proto::RoutingId::from_bytes([1; 16])
+    );
+    within(stream.write_all(request.as_bytes())).await.unwrap();
+    let flooding = tokio::spawn(async move {
+        let junk = vec![0x82_u8; 64 * 1024];
+        while stream.write_all(&junk).await.is_ok() {}
+    });
+    // Its one place comes back once the relay stops reading it (at most a
+    // second after the close): then this address may connect again.
+    let started = tokio::time::Instant::now();
+    let health = within(async {
+        loop {
+            let mut stream = TcpStream::connect(relay.address).await.unwrap();
+            let _sent = stream
+                .write_all(b"GET /health HTTP/1.1\r\nHost: relay\r\nConnection: close\r\n\r\n")
+                .await;
+            let said = ended(&mut stream, ENDED).await.unwrap_or_default();
+            if said.starts_with("HTTP/1.1 200") {
+                return said;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(health.ends_with("ok"), "{health:?}");
+    assert!(
+        started.elapsed() < ENDED,
+        "held for {:?}",
+        started.elapsed()
+    );
+    flooding.abort();
+}

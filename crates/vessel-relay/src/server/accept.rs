@@ -22,6 +22,11 @@
 //!   trusted proxy's sockets (`--trusted-proxy`) are not counted per
 //!   address here (the proxy's own limits stand in); the handlers count by
 //!   its header.
+//! - Alternatives: a timeout around each connection's whole life (cuts
+//!   long websockets); `hyper-util`'s auto builder (HTTP/2 too, which the
+//!   relay does not serve).
+//! - Cost: HTTP/2 is not served (it never was through a proxy that speaks
+//!   HTTP/1 to the relay, and websockets here are HTTP/1 upgrades).
 //!
 //! [Decision Log] (the security review, round 8)
 //! - Problem: `max_connections` was one pool for everyone, so one host
@@ -43,11 +48,26 @@
 //!   they prove anything).
 //! - Cost: many hosts can still fill the unauthenticated share (a botnet
 //!   is out of scope, README); nodes and clients already in keep working.
-//! - Alternatives: a timeout around each connection's whole life (cuts
-//!   long websockets); `hyper-util`'s auto builder (HTTP/2 too, which the
-//!   relay does not serve).
-//! - Cost: HTTP/2 is not served (it never was through a proxy that speaks
-//!   HTTP/1 to the relay, and websockets here are HTTP/1 upgrades).
+//!
+//! [Decision Log] (closing, 2026-11-07)
+//! - Problem: a socket dropped with bytes it had not read is reset, not
+//!   closed, and on Windows a reset throws away what is still in flight to
+//!   the peer: the close frame with the relay's code. A client that sent a
+//!   message over one record (unread past its header), or that kept
+//!   sending while refused as full, never learned why (a CI flake, and a
+//!   real client's experience).
+//! - Choice: a socket is not dropped at once ([`linger`]): its write side
+//!   is shut (a FIN behind the close frame), and what the peer still sends
+//!   is read and discarded until it closes too, for at most [`LINGER`]
+//!   (1 s), or until the relay stops. Every close goes this way, whatever
+//!   code it carried; one that ended cleanly finds the peer's end at once.
+//!   The socket keeps its place meanwhile, so lingering counts against the
+//!   per-address and unauthenticated limits like any open socket.
+//! - Alternatives: draining at the websocket level after each close (a
+//!   frame over the limit leaves a stream that cannot be parsed further;
+//!   bytes can still be read); `SO_LINGER` (a timeout on the close, not a
+//!   drain: unread data still resets).
+//! - Cost: a closed socket may hold its place up to a second longer.
 
 use std::io;
 use std::net::IpAddr;
@@ -62,7 +82,7 @@ use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -112,8 +132,7 @@ pub(super) async fn run(
         let _nodelay = stream.set_nodelay(true);
         let authenticated = Authenticated(Arc::clone(&place.0));
         let io = Counted {
-            stream,
-            _place: place,
+            socket: Some((stream, place)),
         };
         let service = TowerToHyperService::new(app.clone().map_request(
             move |mut request: hyper::Request<Incoming>| {
@@ -256,11 +275,56 @@ impl Authenticated {
     }
 }
 
+/// How long a closed socket is read before it is dropped ([`linger`]).
+const LINGER: Duration = Duration::from_secs(1);
+
 /// A socket holding its place: it travels with the socket through hyper and
-/// a websocket upgrade, so the place is held exactly as long as the socket.
+/// a websocket upgrade, so the place is held exactly as long as the socket,
+/// [`linger`] included.
 struct Counted {
-    stream: TcpStream,
-    _place: ConnectionPlace,
+    /// Taken only when dropped, by [`linger`].
+    socket: Option<(TcpStream, ConnectionPlace)>,
+}
+
+impl Counted {
+    fn stream(&mut self) -> io::Result<&mut TcpStream> {
+        self.socket
+            .as_mut()
+            .map(|(stream, _place)| stream)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotConnected))
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        let Some((stream, place)) = self.socket.take() else {
+            return;
+        };
+        // Outside a runtime (never, here) the socket just drops.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let stopping = place.0.relay.shutdown.clone();
+            drop(runtime.spawn(linger(stream, place, stopping)));
+        }
+    }
+}
+
+/// Close `stream` without a reset: shut its write side (a FIN behind
+/// whatever was sent, a close frame most of all), then read and discard
+/// until the peer closes, at most [`LINGER`] or until the relay stops.
+/// Dropped with unread bytes, a socket is reset, and a reset throws away
+/// on the peer's side what was still in flight (on Windows, before it is
+/// read). `place` is given back only then.
+async fn linger(mut stream: TcpStream, place: ConnectionPlace, stopping: CancellationToken) {
+    let draining = async {
+        let _shut = stream.shutdown().await;
+        let _discarded = tokio::io::copy(&mut stream, &mut tokio::io::sink()).await;
+    };
+    tokio::select! {
+        _drained = tokio::time::timeout(LINGER, draining) => {}
+        () = stopping.cancelled() => {}
+    }
+    drop(stream);
+    drop(place);
 }
 
 impl AsyncRead for Counted {
@@ -269,7 +333,10 @@ impl AsyncRead for Counted {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().stream).poll_read(cx, buf)
+        match self.get_mut().stream() {
+            Ok(stream) => Pin::new(stream).poll_read(cx, buf),
+            Err(error) => Poll::Ready(Err(error)),
+        }
     }
 }
 
@@ -279,7 +346,10 @@ impl AsyncWrite for Counted {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().stream).poll_write(cx, buf)
+        match self.get_mut().stream() {
+            Ok(stream) => Pin::new(stream).poll_write(cx, buf),
+            Err(error) => Poll::Ready(Err(error)),
+        }
     }
 
     fn poll_write_vectored(
@@ -287,19 +357,30 @@ impl AsyncWrite for Counted {
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().stream).poll_write_vectored(cx, bufs)
+        match self.get_mut().stream() {
+            Ok(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
+            Err(error) => Poll::Ready(Err(error)),
+        }
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.stream.is_write_vectored()
+        self.socket
+            .as_ref()
+            .is_some_and(|(stream, _place)| stream.is_write_vectored())
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+        match self.get_mut().stream() {
+            Ok(stream) => Pin::new(stream).poll_flush(cx),
+            Err(error) => Poll::Ready(Err(error)),
+        }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
+        match self.get_mut().stream() {
+            Ok(stream) => Pin::new(stream).poll_shutdown(cx),
+            Err(error) => Poll::Ready(Err(error)),
+        }
     }
 }
 
