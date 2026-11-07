@@ -428,7 +428,8 @@ fn turn_outcome(page: &EventPage, reply: &mut String, next: &mut EventSeq) -> Op
             SessionEvent::Agent { .. }
             | SessionEvent::Status { .. }
             | SessionEvent::Terminal(_)
-            | SessionEvent::ProfileChanged { .. } => {}
+            | SessionEvent::ProfileChanged { .. }
+            | SessionEvent::ModelCall(_) => {}
         }
     }
     None

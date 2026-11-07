@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use vessel_agent::AgentInput;
-use vessel_proto::{EventSeq, SessionId, SessionInfo, SessionInput, TerminalInput};
+use vessel_proto::{EventSeq, ModelCall, SessionId, SessionInfo, SessionInput, TerminalInput};
 use vessel_pty::{PtyInput, WindowSize};
 
 use crate::error::{InputKind, ModeKind, SessionError};
@@ -32,6 +32,9 @@ pub(crate) struct Shared {
     pub(crate) kill: CancellationToken,
     /// Orders for the actor (structured sessions: moves).
     pub(crate) control: Option<mpsc::Sender<Control>>,
+    /// Model calls the node's proxy made for the session, for the actor to
+    /// record (protocol 7). Bounded; see [`SessionHandle::model_call`].
+    pub(crate) model_calls: mpsc::Sender<ModelCall>,
     /// Set just before the final status is published (`Publisher::commit`),
     /// so whoever sees that record finds it set ([`SessionHandle::has_ended`]).
     pub(crate) ended: AtomicBool,
@@ -94,6 +97,21 @@ impl SessionHandle {
     #[must_use]
     pub fn has_ended(&self) -> bool {
         self.0.ended.load(Ordering::Acquire)
+    }
+
+    /// Record one model call the node's proxy made for this session
+    /// (protocol 7): the actor publishes it as a `ModelCall` event, in
+    /// order with the session's other records. Never waits: a call that
+    /// finds the queue full, or the session ended, is dropped with a
+    /// warning, so a slow log never holds up the proxy.
+    pub fn model_call(&self, call: ModelCall) {
+        if self.has_ended() {
+            tracing::debug!(session = %self.id(), "model call after the session ended; not recorded");
+            return;
+        }
+        if let Err(error) = self.0.model_calls.try_send(call) {
+            tracing::warn!(session = %self.id(), %error, "model call not recorded");
+        }
     }
 
     /// A snapshot of the session's info (one clone of the current value).

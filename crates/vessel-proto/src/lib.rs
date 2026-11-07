@@ -20,6 +20,7 @@ mod harness;
 mod id;
 mod key;
 pub mod lsp;
+mod model;
 mod name;
 mod node;
 mod pairing;
@@ -60,8 +61,13 @@ pub use id::{
     RequestId, SessionId, SubscriptionId, ToolCallId, TransferId,
 };
 pub use key::{KeyTextError, NodePublicKey, RoutingId};
+pub use model::{
+    DurationMs, ListModels, ModelApi, ModelCall, ModelFailure, ModelRoute, ModelStop, SessionModel,
+    TokenCount, TokenUsage,
+};
 pub use name::{
-    EnvName, HeaderName, InvalidName, McpServerName, NameKind, ProfileName, SecretName,
+    EnvName, HeaderName, InvalidName, McpServerName, ModelRouteName, NameKind, ProfileName,
+    ProviderName, SecretName,
 };
 pub use node::{
     MIN_PROTOCOL_VERSION, NodeInfo, NodeState, PROTOCOL_VERSION, ProtocolRange, ProtocolVersion,

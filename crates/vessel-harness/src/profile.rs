@@ -15,7 +15,16 @@
 //! env = { CLAUDE_CONFIG_DIR = "~/.claude-alt" }
 //! unset = ["ANTHROPIC_API_KEY"]      # removed from the inherited environment
 //! args = ["--model", "opus"]         # terminal mode only, before the session's own
+//!
+//! [profiles.claude-qwen]
+//! harness = "claude"
+//! model = "qwen-coder"               # a route of `models.toml` (ADR 0015)
 //! ```
+//!
+//! A profile with `model` runs its harness against the node's model proxy,
+//! pinned to the route's models (`routing`); only harnesses that can be
+//! pointed there may have one, and such a profile may not set the
+//! variables the route sets or removes.
 //!
 //! Values may be secrets (an API key in `env`): `Debug` and
 //! [`Profile::info`] show variable names only, and parse errors never quote
@@ -45,9 +54,10 @@ use std::fmt;
 use std::path::Path;
 
 use serde::Deserialize;
-use vessel_proto::{EnvName, HarnessKind, InvalidName, ProfileInfo, ProfileName};
+use vessel_proto::{EnvName, HarnessKind, InvalidName, ModelRouteName, ProfileInfo, ProfileName};
 
 use crate::harnesses::descriptor;
+use crate::routing::{overriding, routed_variables};
 
 /// A harness with environment changes and terminal arguments.
 #[derive(Clone, PartialEq, Eq)]
@@ -58,6 +68,7 @@ pub struct Profile {
     env: BTreeMap<EnvName, String>,
     unset: BTreeSet<EnvName>,
     args: Vec<String>,
+    model: Option<ModelRouteName>,
 }
 
 impl Profile {
@@ -73,6 +84,7 @@ impl Profile {
             env: BTreeMap::new(),
             unset: BTreeSet::new(),
             args: Vec::new(),
+            model: None,
         }
     }
 
@@ -137,6 +149,13 @@ impl Profile {
         &self.args
     }
 
+    /// The model route its sessions are pointed at through the node's
+    /// proxy (ADR 0015), if any.
+    #[must_use]
+    pub const fn model(&self) -> Option<&ModelRouteName> {
+        self.model.as_ref()
+    }
+
     /// What a node reports about it: names, never values.
     #[must_use]
     pub fn info(&self) -> ProfileInfo {
@@ -145,6 +164,7 @@ impl Profile {
             label: self.label.clone(),
             harness: self.harness,
             sets: self.env.keys().cloned().collect(),
+            model: self.model.clone(),
         }
     }
 }
@@ -159,6 +179,7 @@ impl fmt::Debug for Profile {
             .field("sets", &self.env.keys().collect::<Vec<_>>())
             .field("unset", &self.unset)
             .field("args", &self.args)
+            .field("model", &self.model)
             .finish()
     }
 }
@@ -260,6 +281,8 @@ struct RawProfile {
     unset: Vec<String>,
     #[serde(default)]
     args: Vec<String>,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 /// `profiles.toml` could not be read.
@@ -346,6 +369,29 @@ pub enum ProfileProblem {
         /// The harness.
         harness: HarnessKind,
     },
+    /// `model` is not a route name.
+    #[error("`model`: {0}")]
+    InvalidRoute(InvalidName),
+    /// `model` on a profile whose harness cannot be pointed at the node's
+    /// model proxy.
+    #[error("`model`: {harness} cannot use a model route yet (Claude Code and Codex can)")]
+    NotRoutable {
+        /// The harness.
+        harness: HarnessKind,
+    },
+    /// A routed profile sets a variable its route sets or removes.
+    #[error("`env.{name}`: the profile's model route sets this variable")]
+    RoutedVariable {
+        /// The variable.
+        name: EnvName,
+    },
+    /// A routed profile's argument would choose another model, provider or
+    /// configuration profile.
+    #[error("`args`: `{argument}` would take the profile's sessions off its model route")]
+    RoutedArgument {
+        /// The argument.
+        argument: String,
+    },
 }
 
 /// Read `profiles.toml` from its text. `user_home` is what `~/` expands
@@ -400,6 +446,19 @@ fn profile(
     if !raw.args.is_empty() && !descriptor(harness).terminal_args {
         return Err(ProfileProblem::ArgsUnsupported { harness });
     }
+    let model = raw
+        .model
+        .as_deref()
+        .map(str::parse::<ModelRouteName>)
+        .transpose()
+        .map_err(ProfileProblem::InvalidRoute)?;
+    let routed = match model {
+        Some(_) if descriptor(harness).model_proxy.is_none() => {
+            return Err(ProfileProblem::NotRoutable { harness });
+        }
+        Some(_) => routed_variables(harness),
+        None => Vec::new(),
+    };
     let mut set_folded = BTreeSet::new();
     let mut env = BTreeMap::new();
     for (written, value) in raw.env {
@@ -409,6 +468,9 @@ fn profile(
                 key: "env",
                 name: variable,
             });
+        }
+        if routed.iter().any(|name| written.eq_ignore_ascii_case(name)) {
+            return Err(ProfileProblem::RoutedVariable { name: variable });
         }
         let value = expand(&value, home).ok_or_else(|| ProfileProblem::NoHome {
             key: format!("env.{written}"),
@@ -439,6 +501,11 @@ fn profile(
         .ok_or_else(|| ProfileProblem::NoHome {
             key: "args".to_owned(),
         })?;
+    if model.is_some()
+        && let Some(argument) = overriding(harness, &args)
+    {
+        return Err(ProfileProblem::RoutedArgument { argument });
+    }
     Ok(Profile {
         name,
         harness,
@@ -446,6 +513,7 @@ fn profile(
         env,
         unset,
         args,
+        model,
     })
 }
 

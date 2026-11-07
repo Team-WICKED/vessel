@@ -12,10 +12,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::Instrument as _;
 use vessel_agent::{AgentProcess, AgentSetup};
-use vessel_harness::{McpFile, Profile};
+use vessel_harness::{McpFile, ModelProxy, Profile};
 use vessel_proto::{
-    Creator, EventRecord, HarnessSessionId, ModelId, NodeId, ResolvedMcpServers, SessionId,
-    SessionInfo, SessionMode, SessionOrigin, SessionSpec, TerminalSize,
+    Creator, EventRecord, HarnessSessionId, ModelCall, ModelId, NodeId, ResolvedMcpServers,
+    SessionId, SessionInfo, SessionMode, SessionModel, SessionOrigin, SessionSpec, TerminalSize,
 };
 use vessel_pty::{PtyProcess, WindowSize};
 
@@ -101,6 +101,14 @@ pub struct LaunchOptions {
     /// The home a creating call came through (protocol 6), recorded in
     /// `SessionInfo::via`.
     pub via: Option<NodeId>,
+    /// The model route the session's harness is pointed at through the
+    /// node's proxy (protocol 7), recorded in `SessionInfo::model`; `None`
+    /// for a session on its harness's own provider.
+    pub model: Option<SessionModel>,
+    /// Where the harness of a profile with a model route sends its calls,
+    /// with the session's token (ADR 0015); given exactly when `profile`
+    /// has a route, or the launch is refused. Its `Debug` hides the token.
+    pub model_proxy: Option<ModelProxy>,
 }
 
 /// What a session records about its start besides its spec.
@@ -109,8 +117,14 @@ struct Record {
     created_by: Creator,
     origin: Option<SessionOrigin>,
     via: Option<NodeId>,
+    model: Option<SessionModel>,
     notices: Vec<String>,
 }
+
+/// How many model calls may wait for a session's actor to record them; a
+/// call that finds the queue full is dropped with a warning (the proxy is
+/// never held up by the log).
+const MODEL_CALL_CAPACITY: usize = 64;
 
 /// The process-independent parts of a new session.
 struct Parts {
@@ -203,6 +217,8 @@ impl SessionRuntime {
             id,
             origin,
             via,
+            model,
+            model_proxy,
         } = options;
         let id = id.unwrap_or_else(SessionId::random);
         if self.get(id).is_some() {
@@ -213,6 +229,7 @@ impl SessionRuntime {
             created_by,
             origin,
             via,
+            model,
             notices,
         };
         let profile = profile.unwrap_or_else(|| Profile::default_for(spec.harness));
@@ -222,7 +239,8 @@ impl SessionRuntime {
                     servers: mcp_servers,
                     dir: mcp_dir,
                 };
-                self.create_terminal(spec, size, profile, mcp, record).await
+                self.create_terminal(spec, size, (profile, model_proxy), mcp, record)
+                    .await
             }
             SessionMode::Structured { model, resume } => {
                 let start = AgentStart {
@@ -230,7 +248,8 @@ impl SessionRuntime {
                     resume,
                     mcp_servers,
                 };
-                self.create_structured(spec, profile, start, record).await
+                self.create_structured(spec, (profile, model_proxy), start, record)
+                    .await
             }
         }
     }
@@ -239,7 +258,7 @@ impl SessionRuntime {
         &self,
         spec: SessionSpec,
         size: TerminalSize,
-        profile: Profile,
+        (profile, proxy): (Profile, Option<ModelProxy>),
         mcp: TerminalMcp,
         record: Record,
     ) -> Result<Created, SessionError> {
@@ -257,6 +276,7 @@ impl SessionRuntime {
                 &env,
                 &launch_spec,
                 &profile,
+                proxy.as_ref(),
                 &mcp.servers,
                 mcp.dir.as_deref(),
             )?;
@@ -299,7 +319,7 @@ impl SessionRuntime {
     async fn create_structured(
         &self,
         spec: SessionSpec,
-        profile: Profile,
+        (profile, proxy): (Profile, Option<ModelProxy>),
         start: AgentStart,
         record: Record,
     ) -> Result<Created, SessionError> {
@@ -310,8 +330,16 @@ impl SessionRuntime {
         let (command, cwd) = tokio::task::spawn_blocking(move || {
             // Structured sessions get their MCP servers over ACP, not here.
             let none = ResolvedMcpServers::new();
-            let command =
-                vessel_harness::launch(&lookup, &env, &launch_spec, &profile, &none, None)?.command;
+            let command = vessel_harness::launch(
+                &lookup,
+                &env,
+                &launch_spec,
+                &profile,
+                proxy.as_ref(),
+                &none,
+                None,
+            )?
+            .command;
             // ACP needs an explicit directory; the launch defaults it to
             // the home directory, and the node's own is the last resort.
             let cwd = command
@@ -395,6 +423,7 @@ impl SessionRuntime {
             mcp_servers,
             notices,
             force,
+            model_proxy,
         } = request;
         let to = (!profile.is_default()).then(|| profile.name().clone());
         let spec = info.spec.with_profile(profile.name().clone());
@@ -404,8 +433,16 @@ impl SessionRuntime {
         let from = from_home.clone();
         let (command, cwd, files) = tokio::task::spawn_blocking(move || {
             let none = ResolvedMcpServers::new();
-            let command =
-                vessel_harness::launch(&lookup, &env, &spec, &profile, &none, None)?.command;
+            let command = vessel_harness::launch(
+                &lookup,
+                &env,
+                &spec,
+                &profile,
+                model_proxy.as_ref(),
+                &none,
+                None,
+            )?
+            .command;
             let cwd = command
                 .cwd
                 .clone()
@@ -456,18 +493,22 @@ impl SessionRuntime {
             created_by,
             origin,
             via,
+            model,
             notices,
         } = record;
         let mut info = SessionInfo::new(id, spec, Utc::now()).with_creator(created_by);
         info.origin = origin;
         info.via = via;
-        let (info, kill, shared) = self.shared(info, input, control);
+        info.model = model;
+        let (model_calls, recorded) = mpsc::channel(MODEL_CALL_CAPACITY);
+        let (info, kill, shared) = self.shared(info, input, control, model_calls);
         let (durable_sender, durable) = mpsc::channel(self.config.durable_capacity.get());
         Parts {
             life: Lifecycle {
                 out: Publisher::new(Arc::clone(&shared), durable_sender, info),
                 stop: Stopper::new(kill, self.shutdown.clone()),
                 notices,
+                model_calls: recorded,
             },
             shared,
             durable,
@@ -480,6 +521,7 @@ impl SessionRuntime {
         info: SessionInfo,
         input: Input,
         control: Option<mpsc::Sender<Control>>,
+        model_calls: mpsc::Sender<ModelCall>,
     ) -> (watch::Sender<SessionInfo>, CancellationToken, Arc<Shared>) {
         let id = info.id;
         let (info, info_receiver) = watch::channel(info);
@@ -491,6 +533,7 @@ impl SessionRuntime {
             input,
             kill: kill.clone(),
             control,
+            model_calls,
             ended: AtomicBool::new(false),
         });
         (info, kill, shared)

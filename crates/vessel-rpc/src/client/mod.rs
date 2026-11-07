@@ -42,10 +42,11 @@ use vessel_proto::{
     Call, ClientFrame, ClientInfo, CloseTransfer, CopySecret, CreateSession, DeleteSecret, Deliver,
     ExportMemory, ExportSession, ForgetNode, Forward, GetCallback, GetManifest, GetNode,
     GetSession, GrantHome, Hello, ImportMemory, ImportSession, InviteDevice, KillSession,
-    ListDevices, ListHarnesses, ListMembers, ListNodes, ListPeers, ListProfiles, ListSecrets,
-    ListSessions, MoveProfile, Outcome, ProtocolRange, ReadBlob, ReadEvents, ReadTransfer,
-    RelayCall, ReloadProfiles, ReportApplied, Request, RequestId, RevokeDevice, SendInput,
-    ServerFrame, SetSecret, StopNode, Subscribe, Unsubscribe, WatchFleet, Welcome, WireError,
+    ListDevices, ListHarnesses, ListMembers, ListModels, ListNodes, ListPeers, ListProfiles,
+    ListSecrets, ListSessions, MoveProfile, Outcome, ProtocolRange, ReadBlob, ReadEvents,
+    ReadTransfer, RelayCall, ReloadProfiles, ReportApplied, Request, RequestId, RevokeDevice,
+    SendInput, ServerFrame, SetSecret, StopNode, Subscribe, Unsubscribe, WatchFleet, Welcome,
+    WireError,
 };
 
 pub use subscription::{Subscription, SubscriptionItem};
@@ -98,6 +99,8 @@ impl Unary for ExportMemory {}
 impl Unary for ImportMemory {}
 impl Unary for ReadTransfer {}
 impl Unary for CloseTransfer {}
+// Protocol 7.
+impl Unary for ListModels {}
 impl Unary for SetSecret {}
 impl Unary for ListSecrets {}
 impl Unary for DeleteSecret {}

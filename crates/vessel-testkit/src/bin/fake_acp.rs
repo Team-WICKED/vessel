@@ -38,6 +38,9 @@
 //!     the MCP servers of the last `session/new` or `session/load` to that
 //!     file as JSON (`vessel_testkit::write_report`), then one message
 //!     chunk `reported`;
+//!   - `model <text>`: one model call through the node's proxy, as a
+//!     routed session's harness would make it (`vessel_testkit::model`),
+//!     then one message chunk `model <reply>` or `model error: <why>`;
 //!   - `exit`, `garbage`: a message chunk and a permission request, then,
 //!     with both still open, the connection fails: `exit` exits with code
 //!     9, `garbage` writes a line that is not UTF-8 and stays up;
@@ -127,6 +130,11 @@ fn report(prompt: &str, state: &State) -> Option<String> {
                 Err(error) => format!("error: no report: {error}"),
             },
         );
+    }
+    if let Some(text) = prompt.strip_prefix("model ") {
+        // Blocks this fake's one thread for the call; nothing else of the
+        // session runs meanwhile, as in a turn.
+        return Some(vessel_testkit::model::call(text));
     }
     if let Some(name) = prompt.strip_prefix("env ") {
         return Some(match std::env::var_os(name) {

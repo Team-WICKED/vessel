@@ -442,7 +442,7 @@ impl Handler for Fake {
         lsp_incoming_calls: vessel_proto::lsp::IncomingCalls => vessel_proto::lsp::Page<vessel_proto::lsp::Call>;
         lsp_outgoing_calls: vessel_proto::lsp::OutgoingCalls => vessel_proto::lsp::Page<vessel_proto::lsp::Call>;
         lsp_diagnostics: vessel_proto::lsp::Diagnostics => vessel_proto::lsp::Page<vessel_proto::lsp::Diagnostic>;
-
+        list_models: vessel_proto::ListModels => Vec<vessel_proto::ModelRoute>;
     }
 }
 

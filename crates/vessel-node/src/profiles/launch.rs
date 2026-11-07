@@ -214,6 +214,10 @@ impl Launcher {
                 Principal::Delegated { via, .. } => Some(*via),
                 Principal::Owner | Principal::Device { .. } | Principal::Agent { .. } => None,
             },
+            // A routed profile's are the node's to fill in, once the
+            // session's id is known (`Models::launch`).
+            model: None,
+            model_proxy: None,
         })
     }
 

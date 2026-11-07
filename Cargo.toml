@@ -78,6 +78,7 @@ vessel-agent = { path = "crates/vessel-agent" }
 vessel-client = { path = "crates/vessel-client" }
 vessel-fleet = { path = "crates/vessel-fleet" }
 vessel-harness = { path = "crates/vessel-harness" }
+vessel-llm = { path = "crates/vessel-llm" }
 vessel-lsp = { path = "crates/vessel-lsp" }
 vessel-mcp = { path = "crates/vessel-mcp" }
 vessel-node = { path = "crates/vessel-node" }
@@ -152,6 +153,12 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 # ours, no runtime, and on Windows only `winapi-util` beneath it.
 same-file = "1"
 # Safe `tcgetwinsize` for the fake-tui test binary (vessel-testkit only).
+# The model routing proxy's upstream client (vessel-llm, ADR 0015 decision
+# 9): default features off, so no system proxy, no `aws-lc-rs` and no
+# platform TLS; `rustls-no-provider` takes the workspace's own rustls config
+# (`ring`, the operating system's roots) through `use_preconfigured_tls`.
+# HTTP/2 for providers that offer it.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2"] }
 rustix = { version = "1", default-features = false, features = ["std", "termios"] }
 # TLS for `wss://` relays (vessel-relay; plan decision 1): rustls with the
 # `ring` provider chosen explicitly (ADR 0005's amendment: the M1 panic came

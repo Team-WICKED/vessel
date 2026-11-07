@@ -18,6 +18,8 @@ vessel-client.workspace = true
 # Bundling on the home, materialising on members (ADR 0012).
 vessel-fleet.workspace = true
 vessel-harness.workspace = true
+# The model routing proxy's APIs and upstream client (ADR 0015).
+vessel-llm.workspace = true
 vessel-proto.workspace = true
 vessel-lsp.workspace = true
 vessel-relay.workspace = true
@@ -27,6 +29,13 @@ vessel-session.workspace = true
 vessel-store.workspace = true
 
 axum.workspace = true
+# The model proxy's own accept loop (`models::listen`): HTTP/1 with a
+# header-read deadline and a bounded number of connections, which
+# `axum::serve` cannot give (the M5 security review, finding 4). Already
+# in the tree through axum and vessel-relay.
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -47,6 +56,9 @@ serde.workspace = true
 serde_json.workspace = true
 # Invitations are kept by the hash of their secret (ADR 0010).
 sha2.workspace = true
+# Model tokens compared in constant time (ADR 0015); already in the
+# workspace through vessel-store.
+subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
 # `fleet.toml`: typed reading, and `vessel fleet init` writing it with
@@ -57,6 +69,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Moving a device's pairing time back in a home's database (e2e
+# `callback`), so a window is tested without waiting it out.
+rusqlite.workspace = true
 tempfile.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }
 # An agent's `vessel` tools driven across a fleet (e2e `across`). Not a
@@ -65,8 +80,9 @@ vessel-mcp.workspace = true
 # A relay client that says, through a trusted proxy's header, which
 # address it comes from (e2e `crowd`); already built for vessel-relay.
 tokio-tungstenite.workspace = true
-# The misbehaving relay (feature `relay`) for the secure e2e tests.
-vessel-testkit = { workspace = true, features = ["relay"] }
+# The misbehaving relay (feature `relay`) for the secure e2e tests, and
+# the fake model provider (feature `upstream`) for the model proxy's.
+vessel-testkit = { workspace = true, features = ["relay", "upstream"] }
 
 [lints]
 workspace = true

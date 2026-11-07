@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::agent::{ContentBlock, PermissionOutcome};
 use crate::harness::HarnessKind;
 use crate::id::{DeviceId, EventSeq, HarnessSessionId, ModelId, NodeId, PermissionId, SessionId};
+use crate::model::SessionModel;
 use crate::name::ProfileName;
 use crate::profile::Creator;
 use crate::terminal::{TerminalInput, TerminalSize};
@@ -172,6 +173,11 @@ pub struct SessionInfo {
     /// Where it came from, when not from this node (protocol 6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
+    /// The model route it was launched with, and the provider's model its
+    /// harness is pinned to (protocol 7). Absent for a session on its
+    /// harness's own provider, and from older nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<SessionModel>,
 }
 
 /// Where a session came from, when another node of the fleet had a hand in
@@ -227,6 +233,7 @@ impl SessionInfo {
             harness_session: None,
             via: None,
             origin: None,
+            model: None,
         }
     }
 

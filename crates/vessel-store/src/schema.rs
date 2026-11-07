@@ -87,9 +87,19 @@ ALTER TABLE sessions ADD COLUMN via TEXT;
 ALTER TABLE sessions ADD COLUMN origin TEXT;
 ";
 
+/// Version 5 (milestone 5, protocol 7): the model route a session was
+/// launched with.
+///
+/// - `model` is a `SessionModel` as JSON (`{ route, model }`); `NULL` for a
+///   session on its harness's own provider, and for every session stored
+///   before this version, which read as `None`.
+const V5: &str = "
+ALTER TABLE sessions ADD COLUMN model TEXT;
+";
+
 /// Every migration, oldest first. Index `n` takes the schema from version
 /// `n` to `n + 1`.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
 
 /// Bring the database to the newest schema.
 pub(crate) fn migrate(connection: &mut Connection) -> Result<(), StoreError> {

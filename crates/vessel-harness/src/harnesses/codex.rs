@@ -1,7 +1,8 @@
 //! The `OpenAI` Codex CLI (`codex`).
 //!
-//! Structured mode goes through Zed's ACP adapter, `codex-acp`, which embeds
-//! Codex and reads the same `~/.codex` configuration. The Codex CLI itself
+//! Structured mode goes through the ACP project's adapter, `codex-acp` (npm
+//! `@agentclientprotocol/codex-acp`), which embeds Codex and reads the same
+//! `~/.codex` configuration. The Codex CLI itself
 //! speaks its own app-server protocol, not ACP (ADR 0003 explains why Vessel
 //! does not implement per-harness protocols).
 //!
@@ -33,6 +34,7 @@ use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, McpError, TerminalMcp};
 use crate::memory::MemoryFilesError;
+use crate::routing::{ModelProxy, Routed, Routing};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -40,7 +42,12 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     profile: "codex",
     structured: Structured::Adapter {
         binary: "codex-acp",
-        install: "npm install -g @zed-industries/codex-acp",
+        // Checked 2026-11-07 with `npm view`: the adapter moved from
+        // `@zed-industries/codex-acp` (deprecated, "replaced by
+        // @agentclientprotocol/codex-acp") to this package. Both install
+        // the same `codex-acp` binary, so an existing install of the old
+        // one is still found.
+        install: "npm install -g @agentclientprotocol/codex-acp",
     },
     home: Home {
         variable: Some("CODEX_HOME"),
@@ -59,6 +66,10 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     rebase: None,
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
+    model_proxy: Some(Routing {
+        render: model_proxy,
+        overriding: off_route,
+    }),
 };
 
 /// `memories/`: Codex's memory has no project in its path, so only all of
@@ -211,6 +222,95 @@ fn terminal_mcp(servers: &ResolvedMcpServers) -> Result<TerminalMcp, McpError> {
     }
     mcp.env = env.values.into_values().collect();
     Ok(mcp)
+}
+
+/// The variable holding a routed session's token in Codex's environment
+/// (its provider's `env_key`). Ending in `_SECRET`, Codex's default policy
+/// for the commands it runs leaves it out of theirs.
+const MODEL_SECRET: &str = "VESSEL_MODEL_SECRET";
+
+/// A routed session (ADR 0015): a custom model provider, `vessel`, in `-c`
+/// overrides (nothing is written to the home), speaking the Responses API
+/// at the proxy's `/v1`, its key read from [`MODEL_SECRET`]; the session
+/// uses it and the route's model. Codex files a thread under its provider,
+/// so a routed session's threads stay with `vessel`: resumed and moved
+/// between routed profiles of the same route, they find it again.
+/// `codex-acp` takes the same `-c` overrides, so structured sessions are
+/// routed alike.
+fn model_proxy(proxy: &ModelProxy) -> Routed {
+    let mut provider = InlineTable::new();
+    let _old = provider.insert("name", Value::from("Vessel"));
+    let _old = provider.insert(
+        "base_url",
+        Value::from(format!("{}/v1", proxy.base_url).as_str()),
+    );
+    let _old = provider.insert("wire_api", Value::from("responses"));
+    let _old = provider.insert("env_key", Value::from(MODEL_SECRET));
+    Routed {
+        env: vec![(MODEL_SECRET, proxy.token.clone())],
+        unset: &[],
+        args: vec![
+            "-c".to_owned(),
+            format!("model_provider={}", Value::from("vessel")),
+            "-c".to_owned(),
+            format!("model_providers.vessel={}", Value::InlineTable(provider)),
+            "-c".to_owned(),
+            format!("model={}", Value::from(proxy.model.as_str())),
+        ],
+    }
+}
+
+/// Configuration keys whose first segment decides a session's model or
+/// provider (`-c <key>=<value>`).
+const ROUTING_KEYS: &[&str] = &[
+    "model",
+    "model_provider",
+    "model_providers",
+    "profile",
+    "profiles",
+    "oss_provider",
+];
+
+/// Flags that choose a model, a provider or a configuration profile; with
+/// a value (`-m x`, `--model=x`, `-mx`) or without (`--oss`).
+const ROUTING_FLAGS: &[&str] = &["--model", "--oss", "--local-provider", "--profile"];
+
+/// The first argument that would take a routed Codex session off its
+/// route (see `routing`'s second Decision Log), up to a `--`.
+fn off_route(args: &[String]) -> Option<String> {
+    let mut args = args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        let setting = match arg.as_str() {
+            "-c" | "--config" => args.next().map(String::as_str),
+            _ => arg
+                .strip_prefix("--config=")
+                .or_else(|| arg.strip_prefix("-c").filter(|_| !arg.starts_with("--"))),
+        };
+        if let Some(setting) = setting {
+            if routing_key(setting) {
+                return Some(arg.clone());
+            }
+            continue;
+        }
+        let flag = arg
+            .split_once('=')
+            .map_or(arg.as_str(), |(flag, _value)| flag);
+        let short = !arg.starts_with("--") && (arg.starts_with("-m") || arg.starts_with("-p"));
+        if ROUTING_FLAGS.contains(&flag) || short {
+            return Some(arg.clone());
+        }
+    }
+    None
+}
+
+/// Whether `-c` `setting` (`key=value`, the key dotted) sets one of
+/// [`ROUTING_KEYS`], however its first segment is quoted or spaced.
+fn routing_key(setting: &str) -> bool {
+    let setting = setting.strip_prefix('=').unwrap_or(setting);
+    let key = setting.split_once('=').map_or(setting, |(key, _value)| key);
+    let first = key.split('.').next().unwrap_or_default();
+    let first = first.trim().trim_matches(['"', '\'']).trim();
+    ROUTING_KEYS.contains(&first)
 }
 
 /// `VESSEL_MCP_<server>_<header>_SECRET`: indexes, since server and header

@@ -37,6 +37,7 @@ use vessel_store::Store;
 
 use crate::agents::Agents;
 use crate::error::ServiceError;
+use crate::models::Models;
 use crate::persist::{self, Durability, Persisted};
 
 /// Where a session was found.
@@ -65,6 +66,8 @@ pub(crate) struct Sessions {
     tasks: TaskTracker,
     /// Sessions' agents: a session's credential is retired when it ends.
     agents: Arc<Agents>,
+    /// Model routes: a session's model token is retired when it ends.
+    models: Arc<Models>,
 }
 
 impl Sessions {
@@ -73,6 +76,7 @@ impl Sessions {
         store: Store,
         tasks: TaskTracker,
         agents: Arc<Agents>,
+        models: Arc<Models>,
     ) -> Self {
         Self {
             runtime,
@@ -80,6 +84,7 @@ impl Sessions {
             durability: RwLock::new(HashMap::new()),
             tasks,
             agents,
+            models,
         }
     }
 
@@ -112,12 +117,16 @@ impl Sessions {
         let Created { handle, durable } = self.runtime.create_with(spec, options).await?;
         let id = handle.id();
         self.agents.started(id, handle.clone());
-        // The agent's credential dies with the session (ADR 0013).
+        self.models.started(id, handle.clone());
+        // The agent's credential dies with the session (ADR 0013), and so
+        // does its model token (ADR 0015).
         let ending = handle.clone();
         let agents = Arc::clone(&self.agents);
+        let models = Arc::clone(&self.models);
         drop(self.tasks.spawn(async move {
             let _final = ending.ended().await;
             agents.retire(id);
+            models.retire(id);
         }));
         // Visible from here on (see the module docs). Readers that need the
         // log wait on the watch until persistence starts below.

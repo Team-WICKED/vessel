@@ -7,7 +7,7 @@
 use std::num::NonZeroUsize;
 
 use vessel_proto::{
-    ErrorCode, EventSeq, HarnessKind, ModelId, SessionEvent, SessionInput, SessionMode,
+    ErrorCode, EventSeq, HarnessKind, ModelCall, ModelId, SessionEvent, SessionInput, SessionMode,
     SessionSpec, SessionStatus, TerminalInput, TerminalSize,
 };
 use vessel_session::{
@@ -230,7 +230,8 @@ mod support {
                 SessionEvent::Status { status } => status.clone(),
                 other @ (SessionEvent::Terminal(_)
                 | SessionEvent::Agent { .. }
-                | SessionEvent::ProfileChanged { .. }) => {
+                | SessionEvent::ProfileChanged { .. }
+                | SessionEvent::ModelCall(_)) => {
                     panic!("last record is not a status: {other:?}")
                 }
             }
@@ -309,6 +310,53 @@ async fn kill_stops_the_session_with_no_exit_code() {
         let status = follower.until_end().await;
         assert!(killed(&status), "{status:?}");
         assert_eq!(stored.await.unwrap(), follower.records);
+    })
+    .await;
+}
+
+/// The node's proxy hands a session its model calls (protocol 7): each is a
+/// record in the log, in order with the rest, in a terminal session as in a
+/// structured one; once the session has ended, one more is dropped.
+#[tokio::test]
+async fn model_calls_are_recorded_in_the_log() {
+    within(async {
+        let fixture = Fixture::new(DEFAULT_RING_CAPACITY, DEFAULT_DURABLE_CAPACITY);
+        let created = fixture
+            .runtime
+            .create(support::terminal(HarnessKind::ClaudeCode))
+            .await
+            .unwrap();
+        let stored = collect(created.durable);
+        let handle = created.handle;
+        let mut follower = Follower::new(&handle, EventSeq::ZERO);
+        follower.until_text("ready").await;
+
+        let call: ModelCall = serde_json::from_str(
+            r#"{"route":"qwen-coder","model":"qwen/qwen3-coder","api":"openai_chat_completions",
+                "usage":{"input":72,"output":50},"stop":"end_turn","duration_ms":900}"#,
+        )
+        .unwrap();
+        handle.model_call(call.clone());
+        handle.send(keys("exit 0\r")).await.unwrap();
+        let _status = follower.until_end().await;
+        handle.model_call(call.clone());
+
+        let stored = stored.await.unwrap();
+        let calls: Vec<&ModelCall> = stored
+            .iter()
+            .filter_map(|record| {
+                if let SessionEvent::ModelCall(call) = &record.event {
+                    Some(call)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(calls, [&call]);
+        assert!(matches!(
+            stored.last().map(|record| &record.event),
+            Some(SessionEvent::Status { .. })
+        ));
     })
     .await;
 }

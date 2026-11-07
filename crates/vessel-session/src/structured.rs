@@ -74,11 +74,15 @@ impl StructuredActor {
                     Some(Control::Move(order)) => self.move_profile(order).await,
                     None => control_open = false,
                 },
+                Some(call) = self.life.model_calls.recv() => {
+                    self.life.publish(&mut self.agent, SessionEvent::ModelCall(call)).await;
+                }
             }
         };
         if self.outputs_open {
             self.drain().await;
         }
+        self.life.drain_model_calls(&mut self.agent).await;
 
         let status = if self.life.stop.interrupted() {
             SessionStatus::Interrupted

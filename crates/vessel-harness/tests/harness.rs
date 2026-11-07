@@ -59,6 +59,7 @@ fn launch(lookup: &Lookup, spec: &SessionSpec) -> Result<CommandSpec, HarnessErr
         &env,
         spec,
         &profile,
+        None,
         &ResolvedMcpServers::new(),
         None,
     )?;

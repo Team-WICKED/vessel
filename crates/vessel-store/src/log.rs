@@ -33,8 +33,8 @@ pub(crate) fn create_session(
         .prepare_cached(
             "INSERT INTO sessions
                  (id, spec, status, live, created_at, ended_at, next_seq, first_seq,
-                  retained_bytes, harness_session, profile, created_by, via, origin)
-             VALUES (?1, ?2, ?3, 1, ?4, NULL, 0, 0, 0, NULL, ?5, ?6, ?7, ?8)
+                  retained_bytes, harness_session, profile, created_by, via, origin, model)
+             VALUES (?1, ?2, ?3, 1, ?4, NULL, 0, 0, 0, NULL, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (id) DO NOTHING",
         )?
         .execute(params![
@@ -46,6 +46,7 @@ pub(crate) fn create_session(
             encode(&info.created_by)?,
             info.via.map(|node| node.to_string()),
             info.origin.as_ref().map(encode).transpose()?,
+            info.model.as_ref().map(encode).transpose()?,
         ])?;
     if inserted == 0 {
         return Err(StoreError::SessionExists(info.id));
@@ -98,7 +99,8 @@ impl Projection {
             SessionEvent::ProfileChanged { to, .. } => {
                 self.profile = ProfileMove::To(to.clone());
             }
-            SessionEvent::Agent { .. } | SessionEvent::Terminal(_) => {}
+            SessionEvent::Agent { .. } | SessionEvent::Terminal(_) | SessionEvent::ModelCall(_) => {
+            }
         }
     }
 }

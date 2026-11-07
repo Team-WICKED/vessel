@@ -93,6 +93,7 @@ impl SessionError {
                 HarnessError::NoSuchDirectory { .. }
                 | HarnessError::RelativeDirectory { .. }
                 | HarnessError::ProfileMismatch { .. }
+                | HarnessError::RoutedArgument { .. }
                 | HarnessError::Mcp(_),
             )
             | Self::NoWorkingDirectory
@@ -116,7 +117,9 @@ impl SessionError {
             | Self::Launch(
                 HarnessError::McpFile(_)
                 | HarnessError::ProfileNotRequested { .. }
-                | HarnessError::NoMcpDirectory,
+                | HarnessError::NoMcpDirectory
+                // The node pairs a routed profile with its proxy.
+                | HarnessError::Unrouted { .. },
             ) => ErrorCode::Internal,
         }
     }

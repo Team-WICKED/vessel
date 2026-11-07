@@ -31,6 +31,7 @@ use crate::forward::{
     ListNodes, ListPeers, NodeForgotten, RelayCall,
 };
 use crate::harness::Harness;
+use crate::model::{ListModels, ModelRoute};
 use crate::name::SecretName;
 use crate::node::{NodeInfo, ProtocolVersion};
 use crate::profile::{ListProfiles, MoveProfile, ProfileInfo, ReloadProfiles};
@@ -339,7 +340,8 @@ rpc_methods! {
     LspOutgoingCalls / lsp_outgoing_calls / "lsp.outgoing_calls" [Read, 7]: crate::lsp::OutgoingCalls => crate::lsp::Page<crate::lsp::Call>;
     /// Saved-file diagnostics (protocol 7).
     LspDiagnostics / lsp_diagnostics / "lsp.diagnostics" [Read, 7]: crate::lsp::Diagnostics => crate::lsp::Page<crate::lsp::Diagnostic>;
-
+    /// The model routes this node offers (protocol 7).
+    ListModels / list_models / "model.list" [Read, 7]: ListModels => Vec<ModelRoute>;
 }
 
 impl Call {
@@ -410,7 +412,8 @@ impl Call {
             | Self::LspIncomingCalls(_)
             | Self::LspOutgoingCalls(_)
             | Self::LspDiagnostics(_)
-            | Self::CopySecret(_) => None,
+            | Self::CopySecret(_)
+            | Self::ListModels(_) => None,
         };
         fields.map_or(method, |since| method.max(ProtocolVersion::new(since)))
     }

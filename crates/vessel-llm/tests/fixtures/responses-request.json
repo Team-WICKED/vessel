@@ -1,0 +1,44 @@
+{
+  "model": "gpt-5-codex",
+  "instructions": "You are Codex, a coding agent.",
+  "input": [
+    { "type": "message", "role": "developer", "content": [ { "type": "input_text", "text": "Sandbox: workspace-write." } ] },
+    { "type": "message", "role": "user", "content": [ { "type": "input_text", "text": "List the files." }, { "type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=" } ] },
+    { "role": "user", "content": "A message without its type." },
+    {
+      "type": "reasoning",
+      "summary": [ { "type": "summary_text", "text": "Planning the listing." } ],
+      "encrypted_content": "gAAAAABexampleOpaqueReasoning"
+    },
+    { "type": "message", "role": "assistant", "content": [ { "type": "output_text", "text": "Listing the files." } ] },
+    { "type": "function_call", "name": "shell", "arguments": "{\"command\":[\"ls\"]}", "call_id": "call_abc" },
+    { "type": "function_call_output", "call_id": "call_abc", "output": "a.txt\nb.txt\n" },
+    { "type": "custom_tool_call", "status": "completed", "call_id": "call_def", "name": "apply_patch", "input": "*** Begin Patch\n*** End Patch\n" },
+    { "type": "custom_tool_call_output", "call_id": "call_def", "output": "Done." },
+    { "type": "ghost_snapshot", "ghost_commit": { "id": "0000000" } }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "shell",
+      "description": "Runs a command.",
+      "strict": false,
+      "parameters": { "type": "object", "properties": { "command": { "type": "array", "items": { "type": "string" } } }, "required": ["command"] }
+    },
+    {
+      "type": "custom",
+      "name": "apply_patch",
+      "description": "Edit files with a patch.",
+      "format": { "type": "grammar", "syntax": "lark", "definition": "start: begin_patch hunk+ end_patch" }
+    },
+    { "type": "web_search" }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": false,
+  "reasoning": { "effort": "medium", "summary": "auto" },
+  "store": false,
+  "stream": true,
+  "include": [ "reasoning.encrypted_content" ],
+  "prompt_cache_key": "00000000-0000-4000-8000-000000000000",
+  "text": { "verbosity": "low" }
+}

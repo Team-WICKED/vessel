@@ -17,10 +17,15 @@
 //! - `fake-tool`: an installer or service manager that only logs its calls
 //!   and answers "is it enabled" from that log (`vessel init` tests). See
 //!   `src/bin/fake_tool.rs`.
+//! - `fake-provider`: an OpenAI-compatible model provider on loopback for
+//!   the model routing smoke's `--fake` run (milestone 5). See
+//!   `src/bin/fake_provider.rs`.
 //!
 //! Both harness fakes answer `report <path>` by writing their arguments,
 //! environment and (ACP) MCP servers to that file ([`write_report`]), so a
-//! test sees values without them entering the session's log.
+//! test sees values without them entering the session's log, and `model
+//! <text>` by making one model call where a routed session's harness is
+//! pointed ([`model::call`], milestone 5).
 //!
 //! [`rust_toolchain`] lays out a stand-in Rust toolchain for `fake-lsp`
 //! tests of the Rust language server's launch (milestone 6).
@@ -32,6 +37,10 @@
 //! With the `relay` feature, [`relay::MisbehavingRelay`] is a relay that
 //! drops, replays, reorders, corrupts or delays messages on command
 //! (milestone 3).
+//!
+//! With the `upstream` feature, [`upstream::FakeUpstream`] is a model
+//! provider on loopback that answers with scripted streams, error statuses,
+//! drops, silences and hangs, and records what it was asked (milestone 5).
 //!
 //! This crate is a dev-dependency only; nothing in `vesseld` links it.
 //!
@@ -80,9 +89,12 @@ use std::time::Duration;
 
 use tokio::time::error::Elapsed;
 
+pub mod model;
 #[cfg(feature = "relay")]
 pub mod relay;
 mod report;
+#[cfg(feature = "upstream")]
+pub mod upstream;
 mod vesseld;
 
 pub use report::write_report;

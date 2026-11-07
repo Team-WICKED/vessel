@@ -405,6 +405,9 @@ async fn run_here(
         Call::ListSecrets(request) => {
             Reply::ListSecrets(guard.list_secrets(connection, request).await?)
         }
+        Call::ListModels(request) => {
+            Reply::ListModels(guard.list_models(connection, request).await?)
+        }
         Call::StopNode(_)
         | Call::InviteDevice(_)
         | Call::ListDevices(_)

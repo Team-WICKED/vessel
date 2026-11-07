@@ -166,7 +166,8 @@ fn the_forwardable_set_is_pinned() {
             "lsp.type_definition",
             "lsp.incoming_calls",
             "lsp.outgoing_calls",
-            "lsp.diagnostics"
+            "lsp.diagnostics",
+            "model.list"
         ]
     );
 }
@@ -301,6 +302,46 @@ fn older_connections_get_stand_ins_at_the_same_position() {
     );
     let text = serde_json::to_string(&downgraded).unwrap();
     assert!(!text.contains("profile_changed"), "{text}");
+}
+
+/// Protocol 7's model call: a protocol 6 client gets a line with the
+/// model and the token counts in its place, or the failure's class; never
+/// anything else of the call.
+#[test]
+fn a_model_call_reaches_older_clients_as_a_line() {
+    let call: crate::model::ModelCall = serde_json::from_str(
+        r#"{"route":"qwen-coder","model":"qwen/qwen3-coder","api":"openai_chat_completions",
+            "usage":{"input":72,"cache_read":128,"output":50},"stop":"tool_use","duration_ms":900}"#,
+    )
+    .unwrap();
+    let event = SessionEvent::ModelCall(call.clone());
+    assert_eq!(event.for_protocol(ProtocolVersion::new(7)), None);
+    assert_eq!(
+        event.for_protocol(V6),
+        Some(SessionEvent::Agent {
+            event: AgentEvent::HarnessLog {
+                line: "vessel: model call to qwen/qwen3-coder: 200 in, 50 out".to_owned()
+            }
+        })
+    );
+    let failed = SessionEvent::ModelCall(crate::model::ModelCall {
+        stop: crate::model::ModelStop::Error,
+        failure: Some(crate::model::ModelFailure::ContextTooLong),
+        ..call
+    });
+    assert_eq!(
+        failed.for_protocol(V4),
+        Some(SessionEvent::Agent {
+            event: AgentEvent::HarnessLog {
+                line: "vessel: model call to qwen/qwen3-coder failed (context_too_long)".to_owned()
+            }
+        })
+    );
+    let text = serde_json::to_string(&failed).unwrap();
+    assert!(
+        text.starts_with(r#"{"type":"model_call","route":"qwen-coder""#),
+        "{text}"
+    );
 }
 
 fn record_status() -> EventRecord {
