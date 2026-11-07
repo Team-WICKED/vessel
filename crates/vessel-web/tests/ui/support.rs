@@ -365,18 +365,25 @@ async fn pipe(mut inbound: TcpStream, upstream: SocketAddr, cut: CancellationTok
 
 /// The nodes the tests' UI offers: names to websocket addresses and
 /// tokens, with every dial counted.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Source {
-    nodes: Vec<(String, NodeUrl, BearerToken)>,
+    nodes: Arc<Mutex<Vec<(String, NodeUrl, BearerToken)>>>,
     dials: Arc<AtomicUsize>,
 }
 
 impl Source {
     /// Offer the node at `address` as `name`.
-    pub(crate) fn with(mut self, name: &str, address: SocketAddr, token: BearerToken) -> Self {
+    pub(crate) fn with(self, name: &str, address: SocketAddr, token: BearerToken) -> Self {
         let url = address.to_string().parse().unwrap();
-        self.nodes.push((name.to_owned(), url, token));
+        self.nodes
+            .lock()
+            .unwrap()
+            .push((name.to_owned(), url, token));
         self
+    }
+
+    pub(crate) fn remove_all(&self) {
+        self.nodes.lock().unwrap().clear();
     }
 
     /// Counts the dials made through this source.
@@ -397,6 +404,8 @@ impl NodeSource for Source {
     async fn nodes(&self) -> Result<Vec<BookNode>, NoSuchNode> {
         Ok(self
             .nodes
+            .lock()
+            .unwrap()
             .iter()
             .map(|(name, url, _token)| BookNode {
                 key: NodeKey::new(name.clone()),
@@ -410,8 +419,8 @@ impl NodeSource for Source {
     }
 
     async fn connector(&self, node: &NodeKey) -> Result<Counted, NoSuchNode> {
-        let (_name, url, token) = self
-            .nodes
+        let nodes = self.nodes.lock().unwrap();
+        let (_name, url, token) = nodes
             .iter()
             .find(|(name, _url, _token)| name == node.as_str())
             .ok_or_else(|| NoSuchNode(node.to_string()))?;

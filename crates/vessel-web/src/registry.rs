@@ -23,7 +23,7 @@
 //!   tab looks at the node any more; the UI is a short-lived local
 //!   process, and the fleet overview looks at every node anyway.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -35,7 +35,7 @@ use vessel_client::{Backoff, Connector, NodeClient};
 use vessel_proto::ClientInfo;
 
 use crate::source::NodeSource;
-use crate::wire::{Failure, NodeKey, NodeStatus};
+use crate::wire::{BookNode, Failure, NodeKey, NodeStatus};
 
 /// The most nodes the bridge keeps connections for; a browser naming more
 /// is refused (each entry is a task and, for SSH, a process).
@@ -89,10 +89,19 @@ impl Link {
 /// One node: its link, and its supervisor if one runs.
 #[derive(Debug)]
 pub(crate) struct Entry {
+    pub(crate) stop: CancellationToken,
     link: watch::Sender<Link>,
     /// Wakes a supervisor waiting to dial again.
     retry: Notify,
     supervisor: Mutex<Option<JoinHandle<()>>>,
+}
+
+/// State travels with the notification: removed entries cannot be looked
+/// up later. A separate removal also bounds each tab's remembered keys.
+#[derive(Clone, Debug)]
+pub(crate) enum Change {
+    State { node: NodeKey, status: NodeStatus },
+    Removed { node: NodeKey },
 }
 
 /// Every node's connection.
@@ -101,8 +110,9 @@ pub(crate) struct Registry<S> {
     client: ClientInfo,
     backoff: Backoff,
     entries: Mutex<HashMap<NodeKey, Arc<Entry>>>,
+    refresh: tokio::sync::Mutex<()>,
     /// Which node changed; tabs read its state from the entry.
-    changes: broadcast::Sender<NodeKey>,
+    changes: broadcast::Sender<Change>,
     shutdown: CancellationToken,
 }
 
@@ -124,9 +134,40 @@ impl<S: NodeSource> Registry<S> {
             },
             backoff,
             entries: Mutex::new(HashMap::new()),
+            refresh: tokio::sync::Mutex::new(()),
             changes: broadcast::channel(CHANGES).0,
             shutdown,
         })
+    }
+
+    /// Refresh the book and release removed nodes before counting entries.
+    pub(crate) async fn nodes(&self) -> Result<Vec<BookNode>, Failure> {
+        let _refresh = self.refresh.lock().await;
+        self.snapshot().await
+    }
+
+    async fn snapshot(&self) -> Result<Vec<BookNode>, Failure> {
+        let nodes = self
+            .source
+            .nodes()
+            .await
+            .map_err(|error| Failure::Unreachable {
+                message: chain(&error),
+            })?;
+        let keys: HashSet<_> = nodes.iter().map(|node| &node.key).collect();
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        entries.retain(|key, entry| {
+            if keys.contains(key) {
+                return true;
+            }
+            entry.stop.cancel();
+            let _old = entry.link.send_replace(Link::Failed {
+                message: "the node was removed from the book".to_owned(),
+            });
+            let _listeners = self.changes.send(Change::Removed { node: key.clone() });
+            false
+        });
+        Ok(nodes)
     }
 
     pub(crate) fn source(&self) -> &S {
@@ -138,7 +179,7 @@ impl<S: NodeSource> Registry<S> {
     }
 
     /// Node changes from now on.
-    pub(crate) fn changes(&self) -> broadcast::Receiver<NodeKey> {
+    pub(crate) fn changes(&self) -> broadcast::Receiver<Change> {
         self.changes.subscribe()
     }
 
@@ -153,15 +194,18 @@ impl<S: NodeSource> Registry<S> {
         statuses
     }
 
-    /// One node's state.
-    pub(crate) fn status(&self, key: &NodeKey) -> Option<NodeStatus> {
-        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-        entries.get(key).map(|entry| entry.link.borrow().status())
-    }
-
     /// `key`'s entry, its supervisor running (started again if it
     /// stopped).
-    pub(crate) fn ensure(self: &Arc<Self>, key: &NodeKey) -> Result<Arc<Entry>, Failure> {
+    pub(crate) async fn ensure(self: &Arc<Self>, key: &NodeKey) -> Result<Arc<Entry>, Failure> {
+        // Serialize the snapshot and insertion; an older concurrent book
+        // read must not reinsert an entry that a newer snapshot removed.
+        let _refresh = self.refresh.lock().await;
+        let nodes = self.snapshot().await?;
+        if !nodes.iter().any(|node| &node.key == key) {
+            return Err(Failure::Unreachable {
+                message: format!("no node named {key}"),
+            });
+        }
         let entry = {
             let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(entry) = entries.get(key) {
@@ -173,6 +217,7 @@ impl<S: NodeSource> Registry<S> {
                     });
                 }
                 let entry = Arc::new(Entry {
+                    stop: self.shutdown.child_token(),
                     link: watch::Sender::new(Link::Idle),
                     retry: Notify::new(),
                     supervisor: Mutex::new(None),
@@ -198,8 +243,8 @@ impl<S: NodeSource> Registry<S> {
     }
 
     /// Dial `key` again now.
-    pub(crate) fn retry(self: &Arc<Self>, key: &NodeKey) -> Result<(), Failure> {
-        let entry = self.ensure(key)?;
+    pub(crate) async fn retry(self: &Arc<Self>, key: &NodeKey) -> Result<(), Failure> {
+        let entry = self.ensure(key).await?;
         entry.retry.notify_one();
         Ok(())
     }
@@ -207,7 +252,7 @@ impl<S: NodeSource> Registry<S> {
     /// `key`'s connection, waiting while it is being dialled; a node that
     /// is down fails at once.
     pub(crate) async fn client(self: &Arc<Self>, key: &NodeKey) -> Result<NodeClient, Failure> {
-        let entry = self.ensure(key)?;
+        let entry = self.ensure(key).await?;
         let mut link = entry.link.subscribe();
         loop {
             {
@@ -229,17 +274,38 @@ impl<S: NodeSource> Registry<S> {
     }
 
     fn set(&self, key: &NodeKey, entry: &Entry, link: Link) {
+        // A cancelled supervisor can finish after a same-named replacement
+        // was admitted. Only the current entry may publish into the book.
+        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        if !entries
+            .get(key)
+            .is_some_and(|current| std::ptr::eq(current.as_ref(), entry))
+        {
+            return;
+        }
+        let status = link.status();
         let _previous = entry.link.send_replace(link);
-        // No tab listening is fine.
-        let _listeners = self.changes.send(key.clone());
+        let _listeners = self.changes.send(Change::State {
+            node: key.clone(),
+            status,
+        });
     }
 
     /// Keep `key` connected until the UI stops or the node fails for good.
     async fn supervise(self: Arc<Self>, key: NodeKey, entry: Arc<Entry>) {
-        let shutdown = self.shutdown.clone();
+        let shutdown = entry.stop.clone();
         tokio::select! {
             () = self.keep_connected(&key, &entry) => {}
             () = shutdown.cancelled() => {}
+        }
+        if shutdown.is_cancelled() {
+            self.set(
+                &key,
+                &entry,
+                Link::Failed {
+                    message: "the node was removed or the UI stopped".to_owned(),
+                },
+            );
         }
     }
 

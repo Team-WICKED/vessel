@@ -19,19 +19,19 @@
 //!   else's.
 //! - Everything a tab started stops when its socket closes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tokio_tungstenite::tungstenite::Message;
 use crate::socket::WebSocket;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::{Semaphore, broadcast, mpsc};
 use tokio::task::{AbortHandle, JoinSet};
+use tokio_tungstenite::tungstenite::Message;
 use vessel_client::{CallError, StreamError, UnaryCall, follow_resuming};
 use vessel_proto::{Call, EventSeq, Method, PairingLink, RawJson, SessionId};
 
-use crate::registry::{Registry, Shared, chain};
+use crate::registry::{Change, Registry, Shared, chain};
 use crate::source::NodeSource;
 use crate::wire::{
     CallId, CallOutcome, ClientFrame, Failure, NodeKey, Op, OpOutcome, OpResult, ServerFrame,
@@ -82,27 +82,56 @@ async fn write(mut sink: SplitSink<WebSocket, Message>, mut outbox: mpsc::Receiv
 async fn statuses<S: NodeSource>(registry: &Registry<S>, out: mpsc::Sender<ServerFrame>) {
     let mut changes = registry.changes();
     let mut everything = true;
+    let mut known = HashSet::new();
     loop {
         if everything {
-            for (node, status) in registry.statuses() {
+            // A lagged receiver may have missed a removal. Reconcile its
+            // known set against the snapshot instead of retaining stale Up.
+            let snapshot = registry.statuses();
+            let current: HashSet<_> = snapshot.iter().map(|(node, _)| node.clone()).collect();
+            for node in known.difference(&current) {
+                if out.send(removed(node.clone())).await.is_err() {
+                    return;
+                }
+            }
+            known = current;
+            for (node, status) in snapshot {
                 if out.send(ServerFrame::Node { node, status }).await.is_err() {
                     return;
                 }
             }
             everything = false;
         }
-        match changes.recv().await {
-            Ok(node) => {
-                let Some(status) = registry.status(&node) else {
-                    continue;
-                };
-                if out.send(ServerFrame::Node { node, status }).await.is_err() {
-                    return;
-                }
+        let frame = match changes.recv().await {
+            Ok(Change::State { node, status }) => {
+                let _new = known.insert(node.clone());
+                ServerFrame::Node { node, status }
             }
-            Err(broadcast::error::RecvError::Lagged(_missed)) => everything = true,
+            Ok(Change::Removed { node }) => {
+                let _gone = known.remove(&node);
+                removed(node)
+            }
+            Err(broadcast::error::RecvError::Lagged(_missed)) => {
+                // Discard already superseded queued changes before the
+                // snapshot, keeping the per-tab key set bounded.
+                changes = registry.changes();
+                everything = true;
+                continue;
+            }
             Err(broadcast::error::RecvError::Closed) => return,
+        };
+        if out.send(frame).await.is_err() {
+            return;
         }
+    }
+}
+
+fn removed(node: NodeKey) -> ServerFrame {
+    ServerFrame::Node {
+        node,
+        status: crate::wire::NodeStatus::Failed {
+            message: "the node was removed from the book".to_owned(),
+        },
     }
 }
 
@@ -369,7 +398,7 @@ async fn follow<S: NodeSource>(
     session: SessionId,
     from: EventSeq,
 ) {
-    let entry = match registry.ensure(&node) {
+    let entry = match registry.ensure(&node).await {
         Ok(entry) => entry,
         Err(failure) => {
             let state = StreamState::Failed {
@@ -380,9 +409,17 @@ async fn follow<S: NodeSource>(
         }
     };
     let client = registry.client_info().clone();
+    let removed = entry.stop.clone();
     let mut records = follow_resuming(Shared::new(entry), client, session, from);
     loop {
-        let (frame, last) = match records.next().await {
+        let (frame, last) = match tokio::select! {
+            record = records.next() => record,
+            () = removed.cancelled() => {
+                drop(records);
+                let _gone = out.send(ServerFrame::Stream { stream, state: StreamState::Failed { message: "the node was removed or the UI stopped".to_owned() } }).await;
+                return;
+            }
+        } {
             None => (
                 ServerFrame::Stream {
                     stream,
@@ -445,13 +482,13 @@ fn failure_text(failure: &Failure) -> String {
 async fn answer<S: NodeSource>(registry: &Arc<Registry<S>>, op: Op) -> Result<OpResult, String> {
     match op {
         Op::Nodes => registry
-            .source()
             .nodes()
             .await
             .map(|nodes| OpResult::Nodes { nodes })
-            .map_err(|error| chain(&error)),
+            .map_err(|failure| failure_text(&failure)),
         Op::Retry { node } => registry
             .retry(&node)
+            .await
             .map(|()| OpResult::Retry)
             .map_err(|failure| failure_text(&failure)),
         Op::Inspect { link } => {

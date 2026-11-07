@@ -478,3 +478,63 @@ async fn a_structured_turn_with_a_permission_reaches_the_page() {
     }))
     .await;
 }
+
+#[tokio::test]
+async fn unknown_names_cannot_fill_the_registry_and_removed_nodes_are_pruned() {
+    within(Box::pin(async {
+        let node = TestNode::start().await;
+        let source = Source::default().with("box", node.address(), node.token());
+        let control = source.clone();
+        let ui = Ui::start(source).await;
+        let mut tab = ui.tab().await;
+        for n in 0..260 {
+            let id = tab
+                .op(Op::Retry {
+                    node: NodeKey::new(format!("missing-{n}")),
+                })
+                .await;
+            let failed = tab
+                .until(|frame| match frame {
+                    ServerFrame::OpReply { id: got, outcome } if id == got => Some(outcome),
+                    _ => None,
+                })
+                .await;
+            assert!(matches!(failed, OpOutcome::Err { .. }));
+        }
+        let id = tab.call("box", &Call::ListSessions(ListSessions)).await;
+        assert!(matches!(reply(&mut tab, id).await, CallOutcome::Ok(_)));
+        control.remove_all();
+        let id = tab.op(Op::Nodes).await;
+        let mut removed = false;
+        let mut listed = false;
+        while !removed || !listed {
+            match tab.next().await {
+                ServerFrame::Node {
+                    node,
+                    status: NodeStatus::Failed { .. },
+                } if node.as_str() == "box" => removed = true,
+                ServerFrame::OpReply {
+                    id: got,
+                    outcome: OpOutcome::Ok(OpResult::Nodes { nodes }),
+                } if id == got => {
+                    assert!(nodes.is_empty());
+                    listed = true;
+                }
+                _ => {}
+            }
+        }
+        let id = tab.call("box", &Call::ListSessions(ListSessions)).await;
+        assert!(matches!(reply(&mut tab, id).await, CallOutcome::Err(_)));
+        // A new tab receives no retained entry in its initial state push.
+        let mut other = ui.tab().await;
+        let id = other.op(Op::Nodes).await;
+        loop {
+            match other.next().await {
+                ServerFrame::Node { .. } => panic!("removed node retained"),
+                ServerFrame::OpReply { id: got, .. } if id == got => break,
+                _ => {}
+            }
+        }
+    }))
+    .await;
+}
