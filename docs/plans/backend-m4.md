@@ -1,8 +1,8 @@
 # Backend milestone 4: the fleet
 
-Status: built on `backend/m4` (2026-11-06), green on Linux, macOS and
-Windows; closing with the manual smokes of the done criteria
-(`docs/smoke/`). Drafted the same day, to start once milestone 3 was merged
+Status: done on `backend/m4` (2026-11-07): green on Linux, macOS and
+Windows, the security review closed (below), and both manual smokes of
+the done criteria passed (`docs/smoke/`, record under the done criteria). Drafted the same day, to start once milestone 3 was merged
 and green on all three CI platforms. Owner: coordinator. Two implementation
 tracks, then a short joint one, as in earlier milestones.
 
@@ -1187,10 +1187,11 @@ delivering device.
 
 ## Done criteria (milestone)
 
-- The operator's four Claude logins work as four profiles on one node, and
-  a structured session moves between them keeping its conversation (manual
+- The operator's Claude logins work as profiles on one node, and a
+  structured session moves between them keeping its conversation (manual
   smoke by the coordinator on the operator's development machine, with
-  test agents).
+  test agents). Drafted as four logins; the operator uses three, so the
+  smoke ran with three real accounts, and with four through the fakes.
 - A fresh machine runs `vessel init --service --join`, and within minutes
   has the fleet's instructions, skills and MCP servers in each of its
   profiles; a local edit on it is kept and listed as a conflict.
@@ -1202,6 +1203,31 @@ delivering device.
 - The gate passes on Linux, macOS and Windows. `PROTOCOL.md` has version 6;
   ADRs 0011 to 0013 are accepted; `ARCHITECTURE.md`, `README.md` and
   `docs/ROADMAP.md` describe profiles, the fleet and agent tools.
+
+### Manual smokes (record)
+
+Run by the coordinator with the release build of the gate's commit:
+
+- `docs/smoke/profiles.sh` with the operator's three Claude Code accounts
+  as profiles and `--model haiku` (2026-11-07): one structured session
+  moved first → second → third → first, the agent remembering a word from
+  before the first move after every move; passed in 26 s. The
+  conversation's directories the moves linked into each account's home
+  were removed afterwards. `--fake` with four profiles passes as well.
+  A first attempt named the model `claude-haiku-5-5`, which the ACP agent
+  does not offer (it takes its own ids and aliases): the session failed at
+  the handshake with that reason in its log and in `vessel sessions`, but
+  the script waited out its deadline; it now stops at a failed session
+  and prints the reason.
+- `docs/smoke/join.sh --local` (2026-11-06 and after every merge since):
+  a fresh machine runs `vessel init --join` and `vessel node start`; the
+  fleet's generation applies within a second, every profile has the
+  instructions, the skill and both MCP servers, a local edit is kept and
+  listed, and the home takes the member's grant through its relay. Track
+  S also ran it `--docker`. `init --service` was left out on purpose (it
+  would install a service on the machine); its unit runs the same `node
+  start`. The script used to leave its three programs running after it
+  ended; fixed on 2026-11-06.
 
 ## Decisions (coordinator, 2026-11-06)
 

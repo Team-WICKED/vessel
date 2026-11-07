@@ -49,7 +49,7 @@ Plans: `docs/plans/backend-m2.md` (ADRs 0007 and 0008) and
       a public host (the first real TLS test; milestone 3's plan, "Smoke on
       one machine").
 
-## Phase 2: the fleet (milestone 4, built; closing)
+## Phase 2: the fleet (milestone 4, done)
 
 Plan: `docs/plans/backend-m4.md` (ADRs 0011, 0012 and 0013; protocols 5
 and 6).
@@ -72,10 +72,12 @@ and 6).
       count and depth (ADR 0013, protocol 6).
 - [x] No secret value in a bundle, a log, `profile.list` or a command line
       (a test plants values and searches everything a fleet run wrote).
-- [ ] Closing: the two manual smokes of the plan's done criteria (four
-      profiles on one node with a structured session moved between them; a
-      fresh machine running `vessel init --join`), run by the coordinator
-      with the scripts in `docs/smoke/`.
+- [x] Closing: the two manual smokes of the plan's done criteria, run by
+      the coordinator with the scripts in `docs/smoke/` (2026-11-07): a
+      structured session moved through the operator's three real accounts
+      and back, and a fresh machine running `vessel init --join`. The
+      security review closed after eleven rounds (the plan's "Security
+      review").
 
 ## Next
 
