@@ -23,7 +23,7 @@ export function SettingsPage(): ReactElement {
           <h1>Settings</h1>
           <p>
             This client: how it looks, and the nodes it knows. The book is the
-            CLI&apos;s, shared with `vessel`.
+            CLI&apos;s, shared with <code>vessel</code>.
           </p>
         </div>
       </div>
