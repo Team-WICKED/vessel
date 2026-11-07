@@ -8,9 +8,10 @@
 
 use std::time::Duration;
 
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use vessel_agent::AgentProcess;
-use vessel_proto::{AgentEvent, SessionEvent, SessionStatus};
+use vessel_proto::{AgentEvent, ModelCall, SessionEvent, SessionStatus};
 use vessel_pty::{PtyProcess, Signal};
 
 use crate::publish::Publisher;
@@ -72,6 +73,9 @@ pub(crate) struct Lifecycle {
     /// Vessel's own lines for the log, published right after `Starting`
     /// (`LaunchOptions::notices`).
     pub(crate) notices: Vec<String>,
+    /// Model calls to record (`SessionHandle::model_call`); the shared
+    /// state holds the sender, so this stays open while the actor runs.
+    pub(crate) model_calls: mpsc::Receiver<ModelCall>,
 }
 
 impl Lifecycle {
@@ -107,6 +111,15 @@ impl Lifecycle {
             }
         };
         self.out.commit(slot, event);
+    }
+
+    /// Record the model calls still queued, once the process has exited and
+    /// before the final status: a call the proxy finished just as the
+    /// harness exited is still the session's.
+    pub(crate) async fn drain_model_calls<P: Stoppable>(&mut self, process: &mut P) {
+        while let Ok(call) = self.model_calls.try_recv() {
+            self.publish(process, SessionEvent::ModelCall(call)).await;
+        }
     }
 
     /// Publish a status change.

@@ -34,6 +34,12 @@ pub enum NameKind {
     Secret,
     /// An HTTP header field name: an RFC 9110 token, up to 128.
     Header,
+    /// A model route in a node's `models.toml` (protocol 7): the profile
+    /// rule.
+    ModelRoute,
+    /// A model provider in a node's `models.toml` (protocol 7): the profile
+    /// rule, so no `:` (it is sealed into reasoning envelopes).
+    Provider,
 }
 
 impl NameKind {
@@ -47,7 +53,7 @@ impl NameKind {
 
     const fn chars(self) -> CharRule {
         match self {
-            Self::Profile => CharRule::same(64, profile_char),
+            Self::Profile | Self::ModelRoute | Self::Provider => CharRule::same(64, profile_char),
             Self::EnvVar | Self::Secret => CharRule {
                 max_len: 128,
                 first: env_first,
@@ -62,7 +68,9 @@ impl NameKind {
     #[must_use]
     pub const fn rule(self) -> &'static str {
         match self {
-            Self::Profile => "1-64 letters, digits, `.`, `_` or `-`",
+            Self::Profile | Self::ModelRoute | Self::Provider => {
+                "1-64 letters, digits, `.`, `_` or `-`"
+            }
             Self::EnvVar | Self::Secret => {
                 "a letter or `_`, then letters, digits or `_`; at most 128"
             }
@@ -80,6 +88,8 @@ impl fmt::Display for NameKind {
             Self::McpServer => "MCP server name",
             Self::Secret => "secret name",
             Self::Header => "HTTP header name",
+            Self::ModelRoute => "model route name",
+            Self::Provider => "model provider name",
         })
     }
 }
@@ -229,6 +239,17 @@ name! {
 name! {
     /// An HTTP header field name.
     HeaderName, Header
+}
+
+name! {
+    /// A model route's name in a node's `models.toml`, which profiles name
+    /// with `model = "..."` (protocol 7).
+    ModelRouteName, ModelRoute
+}
+
+name! {
+    /// A model provider's name in a node's `models.toml` (protocol 7).
+    ProviderName, Provider
 }
 
 #[cfg(test)]

@@ -34,6 +34,8 @@ pub enum Column {
     Via,
     /// `sessions.origin` (a `SessionOrigin`, schema 4).
     Origin,
+    /// `sessions.model` (a `SessionModel`, schema 5).
+    Model,
 }
 
 /// Anything that can go wrong in the store.

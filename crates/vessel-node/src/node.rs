@@ -29,6 +29,8 @@ use crate::guard::Guarded;
 use crate::identity;
 use crate::ipc::{self, AgentGateway, Endpoint, LocalGateway, LocalListener};
 use crate::lifecycle::Lifecycle;
+use crate::models::Models;
+use crate::models::proxy::serve as serve_models;
 use crate::profiles::NodeProfiles;
 use crate::profiles::launch::{AgentTools, Launcher, McpSource};
 use crate::relays::{self, Relays};
@@ -66,6 +68,8 @@ struct Prepared {
     lock: NodeLock,
     /// From `profiles.toml` (ADR 0011).
     profiles: NodeProfiles,
+    /// From `models.toml` (ADR 0015).
+    models: Models,
     /// Owner-only, emptied of a previous run's files (ADR 0012).
     mcp_dir: PathBuf,
 }
@@ -85,20 +89,18 @@ impl Node {
         // (or limited as one client) later.
         let clients = client_address(&config)?;
         let relaying = relaying(&config)?;
-        let dir = config.data_dir.clone();
-        let env = config.harness_env.clone();
         let Prepared {
             id,
             token,
             keypair,
             lock,
             profiles,
+            models,
             mcp_dir,
-        } = tokio::task::spawn_blocking(move || prepare(&dir, env))
-            .await
-            .map_err(NodeError::Task)??;
+        } = prepare_off_thread(&config).await?;
         let store = open_store(&config).await?;
-        let session_setup = SessionSetup::new(&config, id, profiles, mcp_dir);
+        let (models, proxy) = model_proxy(models).await?;
+        let session_setup = SessionSetup::new(&config, id, profiles, Arc::clone(&models), mcp_dir);
 
         let Core {
             runtime,
@@ -111,6 +113,7 @@ impl Node {
             service,
             relays,
         } = core(&config, id, &store, &keypair, relaying, session_setup);
+        drop(tokio::spawn(serve_models(models, proxy, stop.clone())));
         let closing = CancellationToken::new();
         let rpc = Arc::new(Server::new(
             Arc::clone(&service),
@@ -278,6 +281,8 @@ struct Core {
 /// What sessions are created with: the node's profiles and the launch seam.
 struct SessionSetup {
     profiles: Arc<NodeProfiles>,
+    /// The model routes and the proxy's tokens (ADR 0015).
+    models: Arc<Models>,
     launcher: Launcher,
     /// The fleet's MCP servers, which the fleet loop keeps current and the
     /// launcher asks for.
@@ -285,7 +290,13 @@ struct SessionSetup {
 }
 
 impl SessionSetup {
-    fn new(config: &Config, id: NodeId, profiles: NodeProfiles, mcp_dir: PathBuf) -> Self {
+    fn new(
+        config: &Config,
+        id: NodeId,
+        profiles: NodeProfiles,
+        models: Arc<Models>,
+        mcp_dir: PathBuf,
+    ) -> Self {
         let tools = config.vessel_mcp.clone().map(|mcp| AgentTools {
             program: mcp.program,
             args: mcp.args,
@@ -295,6 +306,7 @@ impl SessionSetup {
         let source: Arc<dyn McpSource> = Arc::<FleetMcp>::clone(&fleet_mcp);
         Self {
             profiles: Arc::new(profiles),
+            models,
             launcher: Launcher::new(mcp_dir, source, tools),
             fleet_mcp,
         }
@@ -334,6 +346,7 @@ fn core(
         store.clone(),
         tasks.clone(),
         Arc::clone(&agents),
+        Arc::clone(&setup.models),
     ));
     let forwarders = TaskTracker::new();
     let devices = Arc::new(Devices::new(
@@ -387,6 +400,7 @@ fn core(
         devices: Arc::clone(&devices),
         forwarders: forwarders.clone(),
         profiles: setup.profiles,
+        models: setup.models,
         launcher: setup.launcher,
         agents: Arc::clone(&agents),
         fleet,
@@ -473,14 +487,54 @@ fn prepare(dir: &DataDir, env: HarnessEnv) -> Result<Prepared, NodeError> {
     // lock.
     transfers::clear(dir);
     let profiles = NodeProfiles::load(dir.clone(), env).map_err(NodeError::Profiles)?;
+    let models = Models::load(dir.clone(), FleetFiles::new(dir), model_client()?)
+        .map_err(NodeError::Models)?;
+    // A profile naming a route that is not there is not fatal: its
+    // sessions are refused, with the route named, until the file has it.
+    models.check_profiles(&profiles.list(None));
     Ok(Prepared {
         id,
         token,
         keypair: Arc::new(keypair),
         lock,
         profiles,
+        models,
         mcp_dir,
     })
+}
+
+/// The client model calls go out with: the operating system's roots, or
+/// none (with a warning) on a machine that has none, where only `http`
+/// providers (a local server) can then be reached.
+/// [`prepare`], on a thread that may block.
+async fn prepare_off_thread(config: &Config) -> Result<Prepared, NodeError> {
+    let dir = config.data_dir.clone();
+    let env = config.harness_env.clone();
+    tokio::task::spawn_blocking(move || prepare(&dir, env))
+        .await
+        .map_err(NodeError::Task)?
+}
+
+/// The model proxy's listener, on a port of loopback's the system picks
+/// (harnesses learn it from their environment). It is served from `core`'s
+/// stop: model calls end with the node, a harness still calling gets its
+/// connection closed, as its session is interrupted anyway.
+async fn model_proxy(models: Models) -> Result<(Arc<Models>, TcpListener), NodeError> {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .map_err(NodeError::ModelProxy)?;
+    models.listening(listener.local_addr().map_err(NodeError::ModelProxy)?);
+    Ok((Arc::new(models), listener))
+}
+
+fn model_client() -> Result<vessel_llm::client::Client, NodeError> {
+    let limits = vessel_llm::client::Limits::default();
+    vessel_llm::client::Client::new(limits)
+        .or_else(|error| {
+            tracing::warn!(%error, "model calls to https providers will fail");
+            vessel_llm::client::Client::with_roots(rustls::RootCertStore::empty(), limits)
+        })
+        .map_err(NodeError::ModelClient)
 }
 
 /// Bind the TCP listen address.

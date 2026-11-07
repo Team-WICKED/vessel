@@ -42,6 +42,7 @@ use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, FileForm, McpError, TerminalMcp};
 use crate::memory::{MemoryFilesError, RebaseError};
+use crate::routing::{ModelProxy, Routed, Routing};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -49,6 +50,12 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     profile: "claude",
     structured: Structured::Adapter {
         binary: "claude-agent-acp",
+        // Checked 2026-11-07 with `npm view`: current, not deprecated. Its
+        // predecessor `@zed-industries/claude-agent-acp` (deprecated,
+        // "renamed to @agentclientprotocol/claude-agent-acp") installs the
+        // same `claude-agent-acp` binary, so an existing install is found;
+        // the older `@zed-industries/claude-code-acp` installs
+        // `claude-code-acp`, which is not looked for.
         install: "npm install -g @agentclientprotocol/claude-agent-acp",
     },
     home: Home {
@@ -68,7 +75,56 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     rebase: Some(rebase),
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
+    model_proxy: Some(Routing {
+        render: model_proxy,
+        overriding: off_route,
+    }),
 };
+
+/// A routed session (ADR 0015): Claude Code's documented gateway
+/// variables. `ANTHROPIC_BASE_URL` without `/v1` (Claude Code adds the
+/// path) and the session's token as `ANTHROPIC_AUTH_TOKEN`, which it sends
+/// as `Authorization: Bearer` and prefers to every login but a cloud
+/// provider's; so the cloud switches and an inherited `ANTHROPIC_API_KEY`
+/// are removed (with both keys set it warns, and the route must not lose
+/// to an account's key). Every model setting is pinned to the route's
+/// models, so it asks for nothing the proxy would refuse: the main model,
+/// the aliases (`opus`, `sonnet` to the model, `haiku` to the small model),
+/// the background model and subagents.
+fn model_proxy(proxy: &ModelProxy) -> Routed {
+    let model = proxy.model.as_str().to_owned();
+    let small = proxy.small().as_str().to_owned();
+    Routed {
+        env: vec![
+            ("ANTHROPIC_BASE_URL", proxy.base_url.clone()),
+            ("ANTHROPIC_AUTH_TOKEN", proxy.token.clone()),
+            ("ANTHROPIC_MODEL", model.clone()),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", model.clone()),
+            ("ANTHROPIC_DEFAULT_SONNET_MODEL", model.clone()),
+            ("ANTHROPIC_DEFAULT_HAIKU_MODEL", small.clone()),
+            ("ANTHROPIC_SMALL_FAST_MODEL", small),
+            ("CLAUDE_CODE_SUBAGENT_MODEL", model),
+        ],
+        unset: &[
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+        ],
+        args: Vec::new(),
+    }
+}
+
+/// The first argument that would take a routed Claude Code session off
+/// its route: `--settings`, which can set the gateway variables. A
+/// `--model` is not one: the proxy refuses a model the route does not
+/// allow.
+fn off_route(args: &[String]) -> Option<String> {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .find(|arg| *arg == "--settings" || arg.starts_with("--settings="))
+        .cloned()
+}
 
 /// The longest slug Claude Code keeps whole.
 const SLUG_MAX: usize = 200;

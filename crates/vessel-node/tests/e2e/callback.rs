@@ -392,35 +392,68 @@ fn ask() -> GetCallback {
 /// a `sync` device that never joins renewed a ten-minute first ticket for
 /// the same key as often as it asked, keeping a relay place for good. A
 /// first ticket now comes only within a window after the device was paired
-/// (an hour; two seconds here), and never reaches past it.
+/// (an hour), and never reaches past it.
+///
+/// Time is moved, not waited for: the device's pairing is set back in the
+/// home's record, which the window is measured from, so the test holds on a
+/// slow machine (it once slept across a two-second window and failed under
+/// load).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_first_ticket_comes_only_within_its_window_after_pairing() {
     within(async {
         let relay = Relay::start().await;
         let fixture = Fixture::new();
-        let node = start_home(&fixture, &relay, Duration::from_secs(2)).await;
+        let window = Duration::from_secs(3600);
+        let node = start_home(&fixture, &relay, window).await;
         let home = Member {
             owner: fixture.connect(&node).await,
             fixture,
             node,
         };
-        let (stranger, _id) = stranger(&home, &relay).await;
+        let (stranger, id) = stranger(&home, &relay).await;
         let asked = ask();
+
+        // A minute of the window left: the ticket ends with it, not ten
+        // minutes on.
+        pair_earlier(
+            &home.fixture,
+            id,
+            window.saturating_sub(Duration::from_secs(60)),
+        );
         let first = stranger.call(asked).await.unwrap().ticket.unwrap();
         assert!(
-            first.expires_at <= unix_now() + 2,
+            first.expires_at <= unix_now() + 60,
             "the ticket reaches past the window"
         );
         assert!(
             stranger.call(asked).await.is_ok(),
             "renewed within the window"
         );
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+
+        // Two minutes later in the device's life: the window has closed.
+        pair_earlier(&home.fixture, id, Duration::from_secs(120));
         assert_eq!(code(stranger.call(asked).await), ErrorCode::Forbidden);
         home.node.stop().await.unwrap();
         relay.stop().await;
     })
     .await;
+}
+
+/// Set device `id`'s pairing `by` earlier in the home's database, as if it
+/// had been paired that much longer ago. The node reads the pairing time
+/// from the database on every ticket it considers, so a running node sees
+/// the change.
+fn pair_earlier(fixture: &Fixture, id: vessel_proto::DeviceId, by: Duration) {
+    let database = rusqlite::Connection::open(fixture.data_dir().database_path()).unwrap();
+    database.busy_timeout(Duration::from_secs(10)).unwrap();
+    let nanos = i64::try_from(by.as_nanos()).unwrap();
+    let changed = database
+        .execute(
+            "UPDATE devices SET created_at = created_at - ?1 WHERE id = ?2",
+            (nanos, id.to_string()),
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "no device {id} in the home's database");
 }
 
 /// The review's round 7: the one key a device that has not granted may take

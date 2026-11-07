@@ -432,6 +432,69 @@ start a session on another machine and read its answer.
 - Sessions record who started them. This is attribution under one OS
   user, not a sandbox (ADR 0013).
 
+## Models: every harness on every model
+
+A node can run Claude Code or Codex on another provider's model through a
+proxy of its own on loopback (milestone 5, ADR 0015). The harness keeps
+speaking its own API; the node translates to the provider's (Anthropic
+Messages, OpenAI Responses, or any OpenAI-compatible Chat Completions
+server such as OpenRouter, vLLM or Ollama), or passes the bytes through
+when both speak the same one.
+
+Routes live in `models.toml` in the node's data directory, which must be
+readable by you alone (on Unix the node refuses it otherwise; on Windows
+it relies on the data directory's permissions, as for its other files).
+The provider's key is a secret of the node's, named there, never written
+in the file:
+
+```toml
+[providers.openrouter]
+api = "openai-chat-completions"
+base_url = "https://openrouter.ai/api/v1"
+key = { secret = "OPENROUTER_API_KEY" }
+
+[models.qwen-coder]
+provider = "openrouter"
+model = "qwen/qwen3-coder"
+small_model = "qwen/qwen3-coder-flash"   # optional: the harness's fast calls
+```
+
+```toml
+# profiles.toml: a profile on the route
+[profiles.claude-qwen]
+harness = "claude"
+model = "qwen-coder"
+```
+
+```bash
+vessel fleet secret set OPENROUTER_API_KEY   # typed at a prompt, or piped in
+vessel profiles --reload                     # reads models.toml again too
+vessel models                                # the routes: provider, API, models
+vessel run claude --profile claude-qwen
+vessel log 3f2a                              # model calls: route, model, tokens, time
+```
+
+- A routed session's harness gets a token of the session's own, never the
+  provider's key, and is pinned to the route's models: a request for
+  another model is refused with both names. The key is read for each
+  call and goes only into the request to the provider.
+- Claude Code and Codex can be routed, in terminal and structured mode;
+  Gemini CLI and OpenCode cannot yet. A session keeps its route: moving
+  it to a profile of another route is refused. A routed profile or
+  session cannot pick another model or provider with its own arguments
+  (Codex's `-m`, `-p`, `--oss`, `-c model...`; Claude Code's
+  `--settings`); settings in the account's own home still apply.
+- The proxy answers only on `127.0.0.1`, to a live session's token, with
+  its own address as `Host`. The provider's key does not reach the
+  harness in what the provider sends back: it is removed from an error,
+  and a streamed answer that quotes it ends in an error there.
+- Each call is a `model_call` record in the session's log, with its
+  tokens and how it ended; never its content.
+- At most 4 calls at once per session and 16 per node; a call past them
+  is answered as a rate limit.
+- `docs/smoke/model-route.sh` checks a real provider end to end
+  (`docs/smoke/README.md`).
+
 ## Web UI
 
 `vessel ui` serves Vessel's web UI on this machine and opens it in the

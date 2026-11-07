@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::harness::HarnessKind;
 use crate::id::{DeviceId, NodeId, SessionId};
 use crate::key::secret;
-use crate::name::{EnvName, ProfileName};
+use crate::name::{EnvName, ModelRouteName, ProfileName};
 
 /// A profile as a node reports it. Names of the variables it sets are
 /// listed; their values never leave the node (they may be secrets or paths
@@ -30,6 +30,12 @@ pub struct ProfileInfo {
     /// Names of the environment variables it sets.
     #[serde(default)]
     pub sets: Vec<EnvName>,
+    /// The model route it names (`model = "..."` in `profiles.toml`,
+    /// protocol 7): its sessions' harness reaches that route's model
+    /// through the node's proxy. Absent for a profile on the harness's own
+    /// provider, and from older nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRouteName>,
 }
 
 /// Who created a session (ADR 0013): the owner, a paired device, or an agent
@@ -147,6 +153,7 @@ mod tests {
             label: Some("help@example".to_owned()),
             harness: HarnessKind::ClaudeCode,
             sets: vec!["CLAUDE_CONFIG_DIR".parse().unwrap()],
+            model: Some("qwen-coder".parse().unwrap()),
         };
         let json = serde_json::to_string(&info).unwrap();
         assert_eq!(serde_json::from_str::<ProfileInfo>(&json).unwrap(), info);

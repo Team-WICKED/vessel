@@ -6,12 +6,12 @@ use vessel_proto::{
     CreateSession, DeleteSecret, DeviceId, DeviceInfo, EventPage, EventSeq, ExportMemory,
     ExportSession, FleetMember, Forward, Generation, GetManifest, GetNode, GetSession, Harness,
     HarnessKind, ImportMemory, ImportSession, Invitation, InviteDevice, KillSession, ListDevices,
-    ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions, MAX_TRANSFER_FILE,
-    Manifest, MemoryImported, MoveProfile, NodeId, NodeInfo, ProfileInfo, ProfileName,
-    ProtocolVersion, ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, Reply, ReportApplied,
-    RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId, SessionImported,
-    SessionInfo, SessionInput, SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, TransferId,
-    TransferManifest, WatchFleet,
+    ListHarnesses, ListMembers, ListModels, ListProfiles, ListSecrets, ListSessions,
+    MAX_TRANSFER_FILE, Manifest, MemoryImported, ModelRoute, MoveProfile, NodeId, NodeInfo,
+    ProfileInfo, ProfileName, ProtocolVersion, ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles,
+    Reply, ReportApplied, RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId,
+    SessionImported, SessionInfo, SessionInput, SessionSpec, SetSecret, StopNode, StopWhen,
+    Subscribe, TransferId, TransferManifest, WatchFleet,
 };
 use vessel_rpc::{
     CallError, ClientConfig, Connection, FrameTransport, Subscription, Unary, UnaryCall,
@@ -308,6 +308,16 @@ impl NodeClient {
         harness: Option<HarnessKind>,
     ) -> Result<Vec<ProfileInfo>, CallError> {
         self.connection.call(ListProfiles { harness }).await
+    }
+
+    /// `model.list` (protocol 7): the node's model routes (ADR 0015):
+    /// names, providers, APIs and models; never a URL or a secret name.
+    ///
+    /// # Errors
+    /// `Unsupported` on a node before protocol 7; otherwise see
+    /// [`CallError`].
+    pub async fn models(&self) -> Result<Vec<ModelRoute>, CallError> {
+        self.connection.call(ListModels).await
     }
 
     /// `profile.reload`: the node reads `profiles.toml` again and answers

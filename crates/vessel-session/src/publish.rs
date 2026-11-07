@@ -134,7 +134,9 @@ impl InfoChange {
                 event: AgentEvent::Ready { harness_session },
             } => Self::HarnessSession(harness_session.clone()),
             SessionEvent::ProfileChanged { to, .. } => Self::Profile(to.clone()),
-            SessionEvent::Terminal(_) | SessionEvent::Agent { .. } => Self::None,
+            SessionEvent::Terminal(_) | SessionEvent::Agent { .. } | SessionEvent::ModelCall(_) => {
+                Self::None
+            }
         }
     }
 

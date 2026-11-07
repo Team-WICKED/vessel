@@ -104,7 +104,7 @@ export type BundlePath = string;
 /**
  * A request of any method, as sent on the wire.
  */
-export type Call = { "method": "node.info", "params": GetNode } | { "method": "harness.list", "params": ListHarnesses } | { "method": "session.list", "params": ListSessions } | { "method": "session.get", "params": GetSession } | { "method": "session.create", "params": CreateSession } | { "method": "session.send", "params": SendInput } | { "method": "session.kill", "params": KillSession } | { "method": "session.read", "params": ReadEvents } | { "method": "session.subscribe", "params": Subscribe } | { "method": "session.unsubscribe", "params": Unsubscribe } | { "method": "node.stop", "params": StopNode } | { "method": "device.invite", "params": InviteDevice } | { "method": "device.list", "params": ListDevices } | { "method": "device.revoke", "params": RevokeDevice } | { "method": "profile.list", "params": ListProfiles } | { "method": "profile.reload", "params": ReloadProfiles } | { "method": "session.move_profile", "params": MoveProfile } | { "method": "fleet.manifest", "params": GetManifest } | { "method": "fleet.blob", "params": ReadBlob } | { "method": "fleet.watch", "params": WatchFleet } | { "method": "fleet.report", "params": ReportApplied } | { "method": "fleet.members", "params": ListMembers } | { "method": "fleet.forward", "params": Forward } | { "method": "fleet.relay", "params": RelayCall } | { "method": "fleet.deliver", "params": Deliver } | { "method": "fleet.grant", "params": GrantHome } | { "method": "fleet.callback", "params": GetCallback } | { "method": "fleet.peers", "params": ListPeers } | { "method": "fleet.nodes", "params": ListNodes } | { "method": "fleet.forget", "params": ForgetNode } | { "method": "session.export", "params": ExportSession } | { "method": "session.import", "params": ImportSession } | { "method": "memory.export", "params": ExportMemory } | { "method": "memory.import", "params": ImportMemory } | { "method": "transfer.read", "params": ReadTransfer } | { "method": "transfer.close", "params": CloseTransfer } | { "method": "secret.set", "params": SetSecret } | { "method": "secret.list", "params": ListSecrets } | { "method": "secret.delete", "params": DeleteSecret } | { "method": "secret.copy", "params": CopySecret };
+export type Call = { "method": "node.info", "params": GetNode } | { "method": "harness.list", "params": ListHarnesses } | { "method": "session.list", "params": ListSessions } | { "method": "session.get", "params": GetSession } | { "method": "session.create", "params": CreateSession } | { "method": "session.send", "params": SendInput } | { "method": "session.kill", "params": KillSession } | { "method": "session.read", "params": ReadEvents } | { "method": "session.subscribe", "params": Subscribe } | { "method": "session.unsubscribe", "params": Unsubscribe } | { "method": "node.stop", "params": StopNode } | { "method": "device.invite", "params": InviteDevice } | { "method": "device.list", "params": ListDevices } | { "method": "device.revoke", "params": RevokeDevice } | { "method": "profile.list", "params": ListProfiles } | { "method": "profile.reload", "params": ReloadProfiles } | { "method": "session.move_profile", "params": MoveProfile } | { "method": "fleet.manifest", "params": GetManifest } | { "method": "fleet.blob", "params": ReadBlob } | { "method": "fleet.watch", "params": WatchFleet } | { "method": "fleet.report", "params": ReportApplied } | { "method": "fleet.members", "params": ListMembers } | { "method": "fleet.forward", "params": Forward } | { "method": "fleet.relay", "params": RelayCall } | { "method": "fleet.deliver", "params": Deliver } | { "method": "fleet.grant", "params": GrantHome } | { "method": "fleet.callback", "params": GetCallback } | { "method": "fleet.peers", "params": ListPeers } | { "method": "fleet.nodes", "params": ListNodes } | { "method": "fleet.forget", "params": ForgetNode } | { "method": "session.export", "params": ExportSession } | { "method": "session.import", "params": ImportSession } | { "method": "memory.export", "params": ExportMemory } | { "method": "memory.import", "params": ImportMemory } | { "method": "transfer.read", "params": ReadTransfer } | { "method": "transfer.close", "params": CloseTransfer } | { "method": "secret.set", "params": SetSecret } | { "method": "secret.list", "params": ListSecrets } | { "method": "secret.delete", "params": DeleteSecret } | { "method": "secret.copy", "params": CopySecret } | { "method": "model.list", "params": ListModels };
 
 /**
  * What `fleet.callback` answers.
@@ -261,6 +261,11 @@ scopes: Array<Scope>,
  * When it was revoked, if it was.
  */
 revoked_at?: string | null, };
+
+/**
+ * A duration in whole milliseconds.
+ */
+export type DurationMs = number;
 
 /**
  * An environment variable's name.
@@ -655,6 +660,12 @@ export type ListHarnesses = null;
 export type ListMembers = null;
 
 /**
+ * `model.list` (protocol 7): the routes this node offers, for pickers and
+ * `vessel models`. Needs `read`.
+ */
+export type ListModels = null;
+
+/**
  * `fleet.nodes` (protocol 6): what this node knows of its fleet (a member
  * asks its home with `fleet.peers`). Needs `read`.
  */
@@ -775,13 +786,93 @@ project?: string | null, };
 /**
  * Every RPC method.
  */
-export type Method = "node.info" | "harness.list" | "session.list" | "session.get" | "session.create" | "session.send" | "session.kill" | "session.read" | "session.subscribe" | "session.unsubscribe" | "node.stop" | "device.invite" | "device.list" | "device.revoke" | "profile.list" | "profile.reload" | "session.move_profile" | "fleet.manifest" | "fleet.blob" | "fleet.watch" | "fleet.report" | "fleet.members" | "fleet.forward" | "fleet.relay" | "fleet.deliver" | "fleet.grant" | "fleet.callback" | "fleet.peers" | "fleet.nodes" | "fleet.forget" | "session.export" | "session.import" | "memory.export" | "memory.import" | "transfer.read" | "transfer.close" | "secret.set" | "secret.list" | "secret.delete" | "secret.copy";
+export type Method = "node.info" | "harness.list" | "session.list" | "session.get" | "session.create" | "session.send" | "session.kill" | "session.read" | "session.subscribe" | "session.unsubscribe" | "node.stop" | "device.invite" | "device.list" | "device.revoke" | "profile.list" | "profile.reload" | "session.move_profile" | "fleet.manifest" | "fleet.blob" | "fleet.watch" | "fleet.report" | "fleet.members" | "fleet.forward" | "fleet.relay" | "fleet.deliver" | "fleet.grant" | "fleet.callback" | "fleet.peers" | "fleet.nodes" | "fleet.forget" | "session.export" | "session.import" | "memory.export" | "memory.import" | "transfer.read" | "transfer.close" | "secret.set" | "secret.list" | "secret.delete" | "secret.copy" | "model.list";
+
+/**
+ * An API a provider or a harness speaks.
+ */
+export type ModelApi = "anthropic_messages" | "openai_responses" | "openai_chat_completions";
+
+/**
+ * One call a session made to a model through the node's proxy: metadata
+ * only, never prompt or completion content, tool arguments or keys.
+ */
+export type ModelCall = { 
+/**
+ * The route the session runs on.
+ */
+route: ModelRouteName, 
+/**
+ * The provider's model that was called.
+ */
+model: ModelId, 
+/**
+ * The API the provider speaks.
+ */
+api: ModelApi, 
+/**
+ * The tokens it used (zero where the provider said nothing).
+ */
+usage: TokenUsage, 
+/**
+ * How it ended.
+ */
+stop: ModelStop, 
+/**
+ * Why it failed, when it did.
+ */
+failure?: ModelFailure | null, 
+/**
+ * From the proxy's first byte out to the answer's end.
+ */
+duration_ms: DurationMs, };
+
+/**
+ * Why a model call failed: its class, never the provider's message.
+ */
+export type ModelFailure = "rate_limited" | "overloaded" | "upstream_error" | "refused_request" | "context_too_long" | "timeout" | "truncated" | "unauthorized";
 
 /**
  * A model name as the harness understands it (`opus`, `gpt-5`, ...).
  * The set is open and harness-specific, so it is not an enum.
  */
 export type ModelId = string;
+
+/**
+ * A route a node offers (`model.list`, protocol 7).
+ */
+export type ModelRoute = { 
+/**
+ * Its name, which profiles use.
+ */
+name: ModelRouteName, 
+/**
+ * The provider it calls.
+ */
+provider: ProviderName, 
+/**
+ * The API that provider speaks.
+ */
+api: ModelApi, 
+/**
+ * The provider's model.
+ */
+model: ModelId, 
+/**
+ * The provider's model for a harness's small, fast calls.
+ */
+small_model?: ModelId | null, };
+
+/**
+ * A model route's name in a node's `models.toml`, which profiles name
+ * with `model = "..."` (protocol 7).
+ */
+export type ModelRouteName = string;
+
+/**
+ * How a model call ended.
+ */
+export type ModelStop = "end_turn" | "tool_use" | "max_tokens" | "stop_sequence" | "refusal" | "pause" | "error";
 
 /**
  * `session.move_profile` (protocol 5, ADR 0011): restart a structured
@@ -1082,7 +1173,14 @@ harness: HarnessKind,
 /**
  * Names of the environment variables it sets.
  */
-sets: Array<EnvName>, };
+sets: Array<EnvName>, 
+/**
+ * The model route it names (`model = "..."` in `profiles.toml`,
+ * protocol 7): its sessions' harness reaches that route's model
+ * through the node's proxy. Absent for a profile on the harness's own
+ * provider, and from older nodes.
+ */
+model?: ModelRouteName | null, };
 
 /**
  * A profile's name: what `--profile` and `profiles.toml` use.
@@ -1116,6 +1214,11 @@ max: ProtocolVersion, };
  * A wire protocol version.
  */
 export type ProtocolVersion = number;
+
+/**
+ * A model provider's name in a node's `models.toml` (protocol 7).
+ */
+export type ProviderName = string;
 
 /**
  * A JSON value carried as text and never inspected.
@@ -1247,7 +1350,7 @@ id: DeviceId, };
 /**
  * A successful response of any method, as sent on the wire.
  */
-export type Reply = { "method": "node.info", "result": NodeInfo } | { "method": "harness.list", "result": Array<Harness> } | { "method": "session.list", "result": Array<SessionInfo> } | { "method": "session.get", "result": SessionInfo } | { "method": "session.create", "result": SessionInfo } | { "method": "session.send", "result": Ack } | { "method": "session.kill", "result": Ack } | { "method": "session.read", "result": EventPage } | { "method": "session.subscribe", "result": Subscribed } | { "method": "session.unsubscribe", "result": Ack } | { "method": "node.stop", "result": Ack } | { "method": "device.invite", "result": Invitation } | { "method": "device.list", "result": Array<DeviceInfo> } | { "method": "device.revoke", "result": Ack } | { "method": "profile.list", "result": Array<ProfileInfo> } | { "method": "profile.reload", "result": Array<ProfileInfo> } | { "method": "session.move_profile", "result": SessionInfo } | { "method": "fleet.manifest", "result": Manifest } | { "method": "fleet.blob", "result": BlobChunk } | { "method": "fleet.watch", "result": Generation } | { "method": "fleet.report", "result": Ack } | { "method": "fleet.members", "result": Array<FleetMember> } | { "method": "fleet.forward", "result": Forwarded } | { "method": "fleet.relay", "result": Forwarded } | { "method": "fleet.deliver", "result": Forwarded } | { "method": "fleet.grant", "result": Ack } | { "method": "fleet.callback", "result": Callback } | { "method": "fleet.peers", "result": Array<FleetNode> } | { "method": "fleet.nodes", "result": Array<FleetNode> } | { "method": "fleet.forget", "result": NodeForgotten } | { "method": "session.export", "result": TransferManifest } | { "method": "session.import", "result": SessionImported } | { "method": "memory.export", "result": TransferManifest } | { "method": "memory.import", "result": MemoryImported } | { "method": "transfer.read", "result": BlobChunk } | { "method": "transfer.close", "result": Ack } | { "method": "secret.set", "result": Ack } | { "method": "secret.list", "result": Array<SecretName> } | { "method": "secret.delete", "result": Ack } | { "method": "secret.copy", "result": Ack };
+export type Reply = { "method": "node.info", "result": NodeInfo } | { "method": "harness.list", "result": Array<Harness> } | { "method": "session.list", "result": Array<SessionInfo> } | { "method": "session.get", "result": SessionInfo } | { "method": "session.create", "result": SessionInfo } | { "method": "session.send", "result": Ack } | { "method": "session.kill", "result": Ack } | { "method": "session.read", "result": EventPage } | { "method": "session.subscribe", "result": Subscribed } | { "method": "session.unsubscribe", "result": Ack } | { "method": "node.stop", "result": Ack } | { "method": "device.invite", "result": Invitation } | { "method": "device.list", "result": Array<DeviceInfo> } | { "method": "device.revoke", "result": Ack } | { "method": "profile.list", "result": Array<ProfileInfo> } | { "method": "profile.reload", "result": Array<ProfileInfo> } | { "method": "session.move_profile", "result": SessionInfo } | { "method": "fleet.manifest", "result": Manifest } | { "method": "fleet.blob", "result": BlobChunk } | { "method": "fleet.watch", "result": Generation } | { "method": "fleet.report", "result": Ack } | { "method": "fleet.members", "result": Array<FleetMember> } | { "method": "fleet.forward", "result": Forwarded } | { "method": "fleet.relay", "result": Forwarded } | { "method": "fleet.deliver", "result": Forwarded } | { "method": "fleet.grant", "result": Ack } | { "method": "fleet.callback", "result": Callback } | { "method": "fleet.peers", "result": Array<FleetNode> } | { "method": "fleet.nodes", "result": Array<FleetNode> } | { "method": "fleet.forget", "result": NodeForgotten } | { "method": "session.export", "result": TransferManifest } | { "method": "session.import", "result": SessionImported } | { "method": "memory.export", "result": TransferManifest } | { "method": "memory.import", "result": MemoryImported } | { "method": "transfer.read", "result": BlobChunk } | { "method": "transfer.close", "result": Ack } | { "method": "secret.set", "result": Ack } | { "method": "secret.list", "result": Array<SecretName> } | { "method": "secret.delete", "result": Ack } | { "method": "secret.copy", "result": Ack } | { "method": "model.list", "result": Array<ModelRoute> };
 
 /**
  * `fleet.report` (protocol 5): a member says what it applied and which
@@ -1328,7 +1431,7 @@ from?: ProfileName | null,
 /**
  * The profile now.
  */
-to?: ProfileName | null, };
+to?: ProfileName | null, } | { "type": "model_call" } & ModelCall;
 
 /**
  * A session on a node. Unique across the fleet, so it can be used
@@ -1414,7 +1517,13 @@ via?: NodeId | null,
 /**
  * Where it came from, when not from this node (protocol 6).
  */
-origin?: SessionOrigin | null, };
+origin?: SessionOrigin | null, 
+/**
+ * The model route it was launched with, and the provider's model its
+ * harness is pinned to (protocol 7). Absent for a session on its
+ * harness's own provider, and from older nodes.
+ */
+model?: SessionModel | null, };
 
 /**
  * Something a client sends into a live session. Body of `session.send`.
@@ -1439,6 +1548,19 @@ id: PermissionId,
  * The choice.
  */
 outcome: PermissionOutcome, };
+
+/**
+ * The route a session was launched with (protocol 7).
+ */
+export type SessionModel = { 
+/**
+ * The route.
+ */
+route: ModelRouteName, 
+/**
+ * The provider's model the harness is pinned to.
+ */
+model: ModelId, };
 
 /**
  * Where a session came from, when another node of the fleet had a hand in
@@ -1673,6 +1795,36 @@ rows: number, };
  * ticket's node key, but nothing needs to see it.
  */
 export type TicketMac = string;
+
+/**
+ * A number of tokens.
+ */
+export type TokenCount = number;
+
+/**
+ * The tokens one call used.
+ */
+export type TokenUsage = { 
+/**
+ * Input tokens neither read from nor written to a prompt cache.
+ */
+input: TokenCount, 
+/**
+ * Input tokens read from a prompt cache.
+ */
+cache_read: TokenCount, 
+/**
+ * Input tokens written to a prompt cache.
+ */
+cache_write: TokenCount, 
+/**
+ * Output tokens, reasoning included.
+ */
+output: TokenCount, 
+/**
+ * Of the output, the tokens spent reasoning, where the provider says.
+ */
+reasoning: TokenCount, };
 
 /**
  * A tool call as first announced.

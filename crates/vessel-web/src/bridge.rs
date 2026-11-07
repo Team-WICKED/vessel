@@ -357,7 +357,8 @@ const fn forwardable(method: Method) -> bool {
         | Method::SetSecret
         | Method::ListSecrets
         | Method::DeleteSecret
-        | Method::CopySecret => true,
+        | Method::CopySecret
+        | Method::ListModels => true,
         Method::Subscribe
         | Method::Unsubscribe
         | Method::ReportApplied

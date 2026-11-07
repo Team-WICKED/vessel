@@ -642,7 +642,8 @@ async fn sessions_from_schema_3_have_no_origin() {
     connection
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN via;
-             ALTER TABLE sessions DROP COLUMN origin;",
+             ALTER TABLE sessions DROP COLUMN origin;
+             ALTER TABLE sessions DROP COLUMN model;",
         )
         .unwrap();
     connection.pragma_update(None, "user_version", 3).unwrap();
@@ -670,7 +671,8 @@ async fn sessions_from_schema_2_read_as_the_owners_on_the_default() {
             "ALTER TABLE sessions DROP COLUMN profile;
              ALTER TABLE sessions DROP COLUMN created_by;
              ALTER TABLE sessions DROP COLUMN via;
-             ALTER TABLE sessions DROP COLUMN origin;",
+             ALTER TABLE sessions DROP COLUMN origin;
+             ALTER TABLE sessions DROP COLUMN model;",
         )
         .unwrap();
     connection.pragma_update(None, "user_version", 2).unwrap();
@@ -681,4 +683,33 @@ async fn sessions_from_schema_2_read_as_the_owners_on_the_default() {
     assert_eq!(stored.profile, None);
     assert_eq!(stored.created_by, Creator::Owner);
     assert_eq!(stored.spec, session.spec);
+}
+
+/// A session's model route is stored (schema 5); sessions stored before
+/// read as on their harness's own provider.
+#[tokio::test]
+async fn a_sessions_model_is_stored_and_older_ones_have_none() {
+    let (_temp, dir) = data_dir();
+    let store = open(&dir, StoreConfig::default()).await;
+    let mut routed = new_session(0);
+    routed.model = Some(vessel_proto::SessionModel {
+        route: "qwen-coder".parse().unwrap(),
+        model: vessel_proto::ModelId::new("qwen/qwen3-coder"),
+    });
+    store.create_session(routed.clone()).await.unwrap();
+    assert_eq!(
+        store.session(routed.id).await.unwrap().unwrap().model,
+        routed.model
+    );
+    store.close().await;
+    drop(store);
+
+    let connection = rusqlite::Connection::open(dir.database_path()).unwrap();
+    connection
+        .execute_batch("ALTER TABLE sessions DROP COLUMN model;")
+        .unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
+    drop(connection);
+    let store = open(&dir, StoreConfig::default()).await;
+    assert_eq!(store.session(routed.id).await.unwrap().unwrap().model, None);
 }

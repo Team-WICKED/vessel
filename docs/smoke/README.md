@@ -5,8 +5,8 @@ automated tests cannot reach: real accounts, a fresh machine. Each script
 prints what it does, stops at the first failure with the reason and the
 end of the node's log, and ends with `PASS`.
 
-Build first (both scripts default to the workspace's `target/release`; pass
-`--bin DIR` for another build):
+Build first (every script defaults to the workspace's `target/release`;
+pass `--bin DIR` for another build):
 
 ```bash
 cargo build --release --workspace --bins
@@ -111,3 +111,62 @@ docs/smoke/join.sh --local               # or here, under a temporary HOME
 - `--service` is not part of the run: in a container there is no user
   service manager, and on this machine it would install one. `vessel init
   --service` is covered by `vessel-cli`'s tests against a temporary home.
+
+## Milestone 5
+
+The plan's done criteria (`docs/plans/backend-m5.md`, "Manual smokes")
+ask for S1; S2 is optional.
+
+### S1: Claude Code on a route to another provider's model
+
+`model-route.sh` starts a throwaway node with one model route to an
+OpenAI-compatible provider and a Claude Code profile naming it, starts a
+structured Claude Code session under that profile, and asks it to create a
+file and then to edit it (tool calls, streaming, a second turn). It checks
+the file, prints the session's model calls (route, model, tokens, how each
+ended; never content), and searches everything the run wrote for the key.
+
+```bash
+docs/smoke/model-route.sh \
+    --base-url https://openrouter.ai/api/v1 \
+    --model qwen/qwen3-coder
+# then type the provider's key at the prompt (not shown), or pipe it in:
+#   read -rs KEY; printf '%s\n' "$KEY" | docs/smoke/model-route.sh ...
+```
+
+- The key is read from standard input only, never from an argument, and
+  goes only into the throwaway node's `secrets.toml` (the script never
+  prints it). At the end the script searches the node's log and data
+  directory, the Claude Code home, the working directory and, on Linux,
+  the harness processes' environments for it: it must be in
+  `secrets.toml` only. The harness's environment must hold the session's
+  model token (`vslm-...`) instead.
+- No account of yours is used: the session gets a temporary Claude Code
+  home (`CLAUDE_CONFIG_DIR`) and authenticates to the node's proxy with
+  its own token. That home's `settings.json` sets `acceptEdits`, so the
+  file edits go through without a permission prompt the script could not
+  answer.
+- `--api` picks the provider's API (`openai-chat-completions` by default,
+  `openai-responses`, `anthropic-messages`); `--small-model` the model
+  for Claude Code's small, fast calls (titles, summaries), the route's
+  model by default.
+- Needs `claude-agent-acp` and `claude` on `PATH`. The node runs with your
+  environment, minus `VESSEL_*`, `CLAUDE_CONFIG_DIR` and the
+  `ANTHROPIC_*` key and endpoint variables; it listens on a free loopback
+  port with a temporary data directory, removed at the end (`--keep`
+  keeps it).
+- Costs: two short turns on the provider's model, plus whatever small
+  calls Claude Code makes on its own.
+- `--fake` runs the same steps with `fake-acp` as Claude Code's adapter
+  and `fake-provider` as the provider (a canned stream on loopback that
+  refuses any key but the one it was given), with a made-up key; the fake
+  agent makes its calls on `model <text>` and the script writes the file
+  itself. Use it to check the script after a change: it takes a few
+  seconds.
+
+### S2 (optional): Codex through an Anthropic route
+
+Not scripted: a node with a route whose provider is `anthropic-messages`
+(`https://api.anthropic.com`, the key as a secret), a Codex profile naming
+it, and one turn of `vessel run codex --profile <it> --structured` with a
+tool call; `vessel log` then shows the call's tokens.

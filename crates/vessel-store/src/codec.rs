@@ -65,7 +65,7 @@ fn decode<T: serde::de::DeserializeOwned>(
 
 /// The columns [`session_from_row`] expects, in order.
 pub(crate) const SESSION_COLUMNS: &str = "id, spec, status, created_at, ended_at, next_seq, harness_session, profile, created_by, \
-     via, origin";
+     via, origin, model";
 
 pub(crate) fn session_from_row(row: &Row<'_>) -> Result<SessionInfo, StoreError> {
     let id = session_id_from_sql(&row.get::<_, String>(0)?)?;
@@ -110,6 +110,11 @@ pub(crate) fn session_from_row(row: &Row<'_>) -> Result<SessionInfo, StoreError>
     info.origin = row
         .get::<_, Option<String>>(10)?
         .map(|origin| decode(id, Column::Origin, &origin))
+        .transpose()?;
+    // Schema 5: `NULL` for a session on its harness's own provider.
+    info.model = row
+        .get::<_, Option<String>>(11)?
+        .map(|model| decode(id, Column::Model, &model))
         .transpose()?;
     Ok(info)
 }

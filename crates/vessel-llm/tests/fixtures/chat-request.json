@@ -1,0 +1,30 @@
+{
+  "model": "qwen/qwen3-coder",
+  "stream": true,
+  "stream_options": { "include_usage": true },
+  "max_tokens": 32000,
+  "temperature": 0.7,
+  "stop": "END",
+  "reasoning": { "effort": "high" },
+  "tool_choice": { "type": "function", "function": { "name": "Write" } },
+  "parallel_tool_calls": true,
+  "tools": [
+    { "type": "function", "function": { "name": "Write", "description": "Write a file.", "parameters": { "type": "object", "properties": { "file_path": { "type": "string" } } } } }
+  ],
+  "messages": [
+    { "role": "system", "content": "You are a coding agent." },
+    { "role": "user", "content": [ { "type": "text", "text": "Write two files." }, { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto" } } ] },
+    {
+      "role": "assistant",
+      "content": null,
+      "reasoning_content": "Two files.",
+      "tool_calls": [
+        { "id": "call_1", "type": "function", "function": { "name": "Write", "arguments": "{\"file_path\":\"a.txt\"}" } },
+        { "id": "call_2", "type": "function", "function": { "name": "Write", "arguments": "{\"file_path\":\"b.txt\"}" } }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "call_1", "content": "Wrote a.txt" },
+    { "role": "tool", "tool_call_id": "call_2", "content": [ { "type": "text", "text": "Wrote b.txt" } ] },
+    { "role": "function", "name": "legacy", "content": "an old role" }
+  ]
+}

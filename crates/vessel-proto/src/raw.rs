@@ -52,6 +52,16 @@ impl RawJson {
         serde_json::value::to_raw_value(value).map(Self)
     }
 
+    /// `{}`, the empty object (a tool call's input before its arguments
+    /// arrive).
+    #[must_use]
+    pub fn empty_object() -> Self {
+        // `{}` is JSON, so the `null` fallback is never taken; it keeps
+        // this constructor free of a panic path.
+        RawValue::from_string(String::from("{}"))
+            .map_or_else(|_never| Self(RawValue::NULL.to_owned()), Self)
+    }
+
     /// The JSON text.
     #[must_use]
     pub fn as_text(&self) -> &str {
@@ -192,6 +202,11 @@ impl<'de> Visitor<'de> for Transcode<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_empty_object_is_empty() {
+        assert_eq!(RawJson::empty_object().as_text(), "{}");
+    }
 
     #[test]
     fn round_trips_compactly() {

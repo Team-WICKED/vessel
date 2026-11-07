@@ -1,0 +1,64 @@
+{
+  "model": "claude-sonnet-4-5",
+  "max_tokens": 32000,
+  "stream": true,
+  "temperature": 1,
+  "metadata": { "user_id": "user_example_account__session_00000000-0000-4000-8000-000000000000" },
+  "system": [
+    { "type": "text", "text": "You are a coding agent." },
+    { "type": "text", "text": "Work in /workspace.", "cache_control": { "type": "ephemeral" } }
+  ],
+  "thinking": { "type": "enabled", "budget_tokens": 8000 },
+  "tools": [
+    {
+      "name": "Write",
+      "description": "Write a file.",
+      "input_schema": { "type": "object", "properties": { "file_path": { "type": "string" }, "content": { "type": "string" } }, "required": ["file_path", "content"] }
+    },
+    {
+      "type": "custom",
+      "name": "Read",
+      "input_schema": { "type": "object", "properties": { "file_path": { "type": "string" } } },
+      "cache_control": { "type": "ephemeral", "ttl": "1h" }
+    },
+    { "type": "web_search_20250305", "name": "web_search", "max_uses": 5 }
+  ],
+  "tool_choice": { "type": "auto" },
+  "context_management": { "edits": [] },
+  "messages": [
+    { "role": "user", "content": "Write hello.txt, then look at this." },
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "The screenshot and the spec:" },
+        { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" } },
+        { "type": "image", "source": { "type": "url", "url": "https://example.com/a.png" } },
+        { "type": "document", "source": { "type": "text", "media_type": "text/plain", "data": "Spec text." }, "title": "spec" }
+      ]
+    },
+    { "role": "system", "content": "Mind the style guide." },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "thinking", "thinking": "The user wants a file.", "signature": "EqQBCkYIARgCIkBexampleSignatureOnly" },
+        { "type": "redacted_thinking", "data": "EmwKAhgBEgyexampleRedacted" },
+        { "type": "text", "text": "I'll create it." },
+        { "type": "tool_use", "id": "toolu_01A", "name": "Write", "input": { "file_path": "hello.txt", "content": "hi\n" } },
+        { "type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": { "query": "style guide" } }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_01A", "content": "Wrote hello.txt" },
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01B",
+          "is_error": true,
+          "content": [ { "type": "text", "text": "No such file." } ],
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    }
+  ]
+}

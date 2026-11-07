@@ -199,7 +199,8 @@ fn printed(record: &EventRecord) -> String {
         }
         SessionEvent::Status { .. }
         | SessionEvent::Agent { .. }
-        | SessionEvent::ProfileChanged { .. } => String::new(),
+        | SessionEvent::ProfileChanged { .. }
+        | SessionEvent::ModelCall(_) => String::new(),
     }
 }
 

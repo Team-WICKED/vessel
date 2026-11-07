@@ -36,6 +36,13 @@
 //!
 //! Only named profiles with temporary homes are used; the nodes' default
 //! profiles live under the fixtures' temporary user homes.
+//!
+//! Milestone 5 adds its own run (the last test): a provider key planted in
+//! `secrets.toml`, routed sessions of both harnesses in both modes calling
+//! a fake provider through the node's proxy (once answered, once refused by
+//! a provider that echoes the key it was sent), and the sessions' model
+//! tokens as canaries too. The key belongs only in `secrets.toml` and the
+//! provider's request headers; a token only in its harness's environment.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -53,6 +60,7 @@ use tokio_util::sync::CancellationToken;
 use vessel_client::NodeClient;
 use vessel_harness::Lookup;
 use vessel_harness::fakes::{Role, claude_project, install};
+use vessel_node::fleet::{FleetFiles, set_secret};
 use vessel_node::{DataDir, FleetConfig, FleetTargets, VesselMcp};
 use vessel_proto::{
     AgentEvent, ClientInfo, ContentBlock, EventSeq, HarnessKind, ImportSession, ListPeers, NodeId,
@@ -61,6 +69,7 @@ use vessel_proto::{
 };
 use vessel_relay::{LinkState, RelayConfig};
 use vessel_testkit::Fake;
+use vessel_testkit::upstream::{FakeUpstream, Reply};
 
 use crate::support::{Fixture, Ran, within};
 
@@ -167,8 +176,13 @@ impl Captured {
 
     /// No canary in anything captured.
     fn assert_clean(&self, canaries: &[(&str, &str)]) {
+        self.assert_clean_of_at_least(50, canaries);
+    }
+
+    /// No canary in anything captured, which is at least `least` things.
+    fn assert_clean_of_at_least(&self, least: usize, canaries: &[(&str, &str)]) {
         assert!(
-            self.0.len() > 50,
+            self.0.len() > least,
             "too little was captured to mean anything"
         );
         for (what, bytes) in &self.0 {
@@ -1074,6 +1088,256 @@ async fn no_secret_value_appears_where_it_does_not_belong() {
         routeless.stop().await;
         relay.shutdown.cancel();
         relay.serving.await.unwrap().unwrap();
+    })
+    .await;
+}
+
+// ---------------------------------------------------------------------
+// Milestone 5: the provider's key and the sessions' model tokens.
+
+/// A short Chat Completions stream: `Hel`, `lo`, a stop, usage.
+const CHAT_STREAM: &str = concat!(
+    r#"data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen/qwen3-coder","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22}}"#,
+    "\n\n",
+    "data: [DONE]\n\n",
+);
+
+/// A refusal that quotes the key it was sent, as some providers' do.
+fn echoing_refusal(key: &str) -> Reply {
+    Reply::Status {
+        status: 401,
+        body: Bytes::from(
+            json!({"error": {
+                "message": format!("Incorrect API key provided: {key}"),
+                "type": "invalid_request_error",
+                "code": "invalid_api_key",
+            }})
+            .to_string(),
+        ),
+        retry_after: None,
+    }
+}
+
+/// The route `qwen` at the fake provider `url`, and a profile of each
+/// harness on it, homes under `<data>/homes`; the key is a secret.
+fn write_routes(data: &Path, url: &str, key: &str) {
+    let dir = DataDir::new(data);
+    let models = dir.models_path();
+    std::fs::write(
+        &models,
+        format!(
+            "[providers.local]\napi = \"openai-chat-completions\"\nbase_url = \"{url}/v1\"\n\
+             key = {{ secret = \"ROUTED_KEY\" }}\n\n\
+             [models.qwen]\nprovider = \"local\"\nmodel = \"qwen/qwen3-coder\"\n"
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&models, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let home = |name: &str| {
+        let home = data.join("homes").join(name);
+        std::fs::create_dir_all(&home).unwrap();
+        home.display().to_string()
+    };
+    std::fs::write(
+        dir.profiles_path(),
+        format!(
+            "[profiles.claude-routed]\nharness = \"claude\"\nmodel = \"qwen\"\n\
+             env = {{ CLAUDE_CONFIG_DIR = '{}' }}\n\n\
+             [profiles.codex-routed]\nharness = \"codex\"\nmodel = \"qwen\"\n\
+             env = {{ CODEX_HOME = '{}' }}\n",
+            home("claude-routed"),
+            home("codex-routed"),
+        ),
+    )
+    .unwrap();
+    set_secret(&FleetFiles::new(&dir), &"ROUTED_KEY".parse().unwrap(), key).unwrap();
+}
+
+/// Wait until session `id`'s text holds `needle` after its first
+/// `after` bytes.
+async fn said(client: &NodeClient, id: SessionId, after: usize, needle: &str) {
+    until(&format!("{needle:?} from session {id}"), async || {
+        session_text(client, id)
+            .await
+            .get(after..)
+            .is_some_and(|text| text.contains(needle))
+    })
+    .await;
+}
+
+/// What the routed sessions are driven with.
+struct Driving<'a> {
+    fixture: &'a Fixture,
+    client: &'a NodeClient,
+    upstream: &'a FakeUpstream,
+    key: &'a str,
+    reports: &'a Path,
+}
+
+/// A routed session of `harness` under `profile`: one call answered, one
+/// refused by a provider quoting the key, and what its fake was started
+/// with. Returns the session and its model token.
+async fn routed_session(
+    driving: &Driving<'_>,
+    captured: &mut Captured,
+    harness: &str,
+    profile: &str,
+    terminal: bool,
+) -> (Session, String) {
+    let Driving {
+        fixture,
+        client,
+        upstream,
+        key,
+        reports,
+    } = driving;
+    let what = format!("{harness} (terminal: {terminal})");
+    let session = run(fixture, captured, harness, profile, terminal).await;
+    upstream.reply(Reply::Stream {
+        body: Bytes::from_static(CHAT_STREAM.as_bytes()),
+        piece: 29,
+    });
+    client
+        .send(session.id, session.input("model hi"))
+        .await
+        .unwrap();
+    said(client, session.id, 0, "model Hello").await;
+    // The provider refuses, quoting the key: the harness gets the refusal,
+    // never the key.
+    upstream.reply(echoing_refusal(key));
+    let before = session_text(client, session.id).await.len();
+    client
+        .send(session.id, session.input("model again"))
+        .await
+        .unwrap();
+    said(client, session.id, before, "model error").await;
+
+    let report = report(client, session, reports).await;
+    let variable = if harness == "claude" {
+        "ANTHROPIC_AUTH_TOKEN"
+    } else {
+        "VESSEL_MODEL_SECRET"
+    };
+    let token = report.env.get(variable).cloned().unwrap_or_default();
+    assert!(token.starts_with("vslm-"), "{what}: its token");
+    captured.text(format!("{what} arguments"), &report.args.join(" "));
+    for (name, value) in &report.env {
+        assert!(!value.contains(*key), "{what}: the key in {name}");
+        if name != variable {
+            assert!(!value.contains(&token), "{what}: the token in {name}");
+        }
+    }
+    (session, token)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_provider_key_or_model_token_appears_where_it_does_not_belong() {
+    let _log = tracing_log();
+    within(async {
+        let key = canary("PROVIDERKEY");
+        let upstream = FakeUpstream::start().await.unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        fakes(bin.path());
+        let url = upstream.url();
+        let fixture = node("canary-models", None, bin.path(), |data| {
+            write_routes(data, &url, &key);
+        })
+        .await;
+        let client = owner(&fixture).await;
+        let mut captured = Captured::default();
+
+        let models = vessel(&fixture, &mut captured, &["models"], b"").await;
+        assert!(
+            models.ok && models.stdout.contains("qwen/qwen3-coder"),
+            "{}",
+            models.stderr
+        );
+        let profiles = vessel(&fixture, &mut captured, &["profiles"], b"").await;
+        assert!(
+            profiles.stdout.contains("claude-routed"),
+            "{}",
+            profiles.stdout
+        );
+
+        let reports = tempfile::tempdir().unwrap();
+        let driving = Driving {
+            fixture: &fixture,
+            client: &client,
+            upstream: &upstream,
+            key: &key,
+            reports: reports.path(),
+        };
+        let mut started = Vec::new();
+        let mut tokens = Vec::new();
+        for (harness, profile) in [("claude", "claude-routed"), ("codex", "codex-routed")] {
+            for terminal in [true, false] {
+                let (session, token) =
+                    routed_session(&driving, &mut captured, harness, profile, terminal).await;
+                tokens.push(token);
+                started.push(session);
+            }
+        }
+
+        // The key went up, in each call's authorization and nowhere else
+        // of the requests; no token went up.
+        let seen = upstream.seen();
+        assert_eq!(seen.len(), 8);
+        for request in &seen {
+            assert_eq!(
+                request.header("authorization"),
+                Some(format!("Bearer {key}").as_str())
+            );
+            let body = String::from_utf8_lossy(&request.body).into_owned();
+            captured.text(
+                format!("a request to the provider ({})", request.path),
+                &body,
+            );
+            for (name, value) in &request.headers {
+                if name != "authorization" {
+                    captured.text(format!("the request header {name}"), value);
+                }
+            }
+        }
+
+        // The sessions' logs, as the node serves them and as `vessel log`
+        // prints them (model calls included), and every file of the node's
+        // but `secrets.toml`.
+        for session in &started {
+            let text = session_text(&client, session.id).await;
+            captured.text(format!("session {}", session.id), &text);
+            let log = vessel(
+                &fixture,
+                &mut captured,
+                &["log", &session.id.to_string()],
+                b"",
+            )
+            .await;
+            assert!(
+                log.stdout.contains("[model qwen") || log.stderr.contains("[model qwen"),
+                "`vessel log` shows the model calls"
+            );
+        }
+        let _sessions = vessel(&fixture, &mut captured, &["sessions"], b"").await;
+        let secrets = fixture.data().join("secrets.toml");
+        assert!(contains(&std::fs::read(&secrets).unwrap(), key.as_bytes()));
+        captured.tree(fixture.data(), &[secrets]);
+        captured.text("the nodes' tracing", &String::from_utf8_lossy(&traced()));
+        let mut canaries = vec![("provider key", key.as_str())];
+        canaries.extend(tokens.iter().map(|token| ("model token", token.as_str())));
+        captured.assert_clean_of_at_least(30, &canaries);
+        assert!(
+            contains(&traced(), b"model call"),
+            "the proxy's tracing was captured"
+        );
+        fixture.stop().await;
     })
     .await;
 }

@@ -36,13 +36,14 @@ vessel-agent    -> proto, proc
 vessel-session  -> proto, harness, pty, agent
 vessel-store    -> proto
 vessel-node     -> proto, rpc, harness, session, store, secure, relay,
-                   fleet, client               (milestone 4)
+                   fleet, client               (milestone 4), llm (milestone 5)
 vessel-client   -> proto, rpc, secure, relay
 vessel-remote   -> proto, rpc, client      (milestone 2)
 vessel-secure   -> proto                   (milestone 3)
 vessel-relay    -> proto, secure           (milestone 3)
 vessel-fleet    -> proto, harness          (milestone 4)
 vessel-mcp      -> proto, client           (milestone 4)
+vessel-llm      -> proto                   (milestone 5)
 vessel-web      -> proto, client           (milestone 7)
 vessel-cli      -> proto, client, node, remote, mcp, harness, web
 vessel-testkit  (fake harness binaries for tests; dev-dependency only)
@@ -95,6 +96,16 @@ fleet's home (`fleet.manifest`, `fleet.blob`, `fleet.watch`,
 `fleet.report`) and joins it by pairing, as any device does, through
 `vessel-client`'s `SecureConnector` and `pair_over`. `vessel-client` does
 not depend on the node, so there is no cycle.
+
+Milestone 5 (2026-11-07, Track M5) adds `vessel-llm`: model APIs for
+the node's routing proxy (ADR 0015): the Anthropic Messages, `OpenAI`
+Responses and Chat Completions wire types, Server-Sent Events, the
+translation between them and the calls to upstream providers. It knows
+nothing of sessions, nodes or harnesses, so its one edge is `-> proto`
+(the opaque `RawJson` passthrough type and the usage types sessions
+record). `vessel-node -> llm` is the proxy itself: who may call it, with
+which route and key, and where usage is recorded. How a harness is
+pointed at the proxy stays in `vessel-harness`.
 
 Milestone 7 (2026-11-07, Track M7) adds `vessel-web`: `vessel ui`'s
 loopback server, its embedded single-page app and the bridge from the

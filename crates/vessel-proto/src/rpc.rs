@@ -31,6 +31,7 @@ use crate::forward::{
     ListNodes, ListPeers, NodeForgotten, RelayCall,
 };
 use crate::harness::Harness;
+use crate::model::{ListModels, ModelRoute};
 use crate::name::SecretName;
 use crate::node::{NodeInfo, ProtocolVersion};
 use crate::profile::{ListProfiles, MoveProfile, ProfileInfo, ReloadProfiles};
@@ -322,6 +323,8 @@ rpc_methods! {
     DeleteSecret / delete_secret / "secret.delete" [Admin, 6]: DeleteSecret => Ack;
     /// Copy a secret to a node of the fleet (protocol 6).
     CopySecret / copy_secret / "secret.copy" [Admin, 6]: CopySecret => Ack;
+    /// The model routes this node offers (protocol 7).
+    ListModels / list_models / "model.list" [Read, 7]: ListModels => Vec<ModelRoute>;
 }
 
 impl Call {
@@ -382,7 +385,8 @@ impl Call {
             | Self::SetSecret(_)
             | Self::ListSecrets(_)
             | Self::DeleteSecret(_)
-            | Self::CopySecret(_) => None,
+            | Self::CopySecret(_)
+            | Self::ListModels(_) => None,
         };
         fields.map_or(method, |since| method.max(ProtocolVersion::new(since)))
     }

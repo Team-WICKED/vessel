@@ -1,0 +1,29 @@
+[package]
+name = "vessel-llm"
+description = "Model APIs for Vessel's routing proxy: wire types, Server-Sent Events, translation, upstream calls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proto.workspace = true
+
+bytes.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+vessel-testkit = { workspace = true, features = ["upstream"] }
+
+[lints]
+workspace = true

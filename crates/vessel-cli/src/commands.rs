@@ -63,6 +63,11 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
             Ok(io::out(text.as_bytes()).await?)
         }
         Command::Profiles { harness, reload } => Box::pin(profiles(target, harness, reload)).await,
+        Command::Models => {
+            let client = connect(target).await?.client;
+            let text = render::models(&client.models().await?);
+            Ok(io::out(text.as_bytes()).await?)
+        }
         Command::Sessions => {
             let client = connect(target).await?.client;
             let text = render::sessions(&client.sessions().await?);

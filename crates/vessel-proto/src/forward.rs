@@ -233,7 +233,10 @@ impl Method {
     ///   pulls through the home (export, import, read, close), with
     ///   `secret.set`, which `secret.copy` sends to its target, and
     ///   `secret.list` (names only), which it asks the target first, so a
-    ///   target that would refuse the value never receives it.
+    ///   target that would refuse the value never receives it, and
+    ///   `model.list` (protocol 7: route names, providers and model ids,
+    ///   never a URL or a secret name), which a picker of profiles for a
+    ///   session there needs as much as the profiles.
     /// - Not forwardable, administration of a node done there: stopping it,
     ///   its devices, re-reading its profiles, deleting or copying its
     ///   secrets.
@@ -263,7 +266,8 @@ impl Method {
             | Self::ReadTransfer
             | Self::CloseTransfer
             | Self::SetSecret
-            | Self::ListSecrets => true,
+            | Self::ListSecrets
+            | Self::ListModels => true,
             Self::StopNode
             | Self::InviteDevice
             | Self::ListDevices

@@ -94,6 +94,7 @@ async fn cli() -> ExitCode {
         | Command::Harnesses
         | Command::Profiles { .. }
         | Command::Fleet { .. }
+        | Command::Models
         | Command::Sessions
         | Command::Run(_)
         | Command::Attach { .. }

@@ -63,6 +63,7 @@ mod lookup;
 mod mcp;
 mod memory;
 mod profile;
+mod routing;
 mod sessions;
 mod setup;
 
@@ -78,6 +79,7 @@ pub use memory::{MemoryFilesError, RebaseError, memory_files, rebase};
 pub use profile::{
     Position, Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles, same_variable,
 };
+pub use routing::{ModelProxy, routable};
 pub use sessions::{
     LinkError, Linked, SessionFiles, SessionFilesError, link_session, session_files,
 };

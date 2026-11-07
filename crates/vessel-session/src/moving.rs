@@ -35,7 +35,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 use vessel_agent::{AgentError, AgentProcess, AgentSetup, CommandSpec, Disconnect, Signal};
-use vessel_harness::{LinkError, Profile, SessionFiles, SessionFilesError};
+use vessel_harness::{LinkError, ModelProxy, Profile, SessionFiles, SessionFilesError};
 use vessel_proto::{ProfileName, ResolvedMcpServers, SessionEvent};
 
 use crate::lifecycle::drain_deadline;
@@ -65,6 +65,10 @@ pub struct ProfileMove {
     pub notices: Vec<String>,
     /// Move even mid-turn, cancelling the turn.
     pub force: bool,
+    /// The session's model proxy, when the target profile has a model
+    /// route (ADR 0015): the same route as the session's, with a token for
+    /// the new agent.
+    pub model_proxy: Option<ModelProxy>,
 }
 
 /// Why a session did not move.

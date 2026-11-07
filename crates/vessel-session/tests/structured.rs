@@ -214,7 +214,8 @@ const fn status(event: &SessionEvent) -> Option<&SessionStatus> {
         SessionEvent::Status { status } => Some(status),
         SessionEvent::Terminal(_)
         | SessionEvent::Agent { .. }
-        | SessionEvent::ProfileChanged { .. } => None,
+        | SessionEvent::ProfileChanged { .. }
+        | SessionEvent::ModelCall(_) => None,
     }
 }
 

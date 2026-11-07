@@ -77,4 +77,21 @@ pub enum HarnessError {
     /// (the system's random source failed).
     #[error("cannot name an MCP configuration file")]
     McpFile(#[source] Arc<std::io::Error>),
+    /// A profile with a model route came without the session's proxy, or
+    /// a proxy with a profile that has none (ADR 0015): the caller resolves
+    /// the route, and launching the harness against its own vendor instead
+    /// would be a silent change of model.
+    #[error("profile {profile}: its model route and the session's proxy do not go together")]
+    Unrouted {
+        /// The profile.
+        profile: ProfileName,
+    },
+    /// A routed session's own arguments (its profile's or its spec's) would
+    /// choose another model, provider or configuration profile (the
+    /// security review of milestone 5, finding 6).
+    #[error("`{argument}` would take this routed session off its model route")]
+    RoutedArgument {
+        /// The argument.
+        argument: String,
+    },
 }
