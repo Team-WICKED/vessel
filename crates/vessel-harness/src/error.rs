@@ -86,4 +86,12 @@ pub enum HarnessError {
         /// The profile.
         profile: ProfileName,
     },
+    /// A routed session's own arguments (its profile's or its spec's) would
+    /// choose another model, provider or configuration profile (the
+    /// security review of milestone 5, finding 6).
+    #[error("`{argument}` would take this routed session off its model route")]
+    RoutedArgument {
+        /// The argument.
+        argument: String,
+    },
 }

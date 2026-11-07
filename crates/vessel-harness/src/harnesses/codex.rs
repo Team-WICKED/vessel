@@ -34,7 +34,7 @@ use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, McpError, TerminalMcp};
 use crate::memory::MemoryFilesError;
-use crate::routing::{ModelProxy, Routed};
+use crate::routing::{ModelProxy, Routed, Routing};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -66,7 +66,10 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     rebase: None,
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
-    model_proxy: Some(model_proxy),
+    model_proxy: Some(Routing {
+        render: model_proxy,
+        overriding: off_route,
+    }),
 };
 
 /// `memories/`: Codex's memory has no project in its path, so only all of
@@ -255,6 +258,59 @@ fn model_proxy(proxy: &ModelProxy) -> Routed {
             format!("model={}", Value::from(proxy.model.as_str())),
         ],
     }
+}
+
+/// Configuration keys whose first segment decides a session's model or
+/// provider (`-c <key>=<value>`).
+const ROUTING_KEYS: &[&str] = &[
+    "model",
+    "model_provider",
+    "model_providers",
+    "profile",
+    "profiles",
+    "oss_provider",
+];
+
+/// Flags that choose a model, a provider or a configuration profile; with
+/// a value (`-m x`, `--model=x`, `-mx`) or without (`--oss`).
+const ROUTING_FLAGS: &[&str] = &["--model", "--oss", "--local-provider", "--profile"];
+
+/// The first argument that would take a routed Codex session off its
+/// route (see `routing`'s second Decision Log), up to a `--`.
+fn off_route(args: &[String]) -> Option<String> {
+    let mut args = args.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        let setting = match arg.as_str() {
+            "-c" | "--config" => args.next().map(String::as_str),
+            _ => arg
+                .strip_prefix("--config=")
+                .or_else(|| arg.strip_prefix("-c").filter(|_| !arg.starts_with("--"))),
+        };
+        if let Some(setting) = setting {
+            if routing_key(setting) {
+                return Some(arg.clone());
+            }
+            continue;
+        }
+        let flag = arg
+            .split_once('=')
+            .map_or(arg.as_str(), |(flag, _value)| flag);
+        let short = !arg.starts_with("--") && (arg.starts_with("-m") || arg.starts_with("-p"));
+        if ROUTING_FLAGS.contains(&flag) || short {
+            return Some(arg.clone());
+        }
+    }
+    None
+}
+
+/// Whether `-c` `setting` (`key=value`, the key dotted) sets one of
+/// [`ROUTING_KEYS`], however its first segment is quoted or spaced.
+fn routing_key(setting: &str) -> bool {
+    let setting = setting.strip_prefix('=').unwrap_or(setting);
+    let key = setting.split_once('=').map_or(setting, |(key, _value)| key);
+    let first = key.split('.').next().unwrap_or_default();
+    let first = first.trim().trim_matches(['"', '\'']).trim();
+    ROUTING_KEYS.contains(&first)
 }
 
 /// `VESSEL_MCP_<server>_<header>_SECRET`: indexes, since server and header

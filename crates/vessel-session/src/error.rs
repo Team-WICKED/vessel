@@ -93,6 +93,7 @@ impl SessionError {
                 HarnessError::NoSuchDirectory { .. }
                 | HarnessError::RelativeDirectory { .. }
                 | HarnessError::ProfileMismatch { .. }
+                | HarnessError::RoutedArgument { .. }
                 | HarnessError::Mcp(_),
             )
             | Self::NoWorkingDirectory

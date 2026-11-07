@@ -57,7 +57,7 @@ use serde::Deserialize;
 use vessel_proto::{EnvName, HarnessKind, InvalidName, ModelRouteName, ProfileInfo, ProfileName};
 
 use crate::harnesses::descriptor;
-use crate::routing::routed_variables;
+use crate::routing::{overriding, routed_variables};
 
 /// A harness with environment changes and terminal arguments.
 #[derive(Clone, PartialEq, Eq)]
@@ -385,6 +385,13 @@ pub enum ProfileProblem {
         /// The variable.
         name: EnvName,
     },
+    /// A routed profile's argument would choose another model, provider or
+    /// configuration profile.
+    #[error("`args`: `{argument}` would take the profile's sessions off its model route")]
+    RoutedArgument {
+        /// The argument.
+        argument: String,
+    },
 }
 
 /// Read `profiles.toml` from its text. `user_home` is what `~/` expands
@@ -494,6 +501,11 @@ fn profile(
         .ok_or_else(|| ProfileProblem::NoHome {
             key: "args".to_owned(),
         })?;
+    if model.is_some()
+        && let Some(argument) = overriding(harness, &args)
+    {
+        return Err(ProfileProblem::RoutedArgument { argument });
+    }
     Ok(Profile {
         name,
         harness,

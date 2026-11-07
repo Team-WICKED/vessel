@@ -42,7 +42,8 @@ pub struct Launch {
 /// name, this checks the result.
 ///
 /// Terminal mode runs the harness binary with, in order: the MCP servers'
-/// launch-time arguments, the profile's arguments, then the spec's.
+/// launch-time arguments, the profile's arguments, the spec's, then the
+/// route's (before a `--`, if the profile's or the spec's hold one).
 /// Structured mode runs whatever speaks ACP for that harness: the binary
 /// itself with its ACP arguments, or a separate adapter (which needs only
 /// the adapter to be installed); its MCP servers go over ACP instead, so
@@ -76,7 +77,8 @@ pub struct Launch {
 /// (two values for one variable); [`HarnessError::NoMcpDirectory`] when the
 /// harness needs a file and `mcp_dir` is `None`;
 /// [`HarnessError::Unrouted`] when a routed profile comes without a proxy
-/// or a proxy without a routed profile.
+/// or a proxy without a routed profile; [`HarnessError::RoutedArgument`]
+/// when a routed session's own arguments would take it off its route.
 pub fn launch(
     lookup: &Lookup,
     env: &HarnessEnv,
@@ -105,9 +107,22 @@ pub fn launch(
         });
     }
     let descriptor = descriptor(harness);
-    let routed = match (profile.model(), proxy, descriptor.model_proxy) {
+    let routed = match (profile.model(), proxy, &descriptor.model_proxy) {
         (None, None, _) => Routed::default(),
-        (Some(_), Some(proxy), Some(render)) => render(proxy),
+        (Some(_), Some(proxy), Some(routing)) => {
+            // Nothing of the profile's or the session's own may take the
+            // session off its route (the security review's finding 6).
+            let own = match &spec.mode {
+                SessionMode::Terminal { args, .. } => args.as_slice(),
+                SessionMode::Structured { .. } => &[],
+            };
+            for args in [profile.args(), own] {
+                if let Some(argument) = (routing.overriding)(args) {
+                    return Err(HarnessError::RoutedArgument { argument });
+                }
+            }
+            (routing.render)(proxy)
+        }
         (Some(_), None, _) | (None, Some(_), _) | (Some(_), Some(_), None) => {
             return Err(HarnessError::Unrouted {
                 profile: profile.name().clone(),
@@ -140,10 +155,16 @@ pub fn launch(
                 }
                 None => unattached.extend(mcp.keys().cloned()),
             }
+            // The route's own arguments come last, so they win over any
+            // the check above did not know (a harness takes the last of
+            // two), but before a `--`, after which arguments are text.
+            let own: Vec<&String> = profile.args().iter().chain(args).collect();
+            let split = own.iter().position(|arg| *arg == "--").unwrap_or(own.len());
+            let (options, text) = own.split_at(split);
             command
+                .args(options.iter().copied())
                 .args(routed.args.iter())
-                .args(profile.args())
-                .args(args)
+                .args(text.iter().copied())
         }
         SessionMode::Structured { .. } => match &descriptor.structured {
             Structured::Native { args } => CommandSpec::new(installed(descriptor.binary)?)

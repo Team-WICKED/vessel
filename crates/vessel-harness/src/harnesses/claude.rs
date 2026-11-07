@@ -42,7 +42,7 @@ use super::{Descriptor, Home, Structured};
 use crate::layout::HarnessLayout;
 use crate::mcp::{EncodeProblem, FileForm, McpError, TerminalMcp};
 use crate::memory::{MemoryFilesError, RebaseError};
-use crate::routing::{ModelProxy, Routed};
+use crate::routing::{ModelProxy, Routed, Routing};
 use crate::sessions::{SessionFiles, SessionFilesError, entry};
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -75,7 +75,10 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     rebase: Some(rebase),
     terminal_mcp: Some(terminal_mcp),
     terminal_args: true,
-    model_proxy: Some(model_proxy),
+    model_proxy: Some(Routing {
+        render: model_proxy,
+        overriding: off_route,
+    }),
 };
 
 /// A routed session (ADR 0015): Claude Code's documented gateway
@@ -110,6 +113,17 @@ fn model_proxy(proxy: &ModelProxy) -> Routed {
         ],
         args: Vec::new(),
     }
+}
+
+/// The first argument that would take a routed Claude Code session off
+/// its route: `--settings`, which can set the gateway variables. A
+/// `--model` is not one: the proxy refuses a model the route does not
+/// allow.
+fn off_route(args: &[String]) -> Option<String> {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .find(|arg| *arg == "--settings" || arg.starts_with("--settings="))
+        .cloned()
 }
 
 /// The longest slug Claude Code keeps whole.

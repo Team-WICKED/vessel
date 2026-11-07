@@ -21,7 +21,7 @@ use vessel_proto::{HarnessKind, HarnessSessionId, ResolvedMcpServers};
 use crate::layout::HarnessLayout;
 use crate::mcp::{McpError, TerminalMcp};
 use crate::memory::{MemoryFilesError, RebaseError};
-use crate::routing::RenderRouting;
+use crate::routing::Routing;
 use crate::sessions::{SessionFiles, SessionFilesError};
 
 /// What Vessel needs to know to run one harness.
@@ -73,7 +73,7 @@ pub(crate) struct Descriptor {
     /// How the harness is pointed at the node's model proxy (ADR 0015);
     /// `None` if it cannot be yet, and its profiles with a `model` route
     /// are refused when `profiles.toml` is read.
-    pub(crate) model_proxy: Option<RenderRouting>,
+    pub(crate) model_proxy: Option<Routing>,
 }
 
 /// Find a session's files: `(home, working directory, session id)`, the

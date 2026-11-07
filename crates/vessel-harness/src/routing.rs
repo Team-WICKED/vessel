@@ -15,6 +15,27 @@
 //!   refused when `profiles.toml` is read, rather than silently overridden.
 //! - Harnesses without a renderer (Gemini CLI, `OpenCode` in milestone 5)
 //!   cannot have a routed profile.
+//!
+//! [Decision Log] (the security review of milestone 5, finding 6)
+//! - Problem: a harness takes the last of two settings for one key, and a
+//!   routed Codex session's own arguments (its profile's, its spec's) came
+//!   after Vessel's: `-c model_providers.vessel.base_url=...` sent the
+//!   session's prompts and token elsewhere while it was recorded as
+//!   routed.
+//! - Choice: each harness's [`Routing`] also names the arguments that
+//!   would take a session off its route; a routed profile with one is
+//!   refused when `profiles.toml` is read, and a routed session's own
+//!   arguments are checked at launch. And the routing arguments come
+//!   last, after the profile's and the session's (before a `--`, after
+//!   which arguments are text), so nothing missed by the check can come
+//!   after them. For Codex: `-c`/`--config` setting `model`,
+//!   `model_provider(s)`, `profile(s)` or `oss_provider`, and `-m`/
+//!   `--model`, `--oss`, `--local-provider`, `-p`/`--profile`, in every
+//!   spelling clap accepts. For Claude Code: `--settings`, which can set
+//!   the gateway variables itself.
+//! - Not covered: what the harness reads from its own home (an account's
+//!   settings file, an administrator's managed configuration); those are
+//!   the account's, as the session's home is.
 
 use std::fmt;
 
@@ -67,8 +88,24 @@ pub(crate) struct Routed {
     pub(crate) args: Vec<String>,
 }
 
-/// A harness's renderer.
-pub(crate) type RenderRouting = fn(&ModelProxy) -> Routed;
+/// How one harness is routed.
+#[derive(Debug)]
+pub(crate) struct Routing {
+    /// Its variables and arguments for a session.
+    pub(crate) render: fn(&ModelProxy) -> Routed,
+    /// The first of a routed session's own arguments (its profile's or
+    /// its spec's) that would take it off its route, if any.
+    pub(crate) overriding: fn(&[String]) -> Option<String>,
+}
+
+/// The first argument of `args` that would take a routed session of
+/// `harness` off its route.
+pub(crate) fn overriding(harness: HarnessKind, args: &[String]) -> Option<String> {
+    descriptor(harness)
+        .model_proxy
+        .as_ref()
+        .and_then(|routing| (routing.overriding)(args))
+}
 
 /// Whether `harness` can have a routed profile.
 #[must_use]
@@ -80,10 +117,10 @@ pub fn routable(harness: HarnessKind) -> bool {
 /// harness with a route may not set them itself. Empty when the harness
 /// cannot be routed.
 pub(crate) fn routed_variables(harness: HarnessKind) -> Vec<&'static str> {
-    let Some(render) = descriptor(harness).model_proxy else {
+    let Some(routing) = &descriptor(harness).model_proxy else {
         return Vec::new();
     };
-    let routed = render(&ModelProxy {
+    let routed = (routing.render)(&ModelProxy {
         base_url: String::new(),
         token: String::new(),
         model: ModelId::new(""),

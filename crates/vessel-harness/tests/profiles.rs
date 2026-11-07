@@ -848,8 +848,10 @@ fn a_routed_codex_gets_a_vessel_provider_in_overrides_in_both_modes() {
             set(&launched.command, "VESSEL_MODEL_SECRET").as_deref(),
             Some(MODEL_TOKEN)
         );
+        // The route's overrides come last, so they win (Codex takes the
+        // last of two settings for a key).
         let args = args(&launched);
-        let (overrides, rest) = args.split_at(6);
+        let (rest, overrides) = args.split_at(args.len().checked_sub(6).unwrap());
         assert_eq!(rest, after);
         let mut settings = BTreeMap::new();
         for pair in overrides.chunks_exact(2) {
@@ -924,4 +926,91 @@ fn routes_are_checked_when_profiles_are_read() {
     assert!(vessel_harness::routable(HarnessKind::Codex));
     assert!(!vessel_harness::routable(HarnessKind::Gemini));
     assert!(!vessel_harness::routable(HarnessKind::OpenCode));
+}
+
+/// The security review's finding 6: a routed session's own arguments may
+/// not choose another model, provider or configuration profile, in any
+/// spelling the harness accepts; a profile with one is refused when read,
+/// a session with one at launch.
+#[test]
+fn arguments_that_would_leave_the_route_are_refused() {
+    let bin = TempDir::new();
+    let tui = fake(vessel_testkit::Fake::Tui);
+    let _codex = install(bin.path(), HarnessKind::Codex, Role::Terminal, &tui).unwrap();
+    let _claude = install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap();
+    let lookup = Lookup::new([bin.path().to_owned()]);
+    let codex = routed("codex-qwen");
+    let claude = routed("claude-qwen");
+    let off_route: [&[&str]; 13] = [
+        &[
+            "-c",
+            "model_providers.vessel.base_url=\"http://127.0.0.1:9/v1\"",
+        ],
+        &["-c", "model_provider=\"openai\""],
+        &["-c", "model=\"gpt-5\""],
+        &["--config", "model=\"gpt-5\""],
+        &["--config=model_provider=openai"],
+        &["-cmodel_providers={}"],
+        &["-c", " \"model_provider\" = \"x\""],
+        &["-c", "profile=\"work\""],
+        &["-m", "gpt-5"],
+        &["--model=gpt-5"],
+        &["--oss"],
+        &["--local-provider", "ollama"],
+        &["exec", "-p", "work", "do it"],
+    ];
+    for args in off_route {
+        let spec = terminal(HarnessKind::Codex, args, bin.path());
+        assert!(
+            matches!(
+                launch_routed(&lookup, &spec, &codex, Some(&proxy())),
+                Err(HarnessError::RoutedArgument { .. })
+            ),
+            "{args:?}"
+        );
+        let quoted: Vec<String> = args.iter().map(|arg| format!("{arg:?}")).collect();
+        let text = format!(
+            "[profiles.p]\nharness = \"codex\"\nmodel = \"r\"\nargs = [{}]\n",
+            quoted.join(", ")
+        );
+        assert!(
+            matches!(
+                vessel_harness::parse_profiles(&text, None),
+                Err(vessel_harness::ProfilesError::Profile {
+                    problem: vessel_harness::ProfileProblem::RoutedArgument { .. },
+                    ..
+                })
+            ),
+            "{text}"
+        );
+    }
+    // What does not choose the model or provider is the session's own;
+    // so is anything after a `--` (text), and the route goes before it.
+    for args in [
+        &["-c", "model_reasoning_effort=\"high\""][..],
+        &["--full-auto", "resume"],
+        &["--", "-m is just text"],
+    ] {
+        let spec = terminal(HarnessKind::Codex, args, bin.path());
+        let launched = launch_routed(&lookup, &spec, &codex, Some(&proxy())).unwrap();
+        let args = routing::args(&launched);
+        if let Some(text) = args.iter().position(|arg| arg == "--") {
+            assert!(
+                args[..text]
+                    .iter()
+                    .any(|arg| arg.starts_with("model_provider="))
+            );
+            assert_eq!(args[text..], ["--", "-m is just text"]);
+        }
+    }
+    // Claude Code: `--settings` can set its gateway variables.
+    for args in [&["--settings", "{}"][..], &["--settings={}"]] {
+        let spec = terminal(HarnessKind::ClaudeCode, args, bin.path());
+        assert!(matches!(
+            launch_routed(&lookup, &spec, &claude, Some(&proxy())),
+            Err(HarnessError::RoutedArgument { .. })
+        ));
+    }
+    let spec = terminal(HarnessKind::ClaudeCode, &["--model", "opus"], bin.path());
+    assert!(launch_routed(&lookup, &spec, &claude, Some(&proxy())).is_ok());
 }
