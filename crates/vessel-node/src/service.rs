@@ -24,6 +24,7 @@ use crate::devices::Devices;
 use crate::error::ServiceError;
 use crate::fleet::{Home, Links};
 use crate::lifecycle::Lifecycle;
+use crate::models::Models;
 use crate::principal::Principal;
 use crate::profiles::launch::{Launcher, agent_session};
 use crate::profiles::{NodeProfiles, moving};
@@ -47,6 +48,8 @@ pub(crate) struct NodeService {
     forwarders: TaskTracker,
     /// `profiles.toml` (ADR 0011).
     profiles: Arc<NodeProfiles>,
+    /// `models.toml` and the model proxy's tokens (ADR 0015).
+    models: Arc<Models>,
     /// What `session.create` adds to the spec.
     launcher: Launcher,
     /// Sessions' agents (ADR 0013): credentials, grants, limits.
@@ -69,6 +72,7 @@ pub(crate) struct Parts {
     pub(crate) devices: Arc<Devices>,
     pub(crate) forwarders: TaskTracker,
     pub(crate) profiles: Arc<NodeProfiles>,
+    pub(crate) models: Arc<Models>,
     pub(crate) launcher: Launcher,
     pub(crate) agents: Arc<Agents>,
     pub(crate) fleet: Arc<Home>,
@@ -85,6 +89,7 @@ impl NodeService {
             devices,
             forwarders,
             profiles,
+            models,
             launcher,
             agents,
             fleet,
@@ -98,6 +103,7 @@ impl NodeService {
             devices,
             forwarders,
             profiles,
+            models,
             launcher,
             agents,
             fleet,
@@ -405,8 +411,8 @@ impl NodeService {
 
 /// Model routes (protocol 7, milestone 5, ADR 0015).
 impl NodeService {
-    /// `model.list`: the routes this node offers. Not built yet: the
-    /// node's proxy and its `models.toml` come next (milestone 5, B6).
+    /// `model.list`: the routes this node offers; names, providers, APIs
+    /// and model ids, never a URL or a secret name.
     #[expect(
         clippy::unused_async,
         reason = "every call has the same async shape, so the guard's rows are uniform"
@@ -416,10 +422,7 @@ impl NodeService {
         _: &Connection,
         _: ListModels,
     ) -> Result<Vec<ModelRoute>, WireError> {
-        Err(WireError::new(
-            ErrorCode::Unsupported,
-            "model routes are not built on this node yet".to_owned(),
-        ))
+        Ok(self.models.list())
     }
 }
 
@@ -447,10 +450,17 @@ impl NodeService {
         _: ReloadProfiles,
     ) -> Result<Vec<ProfileInfo>, WireError> {
         let profiles = Arc::clone(&self.profiles);
-        tokio::task::spawn_blocking(move || profiles.reload())
-            .await
-            .map_err(|error| wire(&ServiceError::Task(error)))?
-            .map_err(|error| wire(&ServiceError::Profiles(error)))
+        let models = Arc::clone(&self.models);
+        tokio::task::spawn_blocking(move || {
+            // `models.toml` goes with the profiles that name its routes;
+            // either file that cannot be used leaves its own in effect.
+            let reloaded = profiles.reload().map_err(ServiceError::Profiles)?;
+            models.reload().map_err(ServiceError::Models)?;
+            Ok(reloaded)
+        })
+        .await
+        .map_err(|error| wire(&ServiceError::Task(error)))?
+        .map_err(|error: ServiceError| wire(&error))
     }
 
     /// `session.move_profile` (H2): a live structured session resumes its

@@ -73,6 +73,17 @@ pub enum NodeError {
     /// start rather than run sessions under a guess (ADR 0011).
     #[error("profiles.toml cannot be used")]
     Profiles(#[source] ProfilesFileError),
+    /// `models.toml` cannot be read, is readable by other users, or does
+    /// not parse; the node does not start rather than route calls under a
+    /// guess (ADR 0015).
+    #[error("models.toml cannot be used")]
+    Models(#[source] crate::models::ModelsError),
+    /// The client for model calls cannot be built.
+    #[error("cannot build the client for model calls")]
+    ModelClient(#[source] vessel_llm::client::ClientError),
+    /// The model proxy's loopback port cannot be bound.
+    #[error("cannot listen for model calls on loopback")]
+    ModelProxy(#[source] std::io::Error),
     /// The data directory's MCP directory cannot be prepared.
     #[error("the MCP configuration directory is unusable")]
     McpDir(#[source] StoreError),
@@ -197,6 +208,10 @@ pub(crate) enum ServiceError {
     /// stay.
     #[error("the profiles in effect stay")]
     Profiles(#[source] ProfilesFileError),
+    /// `profile.reload` found a `models.toml` it cannot use; the routes in
+    /// effect stay.
+    #[error("the model routes in effect stay")]
+    Models(#[source] crate::models::ModelsError),
     /// A transfer could not be opened, read, pulled or placed (protocol
     /// 6).
     #[error(transparent)]
@@ -217,7 +232,8 @@ impl ServiceError {
             | Self::HomeUnknown(_)
             | Self::NotLoggedIn(_)
             | Self::AgentGone(_)
-            | Self::MoveRunning(_) => ErrorCode::Conflict,
+            | Self::MoveRunning(_)
+            | Self::Models(_) => ErrorCode::Conflict,
             Self::AgentDepth { .. } | Self::AgentLimit { .. } | Self::NotOwned(_) => {
                 ErrorCode::Forbidden
             }

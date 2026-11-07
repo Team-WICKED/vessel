@@ -37,6 +37,10 @@ use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::ir::{Failure, FailureClass};
 use crate::wire;
 
+/// A provider's base URL (reqwest's, re-exported so callers need not
+/// depend on it).
+pub use reqwest::Url;
+
 /// An API a provider speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Api {
@@ -110,7 +114,7 @@ pub struct Endpoint {
     /// The API.
     pub api: Api,
     /// The provider's base URL, from `models.toml` alone.
-    pub base_url: reqwest::Url,
+    pub base_url: Url,
     /// Its key, if it takes one (a local server may not).
     pub key: Option<ApiKey>,
 }
@@ -250,7 +254,7 @@ impl Client {
     async fn attempt(
         &self,
         endpoint: &Endpoint,
-        url: &reqwest::Url,
+        url: &Url,
         body: Bytes,
         headers: &[(HeaderName, HeaderValue)],
     ) -> Result<Answer, Failure> {
@@ -313,7 +317,7 @@ const ERROR_BODY_LIMIT: usize = 64 * 1024;
 /// How long an error message may be once it leaves the client.
 const MESSAGE_LIMIT: usize = 512;
 
-fn url(endpoint: &Endpoint) -> reqwest::Url {
+fn url(endpoint: &Endpoint) -> Url {
     let mut url = endpoint.base_url.clone();
     let path = format!(
         "{}{}",
@@ -483,7 +487,7 @@ mod tests {
     fn endpoint(api: Api, base: &str) -> Endpoint {
         Endpoint {
             api,
-            base_url: reqwest::Url::parse(base).unwrap(),
+            base_url: Url::parse(base).unwrap(),
             key: Some(ApiKey::new("sk-secret-key".into())),
         }
     }

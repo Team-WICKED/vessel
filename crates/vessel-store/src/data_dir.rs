@@ -14,6 +14,8 @@
 //!   logs/            the log of a node started by `vesseld attach`
 //!   profiles.toml    harness profiles (ADR 0011), written by the owner;
 //!                    read at start and on `profile.reload`
+//!   models.toml      model routes (ADR 0015), written by the owner, refused
+//!                    when other users can read it
 //!   mcp/             terminal sessions' MCP configuration files (ADR
 //!                    0012), one per live session, emptied at start
 //! ```
@@ -52,13 +54,15 @@ const SOCKET_FILE: &str = "vesseld.sock";
 const BIN_DIR: &str = "bin";
 const LOG_DIR: &str = "logs";
 const PROFILES_FILE: &str = "profiles.toml";
+const MODELS_FILE: &str = "models.toml";
 const MCP_DIR: &str = "mcp";
 
 /// `profiles.toml` as read: its text, and whether other users can read it
 /// (it may hold secrets, so the node warns).
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProfilesFile {
-    /// The file's text.
+    /// The file's text (`profiles.toml`, or `models.toml`, which is read the
+    /// same way).
     pub text: String,
     /// Whether users other than the owner can read it (Unix; always
     /// `false` on Windows, see `files`).
@@ -155,6 +159,32 @@ impl DataDir {
     #[must_use]
     pub fn profiles_path(&self) -> PathBuf {
         self.root.join(PROFILES_FILE)
+    }
+
+    /// The node's model routes (ADR 0015).
+    #[must_use]
+    pub fn models_path(&self) -> PathBuf {
+        self.root.join(MODELS_FILE)
+    }
+
+    /// `models.toml`, or `None` if there is none (the node then routes no
+    /// model). Whether other users can read it is reported, not judged:
+    /// the node refuses such a file (ADR 0015, decision 4).
+    ///
+    /// # Errors
+    /// The file exists but cannot be read, or is not UTF-8.
+    pub fn read_models(&self) -> Result<Option<ProfilesFile>, StoreError> {
+        let path = self.models_path();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(StoreError::io(&path)(error)),
+        };
+        let readable_by_others = files::readable_by_others(&path).map_err(StoreError::io(&path))?;
+        Ok(Some(ProfilesFile {
+            text,
+            readable_by_others,
+        }))
     }
 
     /// Where terminal sessions' MCP configuration files go (ADR 0012).

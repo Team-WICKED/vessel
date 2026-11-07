@@ -57,6 +57,7 @@ impl Fixture {
             store.clone(),
             tasks.clone(),
             Arc::new(crate::agents::Agents::new(vessel_proto::NodeId::random())),
+            Arc::new(crate::models::Models::for_tests(&DataDir::new(data.path()))),
         ));
         Self {
             data,

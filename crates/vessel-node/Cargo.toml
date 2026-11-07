@@ -18,6 +18,8 @@ vessel-client.workspace = true
 # Bundling on the home, materialising on members (ADR 0012).
 vessel-fleet.workspace = true
 vessel-harness.workspace = true
+# The model routing proxy's APIs and upstream client (ADR 0015).
+vessel-llm.workspace = true
 vessel-proto.workspace = true
 vessel-relay.workspace = true
 vessel-rpc.workspace = true
@@ -46,6 +48,9 @@ serde.workspace = true
 serde_json.workspace = true
 # Invitations are kept by the hash of their secret (ADR 0010).
 sha2.workspace = true
+# Model tokens compared in constant time (ADR 0015); already in the
+# workspace through vessel-store.
+subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
 # `fleet.toml`: typed reading, and `vessel fleet init` writing it with
@@ -67,8 +72,9 @@ vessel-mcp.workspace = true
 # A relay client that says, through a trusted proxy's header, which
 # address it comes from (e2e `crowd`); already built for vessel-relay.
 tokio-tungstenite.workspace = true
-# The misbehaving relay (feature `relay`) for the secure e2e tests.
-vessel-testkit = { workspace = true, features = ["relay"] }
+# The misbehaving relay (feature `relay`) for the secure e2e tests, and
+# the fake model provider (feature `upstream`) for the model proxy's.
+vessel-testkit = { workspace = true, features = ["relay", "upstream"] }
 
 [lints]
 workspace = true
