@@ -4,8 +4,8 @@
 use std::fmt::Write as _;
 
 use vessel_proto::{
-    EnvName, Harness, ModelCall, ModelStop, NodeInfo, NodeState, ProfileInfo, ProfileName,
-    SessionInfo, SessionMode, SessionStatus, StructuredSupport,
+    EnvName, Harness, ModelApi, ModelCall, ModelRoute, ModelStop, NodeInfo, NodeState, ProfileInfo,
+    ProfileName, SessionInfo, SessionMode, SessionStatus, StructuredSupport,
 };
 
 /// A session's status in a few words.
@@ -145,8 +145,9 @@ pub(crate) fn harnesses(harnesses: &[Harness]) -> String {
     text
 }
 
-/// One profile per line: name, harness, the variables it sets (names only;
-/// the node never sends values), and its label.
+/// One profile per line: name, harness, its model route (`-` for the
+/// harness's own provider), the variables it sets (names only; the node
+/// never sends values), and its label.
 pub(crate) fn profiles(profiles: &[ProfileInfo]) -> String {
     if profiles.is_empty() {
         return "no profiles\n".to_owned();
@@ -163,16 +164,54 @@ pub(crate) fn profiles(profiles: &[ProfileInfo]) -> String {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        let route = profile
+            .model
+            .as_ref()
+            .map_or_else(|| "-".to_owned(), ToString::to_string);
         let _infallible = writeln!(
             text,
-            "{:<20} {:<12} {:<32} {}",
+            "{:<20} {:<12} {:<16} {:<32} {}",
             profile.name,
             profile.harness,
+            route,
             sets,
             profile.label.as_deref().unwrap_or(""),
         );
     }
     text
+}
+
+/// One model route per line: name, provider, API, model, and its small
+/// model when it has one. Never a URL or a secret name: the node sends
+/// neither.
+pub(crate) fn models(routes: &[ModelRoute]) -> String {
+    if routes.is_empty() {
+        return "no model routes (the node's models.toml defines them)\n".to_owned();
+    }
+    let mut text = String::new();
+    for route in routes {
+        let _infallible = write!(
+            text,
+            "{:<20} {:<16} {:<24} {}",
+            route.name,
+            route.provider,
+            api(route.api),
+            route.model,
+        );
+        if let Some(small) = &route.small_model {
+            let _infallible = write!(text, " (small: {small})");
+        }
+        text.push('\n');
+    }
+    text
+}
+
+const fn api(api: ModelApi) -> &'static str {
+    match api {
+        ModelApi::AnthropicMessages => "anthropic-messages",
+        ModelApi::OpenAiResponses => "openai-responses",
+        ModelApi::OpenAiChatCompletions => "openai-chat-completions",
+    }
 }
 
 pub(crate) fn sessions(sessions: &[SessionInfo]) -> String {
@@ -243,10 +282,21 @@ mod tests {
                 ],
                 model: None,
             },
+            ProfileInfo {
+                name: "claude-qwen".parse().unwrap(),
+                label: None,
+                harness: HarnessKind::ClaudeCode,
+                sets: Vec::new(),
+                model: Some("qwen-coder".parse().unwrap()),
+            },
         ];
         let text = profiles_text(&profiles);
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 3);
+        assert!(
+            lines[2].starts_with("claude-qwen ") && lines[2].contains(" qwen-coder "),
+            "{text}"
+        );
         assert!(
             lines[0].starts_with("claude ") && lines[0].contains(" - "),
             "{text}"
@@ -261,6 +311,38 @@ mod tests {
 
     fn profiles_text(profiles: &[ProfileInfo]) -> String {
         super::profiles(profiles)
+    }
+
+    #[test]
+    fn model_routes_show_provider_api_and_models() {
+        let routes = [
+            ModelRoute {
+                name: "qwen-coder".parse().unwrap(),
+                provider: "openrouter".parse().unwrap(),
+                api: ModelApi::OpenAiChatCompletions,
+                model: vessel_proto::ModelId::new("qwen/qwen3-coder"),
+                small_model: Some(vessel_proto::ModelId::new("qwen/qwen3-coder-flash")),
+            },
+            ModelRoute {
+                name: "sonnet".parse().unwrap(),
+                provider: "anthropic".parse().unwrap(),
+                api: ModelApi::AnthropicMessages,
+                model: vessel_proto::ModelId::new("claude-sonnet-4-5"),
+                small_model: None,
+            },
+        ];
+        let text = models(&routes);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[0].starts_with("qwen-coder "), "{text}");
+        assert!(lines[0].contains(" openrouter "), "{text}");
+        assert!(lines[0].contains(" openai-chat-completions "), "{text}");
+        assert!(
+            lines[0].ends_with("qwen/qwen3-coder (small: qwen/qwen3-coder-flash)"),
+            "{text}"
+        );
+        assert!(lines[1].ends_with(" claude-sonnet-4-5"), "{text}");
+        assert!(models(&[]).starts_with("no model routes"));
     }
 
     #[test]

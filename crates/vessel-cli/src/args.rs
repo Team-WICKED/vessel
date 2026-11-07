@@ -79,6 +79,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: FleetCommand,
     },
+    /// List the node's model routes (`model = "<route>"` in a profile;
+    /// milestone 5): their providers, APIs and models, never a URL or key.
+    Models,
     /// List sessions, newest first.
     Sessions,
     /// Start a session and attach to it.
