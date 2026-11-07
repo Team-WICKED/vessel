@@ -725,14 +725,16 @@ async fn a_harness_that_stops_reading_ends_its_call() {
     within(async {
         let limits = Limits {
             idle: Duration::from_secs(1),
+            max_body: 64 * 1024 * 1024,
             ..Limits::default()
         };
         let fixture = Fixture::with(limits).await;
         let (handle, token, records) = fixture.session("sonnet").await;
-        // About 24 MiB: more than the sockets between hold, less than the
-        // answer's bound.
+        // About 48 MiB, under the answer's bound: more than the sockets
+        // between can hold on any system, with the harness's own receive
+        // buffer kept small.
         fixture.upstream.reply(Reply::Stream {
-            body: deltas(6 * 1024, 4096),
+            body: deltas(12 * 1024, 4096),
             piece: 64 * 1024,
         });
         let request = request_text(
@@ -741,7 +743,9 @@ async fn a_harness_that_stops_reading_ends_its_call() {
             &[("authorization", &format!("Bearer {token}"))],
             &streamed(),
         );
-        let mut socket = TcpStream::connect(fixture.proxy).await.unwrap();
+        let harness = tokio::net::TcpSocket::new_v4().unwrap();
+        harness.set_recv_buffer_size(8 * 1024).unwrap();
+        let mut socket = harness.connect(fixture.proxy).await.unwrap();
         socket.write_all(request.as_bytes()).await.unwrap();
         // Never read.
         let call = next_call(&handle).await;
