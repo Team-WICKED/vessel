@@ -40,9 +40,10 @@ pub struct Registry {
     /// empty working directory and their temporary directory. Servers never
     /// run with a repository as cwd; without this no server starts.
     pub state_dir: Option<PathBuf>,
-    /// The operator's configured roots. In conservative mode a custom or
-    /// linked Rust toolchain (not one rustup installed) may live under none
-    /// of them; every executable must also be outside the served root.
+    /// The operator's configured roots. In conservative mode a Rust
+    /// toolchain rustup did not install itself (an explicit pin, or a linked
+    /// or path default) may live under none of them; every executable must
+    /// also be outside the served root.
     pub configured_roots: Vec<PathBuf>,
     /// Trusted tsserver.js, required in conservative mode when PATH has none.
     pub typescript_server: Option<PathBuf>,
@@ -222,10 +223,10 @@ impl Registry {
         }
         let tools = rust.ok_or(Error::NotInstalled)?;
         // Any toolchain inside the served root is the repository's. One
-        // that rustup did not install itself (a link or a path) is trusted
-        // only outside every configured root as well.
+        // that rustup did not install itself (a pin, a link or a path) is
+        // trusted only outside every configured root as well.
         let trusted = |path: &Path| {
-            !path.starts_with(root) && (!tools.custom || self.outside_roots(path, root))
+            !path.starts_with(root) && (!tools.unverified || self.outside_roots(path, root))
         };
         if !tools.paths().all(trusted) {
             return Err(Error::ProjectConfiguration);
@@ -342,7 +343,7 @@ impl Registry {
 mod tests {
     use super::*;
 
-    fn tools(toolchain: &Path, custom: bool) -> RustTools {
+    fn tools(toolchain: &Path, unverified: bool) -> RustTools {
         let bin = toolchain.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         for tool in ["rustc", "cargo"] {
@@ -353,15 +354,15 @@ mod tests {
             rustc: toolchain.join("bin/rustc"),
             cargo: toolchain.join("bin/cargo"),
             toolchain: Some(toolchain),
-            custom,
+            unverified,
         }
     }
 
-    /// The review's rule for rustup's default: a linked or path toolchain
-    /// is trusted only outside every configured root; one rustup installed
-    /// only needs to be outside the served root.
+    /// The review's rule: a pinned, linked or path toolchain is trusted only
+    /// outside every configured root; one rustup installed only needs to be
+    /// outside the served root.
     #[test]
-    fn a_custom_toolchain_inside_a_configured_root_is_refused() {
+    fn an_unverified_toolchain_inside_a_configured_root_is_refused() {
         let state = tempfile::tempdir().unwrap();
         let configured = tempfile::tempdir().unwrap();
         let served = tempfile::tempdir().unwrap();

@@ -398,6 +398,43 @@ mod launch {
         .unwrap();
     }
 
+    /// Verification finding: a toolchain pin inside another configured root
+    /// ran that repository's tools when this root was queried. A pin must
+    /// lie outside every configured root, like a linked default.
+    #[tokio::test]
+    async fn an_explicit_toolchain_pin_inside_another_configured_root_is_refused() {
+        within(Duration::from_secs(45), async {
+            let state = tempfile::tempdir().unwrap();
+            let repo = tempfile::tempdir().unwrap();
+            let other = tempfile::tempdir().unwrap();
+            let root = repo.path().canonicalize().unwrap();
+            std::fs::write(root.join("Cargo.toml"), "[package]\nname='fixture'\n").unwrap();
+            std::fs::write(root.join("fixture.rs"), "pub fn target() {}\n").unwrap();
+            let mut config = config(state.path());
+            config.registry.rust_toolchain =
+                Some(vessel_testkit::rust_toolchain(other.path()).unwrap());
+            config.registry.configured_roots = vec![root.clone(), other.path().to_owned()];
+            let record = state.path().join("launch");
+            let run = run(
+                config,
+                "normal",
+                &record,
+                &root,
+                lsp::Language::Rust,
+                "fixture.rs",
+            )
+            .await;
+            assert!(
+                matches!(run.outcome, Err(LspError::ProjectConfiguration)),
+                "{:?}",
+                run.outcome
+            );
+            assert!(!record.exists(), "the server started");
+        })
+        .await
+        .unwrap();
+    }
+
     /// A root with no Cargo project is explicitly unavailable for Rust.
     #[tokio::test]
     async fn a_root_without_a_cargo_project_is_unavailable_for_rust() {

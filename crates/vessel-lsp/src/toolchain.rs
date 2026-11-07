@@ -42,9 +42,10 @@ pub(crate) struct RustTools {
     pub(crate) cargo: PathBuf,
     /// Value for `RUSTUP_TOOLCHAIN` when the toolchain is rustup's or pinned.
     pub(crate) toolchain: Option<PathBuf>,
-    /// rustup's default is a linked or path toolchain rather than one it
-    /// installed; such a directory may point into a repository.
-    pub(crate) custom: bool,
+    /// Not a toolchain rustup installed itself: an explicit operator pin,
+    /// or a linked or path default. Such a directory can sit in (or point
+    /// into) a repository, so it must lie outside every configured root.
+    pub(crate) unverified: bool,
 }
 
 impl RustTools {
@@ -68,11 +69,13 @@ pub(crate) async fn resolve(
 ) -> Result<RustTools, Error> {
     if let Some(toolchain) = &registry.rust_toolchain {
         let toolchain = std::fs::canonicalize(toolchain)?;
+        // A pin is a path the operator typed, not one rustup vouches for:
+        // it gets the same every-configured-root rule as a linked default.
         return Ok(RustTools {
             rustc: binary(&toolchain, "rustc")?,
             cargo: binary(&toolchain, "cargo")?,
             toolchain: Some(toolchain),
-            custom: false,
+            unverified: true,
         });
     }
     let directories = registry.trusted_directories();
@@ -88,7 +91,7 @@ pub(crate) async fn resolve(
             rustc: std::fs::canonicalize(rustc)?,
             cargo: std::fs::canonicalize(cargo)?,
             toolchain: None,
-            custom: false,
+            unverified: false,
         });
     };
     let default = run_rustup(registry, &rustup, cwd, &["default"], deadline).await?;
@@ -127,7 +130,7 @@ pub(crate) async fn resolve(
         cargo: std::fs::canonicalize(cargo)?,
         rustc,
         toolchain: Some(toolchain),
-        custom: !installed,
+        unverified: !installed,
     })
 }
 
@@ -273,16 +276,16 @@ mod tests {
                 rustc: installed.join("bin/rustc"),
                 cargo: installed.join("bin/cargo"),
                 toolchain: Some(installed),
-                custom: false,
+                unverified: false,
             }
         );
     }
 
     /// `rustup toolchain link` makes the default a symlink that may point
-    /// into a repository: it is marked custom, so it must live outside every
+    /// into a repository: it is unverified, so it must live outside every
     /// configured root.
     #[tokio::test]
-    async fn a_linked_default_toolchain_is_custom() {
+    async fn a_linked_default_toolchain_is_unverified() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().canonicalize().unwrap();
         let toolchains = base.join("rustup/toolchains");
@@ -293,7 +296,34 @@ mod tests {
         let bin = base.join("cargo/bin");
         fake_rustup(&bin, "linked", &toolchains);
         let tools = resolve_with(&base, &bin).await;
-        assert!(tools.custom);
+        assert!(tools.unverified);
         assert_eq!(tools.toolchain, Some(target));
+    }
+}
+
+#[cfg(test)]
+mod pinned {
+    use super::*;
+
+    /// Verification finding: an explicit pin was trusted like a toolchain
+    /// rustup installed, so a pin inside another configured root ran that
+    /// repository's tools. A pin is unverified.
+    #[tokio::test]
+    async fn an_explicit_pin_is_unverified() {
+        let dir = tempfile::tempdir().unwrap();
+        let toolchain = dir.path().join("toolchain");
+        std::fs::create_dir_all(toolchain.join("bin")).unwrap();
+        for tool in ["rustc", "cargo"] {
+            let name = format!("{tool}{}", std::env::consts::EXE_SUFFIX);
+            std::fs::write(toolchain.join("bin").join(name), "stand-in").unwrap();
+        }
+        let registry = Registry {
+            rust_toolchain: Some(toolchain),
+            ..Registry::default()
+        };
+        let tools = resolve(&registry, dir.path(), Duration::from_secs(10))
+            .await
+            .unwrap();
+        assert!(tools.unverified);
     }
 }
