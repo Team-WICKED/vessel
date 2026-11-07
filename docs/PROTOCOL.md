@@ -4,6 +4,26 @@ The types are defined in `crates/vessel-proto`; this file is the changelog
 and a reader's summary. Bump `PROTOCOL_VERSION` on any breaking change and add
 an entry here. Additive, optional fields do not need a bump.
 
+## Version 7 (2026-11-07)
+
+Nodes speak 2..=7; version 7 only adds.
+
+Model routing (milestone 5, `docs/plans/backend-m5.md`, ADR 0015), being
+built:
+
+- Types: `ModelRouteName` and `ProviderName` (a route's and a provider's
+  name in a node's `models.toml`: 1-64 letters, digits, `.`, `_` or `-`);
+  `ModelApi`: `anthropic_messages`, `openai_responses` or
+  `openai_chat_completions`; `TokenUsage { input, cache_read, cache_write,
+  output, reasoning }`, each a count of tokens, every field defaulting to
+  0, where `input` excludes cached tokens and `reasoning` is part of
+  `output` (each API is converted to this at the node's proxy);
+  `ModelStop`: `end_turn`, `tool_use`, `max_tokens`, `stop_sequence`,
+  `refusal`, `pause` or `error`; `ModelFailure`: `rate_limited`,
+  `overloaded`, `upstream_error`, `refused_request`, `context_too_long`,
+  `timeout`, `truncated` or `unauthorized`, the class of a failure and
+  never the provider's message.
+
 ## Version 6 (2026-11-06)
 
 Nodes speak 2..=6; version 6 only adds. Milestone 4's F3, F4 and Track X
