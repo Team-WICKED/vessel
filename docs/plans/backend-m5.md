@@ -1,7 +1,9 @@
 # Backend milestone 5: model routing
 
-Status: accepted (2026-11-07, coordinator's decisions below), Track M5;
-ADR 0015. ROADMAP Phase 3,
+Status: done, 2026-11-07, after three security review rounds (the
+"Security" section's "After the review", "After the verification round"
+and "After the third round"); accepted the same day with the
+coordinator's decisions below. Track M5; ADR 0015. ROADMAP Phase 3,
 VISION section 4: "every harness can use every model, through a routing
 proxy the node runs locally". Protocol 7 is shared by milestones 5 to 7;
 this plan's rows are appended at the end of the table with `since 7`.

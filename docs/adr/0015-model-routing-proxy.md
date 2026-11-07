@@ -1,7 +1,8 @@
 # ADR 0015: A model routing proxy in the node
 
 Status: accepted, 2026-11-07, with the coordinator's decisions on
-`docs/plans/backend-m5.md` (milestone 5, ROADMAP Phase 3); being built.
+`docs/plans/backend-m5.md` (milestone 5, ROADMAP Phase 3); built, and
+amended after three security review rounds (below).
 
 ## Context
 

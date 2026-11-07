@@ -31,7 +31,7 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Milestones 1 to 4 and 6 are done, on `main`, and green on Linux, macOS and
+Milestones 1 to 6 are done, on `main`, and green on Linux, macOS and
 Windows ([docs/ROADMAP.md](docs/ROADMAP.md) has the details and what is
 next):
 
@@ -46,12 +46,15 @@ next):
    skills and MCP servers shared from one home node, conversations and
    memory moved on request, first-run setup, and agents that start and
    drive sessions on any node of the fleet (below).
+5. **Every harness on every model.** A profile names a model route, and
+   the node's own proxy on loopback lets Claude Code or Codex run on
+   another provider's model (Anthropic, OpenAI, or any OpenAI-compatible
+   server), recording each call's tokens in the session's log (below).
 6. **IDE context.** The node runs language servers on saved files and gives
    agents symbols, references, hover, call hierarchy and diagnostics as MCP
    tools, without running repository code by default (below).
 
-Model routing (milestone 5) and the web UI (milestone 7) are separate
-milestones still in review.
+The web UI (milestone 7) is a separate milestone, still in review.
 
 ## Try it
 
