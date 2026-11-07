@@ -4,7 +4,7 @@
 //! [Decision Log]
 //! - Purpose: a fleet member with no route of its own registers with its
 //!   home's relay, so the home can call it back (Track S's fresh-machine
-//!   smoke). Handing members the relay's token (103d765, the review's
+//!   smoke). Handing members the relay's token (1c1ae14, the review's
 //!   round 6) let any `sync` device register any key, for good, and kept
 //!   working after the device was revoked.
 //! - Constraint: the relay keeps no configuration but its token, and no

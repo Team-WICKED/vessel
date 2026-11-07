@@ -12,7 +12,7 @@ install and update).
 
 ## State (2026-11-06)
 
-- **Both tracks are merged** into `backend/m2` (2cd316b, CI green on
+- **Both tracks are merged** into `backend/m2` (5474891, CI green on
   Linux, macOS and Windows). Details: `ARCHITECTURE.md` "State", ADR 0007,
   and ADR 0008 "As built".
 - **Track N (node side), N1-N8:** `Framed`; the store layout, `NodeLock`
@@ -412,7 +412,7 @@ workflow.
 6. **Windows remotes:** out of M2. Windows clients stay in.
 
 The contract changes listed above are on `backend/m1` (protocol 3, commit
-after a5832cc). Until Track N implements it, the node answers `node.stop`
+after 33bc588). Until Track N implements it, the node answers `node.stop`
 with `unsupported`.
 
 ### Open decisions as drafted (kept for the record)

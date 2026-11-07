@@ -834,7 +834,7 @@ async fn after_a_forget_no_earlier_device_takes_the_id_or_the_name() {
 }
 
 /// The review's round 4: a home whose binding record was written before
-/// names were kept (5dd51d3's format) did not reserve a revoked member's
+/// names were kept (34be5d7's format) did not reserve a revoked member's
 /// name. Reading the record fills the names in from the grants it keeps.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_record_from_before_names_still_reserves_a_revoked_members_name() {

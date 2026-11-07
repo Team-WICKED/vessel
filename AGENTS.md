@@ -188,6 +188,12 @@ ADR 0001 records why; `docs/plans/backend-m1.md` says who owns which crate.
   instead of editing it; the proto contract is shared.
 - Work in your own git worktree and branch. Commit in small, reviewable steps
   with messages that say why. Do not push, do not rewrite shared history.
+- Authorship: every commit's author and committer is the maintainer,
+  `Ingwannu <ingwannu@teamwicked.me>` (the repository's git config sets it).
+  No `Co-Authored-By` trailers and no tool attribution ("Generated with ...")
+  in commit messages, pull request text or comments. The history was
+  rewritten on 2026-11-07 to remove them; commit hashes quoted in older
+  notes were updated to the rewritten ones.
 - Branches: tracks push to their own `backend/<milestone>-<track>` branch;
   the coordinator merges them into the milestone's `backend/m<N>` after the
   local gate. A milestone reaches `main` only by a pull request from its

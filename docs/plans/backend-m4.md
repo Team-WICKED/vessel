@@ -578,7 +578,7 @@ reproduced problems, fixed in this order:
   8 routes, and a failure to pair answers in general terms; the details go
   to the home's log (`e2e/grants.rs`).
 - **Round 2 (2026-11-06, the reviewer's proofs of concept run again
-  against 9bb68e6).** Items 2, 5 and 6 held; these were fixed next:
+  against 6c4cad4).** Items 2, 5 and 6 held; these were fixed next:
   - **A (item 1, still open): a revoked member's id was free.** The home
     checked grants only against live member devices, so after its owner
     revoked a member's device a `sync` device bound that id to an
@@ -619,7 +619,7 @@ reproduced problems, fixed in this order:
     member's binding to their own device: a denial of service and a change
     of provenance, with no scope gained; the record keeps the old device
     from claiming anything else.
-- **Round 3 (the reviewer on 5dd51d3).** A to D held (a second grant
+- **Round 3 (the reviewer on 34be5d7).** A to D held (a second grant
   gets `conflict`, other grants land in half a second, slow ones end at
   30 s). Two more, in A's area:
   - **Names after a revocation.** The name check looked only at live
@@ -649,9 +649,9 @@ reproduced problems, fixed in this order:
     is why both matter (`e2e/grants.rs`:
     `after_a_forget_no_earlier_device_takes_the_id_or_the_name`, and the
     reinstalled node is granted only once invited again).
-- **Round 4 (the reviewer on 136e62d).** Three more, in the same area:
+- **Round 4 (the reviewer on f1b9222).** Three more, in the same area:
   - **A record from before names.** A home that kept `bindings.json` in
-    5dd51d3's format (no names) seeded names only for a new record, so a
+    34be5d7's format (no names) seeded names only for a new record, so a
     member whose device was revoked had no reserved name and a `sync`
     device's own node took it. Reading the record now fills every node
     with no name from the grants kept, revoked devices' included, and the
@@ -681,7 +681,7 @@ reproduced problems, fixed in this order:
     name keeps naming it (that member is on `fleet.peers` anyway, and the
     operator needs the fix), and the home's log keeps the details
     (`fleet::links` unit tests, `e2e/grants.rs`).
-- **Round 5 (the reviewer on ba517ea).** Every finding is closed and
+- **Round 5 (the reviewer on 52d178f).** Every finding is closed and
   nothing new turned up. The reviewer raced `withdraw_all()` and the
   device list against pairings (150 rounds of 12): devices stored after
   the list appeared in 25 rounds, and each was revoked with its pairing
@@ -718,7 +718,7 @@ reproduced problems, fixed in this order:
   the service `vessel init --service` installs does not pass, so its grant
   named no route, the home refused it ("1 to 8 routes, not 0"), and
   `--to`, `vessel mcp`'s `node` and `secret.copy` never reached it, while
-  syncing worked. As first built (103d765), a member whose node has no
+  syncing worked. As first built (1c1ae14), a member whose node has no
   route of its own asked its home on each connection (`fleet.callback`,
   `sync`, a member device only) for the home's relays and their
   registration token, registered with them while it ran (`crate::relays`),
@@ -742,7 +742,7 @@ reproduced problems, fixed in this order:
     home's relay; a member of a home without a relay says it has no route
     and how to add one), both failing without the change; `vessel-cli`'s
     `joining_a_home_without_a_relay_says_the_home_cannot_call_back`.
-- **Round 6 (the reviewer on 103d765, `fleet.callback`).** The relay held
+- **Round 6 (the reviewer on 1c1ae14, `fleet.callback`).** The relay held
   (token, then the routing id from the key, then a possession challenge),
   and agents, forwarded calls and the owner were refused. Six findings:
   any `sync` device got the home's real relay token (one that never
@@ -805,7 +805,7 @@ reproduced problems, fixed in this order:
     second); `vessel-relay`'s `a_ticket_registers_its_own_key_and_no_other`,
     `a_ticket_registration_ends_when_it_expires_unless_renewed` and the
     `ticket` unit tests; the dialing policy's unit tests.
-  - **Relay caps** (Track S, merged from 0ddda6e; ADR 0009's first
+  - **Relay caps** (Track S, merged from 83c6ccb; ADR 0009's first
     amendment) bound what one relay holds whoever registers: a node
     registered with a ticket takes a place among `--max-nodes` like any
     other and frees it when its ticket expires (`vessel-relay`'s
@@ -813,7 +813,7 @@ reproduced problems, fixed in this order:
   - Accepted: a member with no route depends on its home's relay and on
     reaching its home at least once a day; a device's first ticket
     registers one key of its choosing for ten minutes.
-- **Round 7 (the reviewer on 88fe1d4).** Round 6's core held: the token
+- **Round 7 (the reviewer on 5d6bb13).** Round 6's core held: the token
   never leaves the home; a ticket works only for its own key, checked
   (MAC, key, expiry, the 48 h ceiling) before the proof; revoked and
   forgotten devices are refused; moving homes works; the host-equality
