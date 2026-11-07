@@ -282,3 +282,54 @@ async fn a_root_holding_every_slot_yields_one_to_another_root() {
     .await
     .unwrap();
 }
+
+/// Verification finding: a document that grows past the aggregate byte
+/// budget evicts another during a bulk refresh; the refresh must skip the
+/// evicted entry instead of failing and restarting a healthy server.
+#[tokio::test]
+async fn review_byte_eviction_during_refresh_keeps_server_healthy() {
+    within(Duration::from_secs(45), async {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (watcher, _changes) = crate::sync::Watcher::new().await.unwrap();
+        let spec = vessel_proc::CommandSpec::new(Fake::Lsp.path().unwrap())
+            .args(["normal"])
+            .cwd(&root)
+            .env_clear();
+        let mut process = crate::process::Process::start(
+            &spec,
+            crate::process::Launch {
+                root: root.clone(),
+                language: lsp::Language::Rust,
+                settings: crate::protocol::initialize::Settings::new(false, &[]),
+                request_timeout: Duration::from_secs(10),
+                typescript_engine: None,
+                python_interpreter: None,
+            },
+        )
+        .await
+        .unwrap();
+        // 17 files just under 2 MB each fit the 32 MiB budget together;
+        // growing the first one does not.
+        for index in 0..17 {
+            let name = format!("f{index:02}.rs");
+            std::fs::write(root.join(&name), " ".repeat(1_970_000)).unwrap();
+            let _uri = process
+                .open(
+                    &lsp::FilePath::try_from(PathBuf::from(name)).unwrap(),
+                    &watcher,
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(process.documents.len(), 17);
+        std::fs::write(root.join("f00.rs"), " ".repeat(2_090_000)).unwrap();
+        let result = process.refresh_all(&watcher).await;
+        let open = process.documents.len();
+        process.shutdown().await;
+        assert!(result.is_ok(), "eviction made refresh fail: {result:?}");
+        assert_eq!(open, 16, "exactly one document made room");
+    })
+    .await
+    .unwrap();
+}

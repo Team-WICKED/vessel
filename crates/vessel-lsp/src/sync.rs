@@ -203,7 +203,13 @@ impl Process {
     pub(crate) async fn refresh_all(&mut self, watcher: &Watcher) -> Result<(), Error> {
         let uris: Vec<_> = self.documents.keys().cloned().collect();
         for uri in uris {
-            self.refresh(&uri, watcher).await?;
+            // A document that grew may evict others to stay within the byte
+            // budget; one closed earlier in this pass is no longer ours to
+            // refresh, and treating it as a protocol error would restart a
+            // healthy server.
+            if self.documents.contains_key(&uri) {
+                self.refresh(&uri, watcher).await?;
+            }
         }
         Ok(())
     }
