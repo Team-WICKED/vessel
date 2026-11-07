@@ -15,12 +15,12 @@ import {
   type ReactElement,
 } from "react";
 
-import { openNewSession, useChrome, useFleetState } from "../context";
+import { openNewSession, useChrome, useFleet, useFleetState } from "../context";
 import type { FleetState } from "../data/fleet";
 import { isLive, nodeState, shortId } from "../data/format";
 import { nodeLabel, selectedNode } from "../data/nodes";
 import { NewSessionDialog } from "../routes/new-session";
-import { Icon, StatusDot } from "./parts";
+import { Banner, Icon, StatusDot } from "./parts";
 import { Toasts } from "./toasts";
 
 const MARK = (
@@ -53,12 +53,42 @@ export function Shell(): ReactElement {
         <Topbar />
         <Sidebar />
         <main className="main" id="main" role="main">
+          <Disconnected />
           <Outlet />
         </main>
       </div>
       {newSession === null ? null : <NewSessionDialog node={newSession.node} />}
       <Toasts />
     </>
+  );
+}
+
+/** After repeated failures the tab stops redialling (bridge/client.ts):
+ * say so, and offer to try again with the same key. */
+function Disconnected() {
+  const fleet = useFleet();
+  const link = useFleetState((state) => state.link);
+  if (link.kind !== "disconnected") {
+    return null;
+  }
+  return (
+    <Banner
+      tone="error"
+      action={
+        <button
+          className="btn sm"
+          type="button"
+          onClick={() => {
+            fleet.bridge.retry();
+          }}
+        >
+          Retry
+        </button>
+      }
+    >
+      Disconnected — vessel ui may have restarted. If it did, open the address
+      it printed.
+    </Banner>
   );
 }
 
@@ -71,7 +101,9 @@ function Topbar() {
       ? { tone: "running", text: "vessel ui · connected" }
       : link.kind === "refused"
         ? { tone: "danger", text: "vessel ui · refused" }
-        : { tone: "warn", text: "vessel ui · reconnecting" };
+        : link.kind === "disconnected"
+          ? { tone: "danger", text: "vessel ui · disconnected" }
+          : { tone: "warn", text: "vessel ui · reconnecting" };
   return (
     <header className="topbar" role="banner">
       <Link className="brand" to="/fleet">

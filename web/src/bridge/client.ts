@@ -12,9 +12,18 @@
 //   are followed again from it after each hello; the bridge's own streams
 //   are gap-free, so the stores just continue. Node states are kept as
 //   the bridge last pushed them, and pushed again in full after a hello.
-// - The socket redials with a capped backoff, except after the bridge
-//   refused the token (close 4401): a new launch has a new token, and
-//   only opening the new address helps.
+// - The socket redials with a capped backoff. Only a refusal ends the
+//   tab's credential: the bridge closing with 4401, a server that fails
+//   its proof, or a different launch (a restarted UI). Those are
+//   `refused`, and the app forgets the session key.
+// - A connection that keeps dropping (or never completes its handshake)
+//   is not a refusal: after `MAX_RETRIES` the tab stops redialling and
+//   says it is `disconnected`, keeping the key, so the Retry button or a
+//   reload resumes the same launch once it answers again. A restarted UI
+//   still fails the Host check or the proof, so stopping keeps every
+//   guarantee the refusal gave. (A tab once deleted a valid key after five
+//   transient closes, and nothing could recover it: verification finding
+//   1, M7.)
 
 import { Handshake } from "./auth";
 import { rememberSession, type Credential } from "./token";
@@ -36,6 +45,9 @@ export type LinkState =
   | { kind: "connecting"; attempt: number }
   | { kind: "open"; version: string }
   | { kind: "closed"; retryInMs: number; attempt: number }
+  /** Stopped redialling after repeated failures; the key is kept. */
+  | { kind: "disconnected"; attempts: number }
+  /** The bridge refused this tab, or a server failed to prove itself. */
   | { kind: "refused" };
 
 /** A call that has no reply, with the bridge's reason. */
@@ -131,6 +143,22 @@ export class Bridge {
   start(): void {
     this.#stopped = false;
     this.#connect();
+  }
+
+  /** Dial again now (after `disconnected`), with the credential kept. */
+  retry(): void {
+    if (this.#link.kind === "refused") {
+      return;
+    }
+    if (this.#retry !== null) {
+      clearTimeout(this.#retry);
+      this.#retry = null;
+    }
+    this.#attempt = 0;
+    this.#stopped = false;
+    if (this.#socket === null) {
+      this.#connect();
+    }
   }
 
   /** Close for good. */
@@ -251,8 +279,13 @@ export class Bridge {
     const handshake = new Handshake(this.#credential);
     let verified = false;
     let messages = Promise.resolve();
+    // A handshake that never completes is a dropped connection, not a
+    // refusal: try again, keeping the key.
     const deadline = setTimeout(() => {
-      if (this.#socket === socket && !verified) this.#refuse();
+      if (this.#socket === socket && !verified) {
+        socket.close();
+        this.#dropped(socket);
+      }
     }, 10_000);
     socket.addEventListener("message", (event: MessageEvent<unknown>) => {
       if (!this.#current(socket)) return;
@@ -292,31 +325,44 @@ export class Bridge {
       if (this.#socket !== socket) {
         return;
       }
-      this.#socket = null;
-      this.#lost();
       if (event.code === CLOSE_UNAUTHORIZED) {
+        this.#socket = null;
+        this.#lost();
         this.#setLink({ kind: "refused" });
         return;
       }
-      if (!this.#stopped) {
-        this.#attempt += 1;
-        // A restarted process rejects this launch's old hostname at HTTP
-        // upgrade, where browsers hide the response status. Bound those
-        // failures too, instead of reconnecting an obsolete tab forever.
-        if (this.#attempt >= MAX_RETRIES) {
-          this.#refuse();
-          return;
-        }
-        const retryInMs = Math.min(
-          FIRST_RETRY_MS * 2 ** (this.#attempt - 1),
-          MAX_RETRY_MS,
-        );
-        this.#setLink({ kind: "closed", retryInMs, attempt: this.#attempt });
-        this.#retry = setTimeout(() => {
-          this.#connect();
-        }, retryInMs);
-      }
+      this.#dropped(socket);
     });
+  }
+
+  /** `socket` went without a refusal: redial with backoff, or, after
+   * `MAX_RETRIES`, stop and say so, keeping the credential. */
+  #dropped(socket: WebSocket): void {
+    if (this.#socket !== socket) {
+      return;
+    }
+    this.#socket = null;
+    this.#lost();
+    if (this.#stopped) {
+      return;
+    }
+    this.#attempt += 1;
+    // A restarted process rejects this launch's old hostname at HTTP
+    // upgrade, where browsers hide the response status: those failures
+    // end here too, instead of redialling an obsolete tab forever.
+    if (this.#attempt >= MAX_RETRIES) {
+      this.#setLink({ kind: "disconnected", attempts: this.#attempt });
+      return;
+    }
+    const retryInMs = Math.min(
+      FIRST_RETRY_MS * 2 ** (this.#attempt - 1),
+      MAX_RETRY_MS,
+    );
+    this.#setLink({ kind: "closed", retryInMs, attempt: this.#attempt });
+    this.#retry = setTimeout(() => {
+      this.#retry = null;
+      this.#connect();
+    }, retryInMs);
   }
 
   #current(socket: WebSocket): boolean {

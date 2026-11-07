@@ -145,13 +145,44 @@ test("events from a stopped socket cannot authenticate its replacement", async (
   expect(next.sent.length).toBe(1);
 });
 
-test("repeated upgrade failures stop an obsolete launch", async () => {
+test("repeated upgrade failures stop redialling but keep the key", async () => {
   vi.useFakeTimers();
   const { bridge } = start();
   for (let attempt = 0; attempt < 5; attempt += 1) {
     Socket.all.at(-1)?.cut();
     await vi.advanceTimersByTimeAsync(500 * 2 ** attempt);
   }
-  expect(bridge.link.kind).toBe("refused");
+  // Stopped: no more dials on its own, and not a refusal.
+  expect(bridge.link.kind).toBe("disconnected");
   expect(Socket.all.length).toBe(5);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(Socket.all.length).toBe(5);
+  // Retry dials again with the same session key, which still proves.
+  bridge.retry();
+  const next = Socket.all.at(-1);
+  if (next === undefined || Socket.all.length !== 6)
+    throw new Error("No retry");
+  next.dispatchEvent(new Event("open"));
+  vi.useRealTimers();
+  next.message(await answer(next));
+  await vi.waitFor(() => {
+    expect(bridge.link.kind).toBe("open");
+  });
+});
+
+test("a handshake that never completes is retried, not refused", async () => {
+  vi.useFakeTimers();
+  const { bridge } = start();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(bridge.link.kind).toBe("closed");
+  await vi.advanceTimersByTimeAsync(500);
+  expect(Socket.all.length).toBe(2);
+});
+
+test("a refusal is final: Retry does not redial", () => {
+  const { bridge, socket } = start();
+  socket.dispatchEvent(Object.assign(new Event("close"), { code: 4401 }));
+  expect(bridge.link.kind).toBe("refused");
+  bridge.retry();
+  expect(Socket.all.length).toBe(1);
 });
