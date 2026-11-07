@@ -1,7 +1,8 @@
 //! The `OpenAI` Codex CLI (`codex`).
 //!
-//! Structured mode goes through Zed's ACP adapter, `codex-acp`, which embeds
-//! Codex and reads the same `~/.codex` configuration. The Codex CLI itself
+//! Structured mode goes through the ACP project's adapter, `codex-acp` (npm
+//! `@agentclientprotocol/codex-acp`), which embeds Codex and reads the same
+//! `~/.codex` configuration. The Codex CLI itself
 //! speaks its own app-server protocol, not ACP (ADR 0003 explains why Vessel
 //! does not implement per-harness protocols).
 //!
@@ -41,7 +42,12 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     profile: "codex",
     structured: Structured::Adapter {
         binary: "codex-acp",
-        install: "npm install -g @zed-industries/codex-acp",
+        // Checked 2026-11-07 with `npm view`: the adapter moved from
+        // `@zed-industries/codex-acp` (deprecated, "replaced by
+        // @agentclientprotocol/codex-acp") to this package. Both install
+        // the same `codex-acp` binary, so an existing install of the old
+        // one is still found.
+        install: "npm install -g @agentclientprotocol/codex-acp",
     },
     home: Home {
         variable: Some("CODEX_HOME"),

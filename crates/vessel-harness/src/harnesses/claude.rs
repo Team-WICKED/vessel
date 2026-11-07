@@ -50,6 +50,12 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     profile: "claude",
     structured: Structured::Adapter {
         binary: "claude-agent-acp",
+        // Checked 2026-11-07 with `npm view`: current, not deprecated. Its
+        // predecessor `@zed-industries/claude-agent-acp` (deprecated,
+        // "renamed to @agentclientprotocol/claude-agent-acp") installs the
+        // same `claude-agent-acp` binary, so an existing install is found;
+        // the older `@zed-industries/claude-code-acp` installs
+        // `claude-code-acp`, which is not looked for.
         install: "npm install -g @agentclientprotocol/claude-agent-acp",
     },
     home: Home {
