@@ -7,13 +7,23 @@ rust-version.workspace = true
 license-file.workspace = true
 repository.workspace = true
 
+[features]
+# TypeScript declarations of the bridge's frames (ADR 0017), beside
+# vessel-proto's; only the declaration check enables it.
+ts = ["dep:ts-rs", "vessel-proto/ts"]
+
 [dependencies]
+vessel-client.workspace = true
 vessel-proto.workspace = true
 
 axum.workspace = true
 futures-util.workspace = true
 # The per-launch token (ADR 0017); already in the workspace.
 getrandom.workspace = true
+# Pairing links as QR codes for the devices screen, drawn here as SVG (ADR
+# 0017, decision 9); the CLI's crate, with its dependency-free `svg`
+# renderer.
+qrcode = { workspace = true, features = ["svg"] }
 serde.workspace = true
 serde_json.workspace = true
 # Comparing the token in constant time; already in the workspace (the
@@ -23,10 +33,17 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 # A browser's websocket, for the server's tests.
 tokio-tungstenite.workspace = true
+# The bridge's tests: real nodes in this process, with the fake harnesses.
+bytes.workspace = true
+tempfile.workspace = true
+vessel-harness = { workspace = true, features = ["fakes"] }
+vessel-node.workspace = true
+vessel-testkit.workspace = true
 
 [lints]
 workspace = true

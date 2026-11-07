@@ -139,20 +139,7 @@ pub(crate) async fn connect_to(
     resolved: &Resolved,
     book: &std::path::Path,
 ) -> Result<Connected, CliError> {
-    let connector = match &resolved.address {
-        NodeAddress::Ws(url) => {
-            let token = token(target, resolved, url).await?;
-            NodeConnector::Ws(Pinned::new(
-                WsConnector::new(url.clone(), token),
-                resolved.pinned,
-            ))
-        }
-        NodeAddress::Ssh(node) => NodeConnector::Ssh(Box::new(Pinned::new(
-            remote::connector(target, node).await?,
-            resolved.pinned,
-        ))),
-        NodeAddress::Secure(node) => NodeConnector::Secure(Box::new(secure(resolved, node).await?)),
-    };
+    let connector = connector(target, resolved).await?;
     let client = connector
         .connect(client_info())
         .await
@@ -165,6 +152,29 @@ pub(crate) async fn connect_to(
     Ok(Connected {
         client,
         connector: Arc::new(connector),
+    })
+}
+
+/// How to reach `resolved`, without dialling it yet (`vessel ui` dials
+/// through it later, and again after a loss). Every dial accepts only the
+/// node pinned in the book.
+pub(crate) async fn connector(
+    target: &Target,
+    resolved: &Resolved,
+) -> Result<NodeConnector, CliError> {
+    Ok(match &resolved.address {
+        NodeAddress::Ws(url) => {
+            let token = token(target, resolved, url).await?;
+            NodeConnector::Ws(Pinned::new(
+                WsConnector::new(url.clone(), token),
+                resolved.pinned,
+            ))
+        }
+        NodeAddress::Ssh(node) => NodeConnector::Ssh(Box::new(Pinned::new(
+            remote::connector(target, node).await?,
+            resolved.pinned,
+        ))),
+        NodeAddress::Secure(node) => NodeConnector::Secure(Box::new(secure(resolved, node).await?)),
     })
 }
 

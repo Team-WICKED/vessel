@@ -10,21 +10,26 @@ use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 
+use crate::bridge;
 use crate::server::Ui;
+use crate::source::NodeSource;
 use crate::wire::{CLOSE_UNAUTHORIZED, ClientFrame, PresentedToken, ServerFrame};
 
 /// The largest frame either way: a pasted block of text or a prompt with
 /// its context, with room to spare.
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 
-pub(crate) async fn upgrade(State(ui): State<Arc<Ui>>, upgrade: WebSocketUpgrade) -> Response {
+pub(crate) async fn upgrade<S: NodeSource>(
+    State(ui): State<Arc<Ui<S>>>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
     upgrade
         .max_message_size(MAX_FRAME)
         .max_frame_size(MAX_FRAME)
         .on_upgrade(move |socket| run(ui, socket))
 }
 
-async fn run(ui: Arc<Ui>, mut socket: WebSocket) {
+async fn run<S: NodeSource>(ui: Arc<Ui<S>>, mut socket: WebSocket) {
     let hello = tokio::time::timeout(ui.hello_deadline, hello(&mut socket)).await;
     let accepted = hello
         .ok()
@@ -41,13 +46,7 @@ async fn run(ui: Arc<Ui>, mut socket: WebSocket) {
     if !send(&mut socket, &welcome).await {
         return;
     }
-    // Until the bridge is attached here, the socket stays open until the
-    // browser closes it.
-    while let Some(Ok(message)) = socket.recv().await {
-        if let Message::Close(_) = message {
-            break;
-        }
-    }
+    bridge::run(Arc::clone(&ui.registry), socket).await;
 }
 
 /// The token of the first frame, if it is a hello.
@@ -57,7 +56,13 @@ async fn hello(socket: &mut WebSocket) -> Option<PresentedToken> {
             Ok(Message::Text(text)) => {
                 return match serde_json::from_str::<ClientFrame>(&text) {
                     Ok(ClientFrame::Hello { token }) => Some(token),
-                    Err(_not_a_hello) => None,
+                    Ok(
+                        ClientFrame::Call { .. }
+                        | ClientFrame::Follow { .. }
+                        | ClientFrame::Unfollow { .. }
+                        | ClientFrame::Op { .. },
+                    )
+                    | Err(_) => None,
                 };
             }
             Ok(Message::Ping(_) | Message::Pong(_)) => {}

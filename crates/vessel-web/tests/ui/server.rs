@@ -1,7 +1,6 @@
 //! The server's guards, files and websocket hello.
 
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -12,54 +11,7 @@ use tokio_util::sync::CancellationToken;
 use vessel_web::wire::{CLOSE_UNAUTHORIZED, ServerFrame};
 use vessel_web::{LaunchToken, ServeError, UiConfig};
 
-/// Only turns a hang into a failure.
-const SAFETY: Duration = Duration::from_secs(30);
-
-async fn within<T>(work: impl Future<Output = T>) -> T {
-    tokio::time::timeout(SAFETY, work).await.unwrap()
-}
-
-/// A running UI and its token.
-struct Ui {
-    address: SocketAddr,
-    token: LaunchToken,
-    _stop: tokio_util::sync::DropGuard,
-}
-
-impl Ui {
-    async fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let token = LaunchToken::mint().unwrap();
-        let mut config = UiConfig::new(token.clone());
-        config.hello_deadline = Duration::from_millis(300);
-        let stop = CancellationToken::new();
-        drop(tokio::spawn(vessel_web::serve(
-            listener,
-            config,
-            stop.clone(),
-        )));
-        Self {
-            address,
-            token,
-            _stop: stop.drop_guard(),
-        }
-    }
-
-    fn host(&self) -> String {
-        self.address.to_string()
-    }
-
-    fn origin(&self) -> String {
-        format!("http://{}", self.address)
-    }
-
-    /// The token as the page has it (from the URL's fragment).
-    fn secret(&self) -> String {
-        let url = self.token.url(self.address);
-        url.split_once("#token=").unwrap().1.to_owned()
-    }
-}
+use crate::support::{Source, Ui, within};
 
 /// A plain HTTP/1.1 exchange: the status code, the headers (lower case),
 /// the body.
@@ -99,7 +51,7 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 
 #[tokio::test]
 async fn the_page_is_served_with_its_guards() {
-    let ui = Ui::start().await;
+    let ui = Ui::start(Source::default()).await;
     let (code, headers, body) = http(ui.address, &get("/", &ui.host(), "")).await;
     assert_eq!(code, 200);
     assert_eq!(
@@ -130,7 +82,7 @@ async fn the_page_is_served_with_its_guards() {
 
 #[tokio::test]
 async fn a_rebinding_site_is_refused() {
-    let ui = Ui::start().await;
+    let ui = Ui::start(Source::default()).await;
     let port = ui.address.port();
     for host in [
         format!("evil.example:{port}"),
@@ -145,7 +97,7 @@ async fn a_rebinding_site_is_refused() {
 
 #[tokio::test]
 async fn the_api_needs_the_token_and_our_origin() {
-    let ui = Ui::start().await;
+    let ui = Ui::start(Source::default()).await;
     let bearer = format!("Authorization: Bearer {}\r\n", ui.secret());
     let (code, _headers, _body) = http(ui.address, &get("/api/status", &ui.host(), "")).await;
     assert_eq!(code, 401);
@@ -203,7 +155,7 @@ fn hello(token: &str) -> Message {
 
 #[tokio::test]
 async fn a_websocket_from_elsewhere_or_without_origin_is_refused() {
-    let ui = Ui::start().await;
+    let ui = Ui::start(Source::default()).await;
     assert_eq!(
         socket(&ui, Some("http://evil.example")).await.err(),
         Some(403)
@@ -213,7 +165,7 @@ async fn a_websocket_from_elsewhere_or_without_origin_is_refused() {
 
 #[tokio::test]
 async fn a_websocket_must_present_the_token_first_and_in_time() {
-    let ui = Ui::start().await;
+    let ui = Ui::start(Source::default()).await;
     let origin = ui.origin();
     // The wrong token.
     let mut wrong = socket(&ui, Some(&origin)).await.unwrap();
@@ -249,6 +201,7 @@ async fn the_ui_listens_on_loopback_only() {
     let served = within(vessel_web::serve(
         listener,
         config,
+        Source::default(),
         CancellationToken::new(),
     ))
     .await;

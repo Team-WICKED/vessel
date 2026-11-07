@@ -15,7 +15,11 @@ use axum::{Json, Router, middleware};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use vessel_client::Backoff;
+
 use crate::guard::{Allowed, guard};
+use crate::registry::Registry;
+use crate::source::NodeSource;
 use crate::token::LaunchToken;
 use crate::wire::Status;
 use crate::{files, socket};
@@ -28,6 +32,9 @@ pub struct UiConfig {
     pub token: LaunchToken,
     /// How long a browser's websocket has to present the token.
     pub hello_deadline: Duration,
+    /// How long to wait between dials of a node that is down (the CLI's
+    /// default; tests shorten it).
+    pub backoff: Backoff,
 }
 
 impl UiConfig {
@@ -37,6 +44,10 @@ impl UiConfig {
         Self {
             token,
             hello_deadline: Duration::from_secs(5),
+            backoff: Backoff {
+                first: Duration::from_millis(500),
+                max: Duration::from_secs(30),
+            },
         }
     }
 }
@@ -55,32 +66,39 @@ pub enum ServeError {
 
 /// What the handlers share.
 #[derive(Debug)]
-pub(crate) struct Ui {
+pub(crate) struct Ui<S> {
     pub(crate) token: LaunchToken,
     pub(crate) hello_deadline: Duration,
+    pub(crate) registry: Arc<Registry<S>>,
 }
 
-/// Serve the UI on `listener` until `shutdown`.
+/// Serve the UI on `listener` until `shutdown`, bridging to the nodes
+/// `source` offers.
 ///
 /// # Errors
 /// The listener is not on loopback, or it failed.
-pub async fn serve(
+pub async fn serve<S: NodeSource>(
     listener: TcpListener,
     config: UiConfig,
+    source: S,
     shutdown: CancellationToken,
 ) -> Result<(), ServeError> {
     let address = listener.local_addr()?;
     if !address.ip().is_loopback() {
         return Err(ServeError::NotLoopback(address));
     }
+    // The nodes' connections stop with the server.
+    let connections = shutdown.child_token();
+    let _stop_connections = connections.clone().drop_guard();
     let ui = Arc::new(Ui {
         token: config.token,
         hello_deadline: config.hello_deadline,
+        registry: Registry::new(source, config.backoff, connections),
     });
     let allowed = Arc::new(Allowed::for_address(address));
     let app = Router::new()
-        .route("/api/status", get(status))
-        .route("/api/ws", get(socket::upgrade))
+        .route("/api/status", get(status::<S>))
+        .route("/api/ws", get(socket::upgrade::<S>))
         .fallback(files::serve)
         .with_state(ui)
         .layer(middleware::from_fn_with_state(allowed, guard));
@@ -91,7 +109,7 @@ pub async fn serve(
 }
 
 /// `GET /api/status`, with the token as a bearer.
-async fn status(State(ui): State<Arc<Ui>>, headers: HeaderMap) -> Response {
+async fn status<S: NodeSource>(State(ui): State<Arc<Ui<S>>>, headers: HeaderMap) -> Response {
     if !authorized(&ui.token, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }

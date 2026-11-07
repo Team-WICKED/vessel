@@ -58,7 +58,22 @@ Option 3.
 - `NodeClient::call_any` forwards it with the protocol-version gate of
   every typed call. The node enforces scopes as it does for the CLI.
 - Connection-scoped methods (`session.subscribe`, `session.unsubscribe`)
-  are refused; streams have frames of their own.
+  are refused; streams have frames of their own. So are the fleet's
+  node-to-node methods (`fleet.report`, `fleet.relay`, `fleet.deliver`,
+  `fleet.grant`, `fleet.callback`, `fleet.peers`), which only nodes and
+  relays call. The list is an exhaustive `match` on `Method` in the
+  bridge (`forwardable`): a new method does not compile until it is
+  placed on one side.
+- Each node has one connection, kept by a supervisor task that dials
+  through the `NodeSource`'s connector, redials with the CLI's backoff
+  after a loss, and pushes its state to every tab. Calls take the current
+  connection; a node that is down fails them at once. Streams run
+  `follow_resuming` through a connector that waits for the supervisor's
+  next connection instead of dialling its own, so a stream resumes
+  gap-free and an SSH node still has one `ssh` process.
+- The bridge's frames are generated into TypeScript like the protocol's
+  (`vessel-web`'s `ts` feature, `web/src/wire/bridge.ts`, importing from
+  `proto.ts`).
 
 **Authentication.**
 - A fresh 256-bit token is minted per launch and never written to disk.

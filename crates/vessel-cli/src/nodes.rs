@@ -29,7 +29,7 @@ pub(crate) fn book_path(target: &Target) -> Result<PathBuf, CliError> {
 }
 
 /// The node on this machine, when nothing else is chosen.
-fn local_node() -> Result<NodeUrl, CliError> {
+pub(crate) fn local_node() -> Result<NodeUrl, CliError> {
     let text = format!("127.0.0.1:{DEFAULT_PORT}");
     text.parse().map_err(|source| CliError::Address {
         text,

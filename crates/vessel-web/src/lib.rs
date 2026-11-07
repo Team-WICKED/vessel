@@ -13,17 +13,25 @@
 //!   `index.html`;
 //! - `socket`: the browser's websocket: the hello within a deadline, then
 //!   the bridge;
+//! - `bridge`: one tab's calls, streams and ops;
+//! - `registry`: one connection per node, shared by every tab, with its
+//!   state pushed to them;
+//! - [`NodeSource`]: the seam through which the CLI gives the nodes;
 //! - [`wire`]: the frames the browser and the server exchange.
 //!
 //! This crate must not know how a book entry becomes a connection (tokens,
-//! SSH, credentials): that is the CLI's, given through a seam.
+//! SSH, credentials): that is the CLI's, given through [`NodeSource`].
 
+mod bridge;
 mod files;
 mod guard;
+mod registry;
 mod server;
 mod socket;
+mod source;
 mod token;
 pub mod wire;
 
 pub use server::{ServeError, UiConfig, serve};
+pub use source::NodeSource;
 pub use token::{LaunchToken, MintError};

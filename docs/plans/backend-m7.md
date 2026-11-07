@@ -215,7 +215,9 @@ browser tab ──ws /api/ws (JSON frames)──> vessel ui (bridge)
      `disconnected` and is never retried. As in `ResumingStream`, a
      `session.send` or `session.kill` must not run twice.
 4. **Streams.** `follow { stream, node, session, from }` starts a
-   `follow_resuming` on that node's connector. Its records come as
+   `follow_resuming` over that node's shared connection (a connector that
+   waits for the node's supervisor to reconnect, so one node keeps one
+   connection). Its records come as
    `event { stream, record }`. Losing and regaining the node come as
    `stream { stream, state: reconnecting | resumed | ended }`.
    `unfollow { stream }`, or the tab closing, stops it.

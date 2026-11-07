@@ -105,7 +105,7 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Session {
             command: SessionCommand::Move { to },
         } => Box::pin(transfer::copy_session(target, to, true, true)).await,
-        Command::Ui(args) => Box::pin(ui::ui(args)).await,
+        Command::Ui(args) => Box::pin(ui::ui(target, args)).await,
     }
 }
 

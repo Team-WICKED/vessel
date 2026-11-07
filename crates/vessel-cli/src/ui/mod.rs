@@ -19,12 +19,15 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use vessel_web::{LaunchToken, UiConfig};
 
-use crate::args::{DEFAULT_UI_PORT, UiArgs};
+use crate::args::{DEFAULT_UI_PORT, Target, UiArgs};
 use crate::error::CliError;
 use crate::io;
 
-/// Serve the UI until interrupted.
-pub(crate) async fn ui(args: UiArgs) -> Result<(), CliError> {
+mod source;
+
+/// Serve the UI until interrupted, bridging to the book's nodes and this
+/// machine's.
+pub(crate) async fn ui(target: &Target, args: UiArgs) -> Result<(), CliError> {
     if !args.bind.is_loopback() {
         return Err(CliError::Usage(
             "--bind takes a loopback address (127.0.0.1 or ::1): the UI is for this machine",
@@ -41,8 +44,10 @@ pub(crate) async fn ui(args: UiArgs) -> Result<(), CliError> {
     // Held until the UI stops: the browser reads the file when it opens.
     let _opening = if args.no_open { None } else { open(&url).await };
     let shutdown = CancellationToken::new();
+    let source = source::BookSource::new(target);
+    let serving = vessel_web::serve(listener, UiConfig::new(token), source, shutdown.clone());
     tokio::select! {
-        served = vessel_web::serve(listener, UiConfig::new(token), shutdown.clone()) => Ok(served?),
+        served = serving => Ok(served?),
         interrupted = tokio::signal::ctrl_c() => {
             shutdown.cancel();
             Ok(interrupted?)

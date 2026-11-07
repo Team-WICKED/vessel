@@ -2980,17 +2980,25 @@ name = "vessel-web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "futures-util",
  "getrandom 0.4.3",
+ "qrcode",
  "serde",
  "serde_json",
  "subtle",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "ts-rs",
+ "vessel-client",
+ "vessel-harness",
+ "vessel-node",
  "vessel-proto",
+ "vessel-testkit",
 ]
 
 [[package]]
