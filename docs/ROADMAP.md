@@ -2,13 +2,14 @@
 
 Rough order. Each phase ends with something usable on its own.
 
-## Where it stands (2026-11-06)
+## Where it stands (2026-11-07)
 
-Milestones 1 to 4 are built, each on its own branch on top of the one
-before (`backend/m1` to `backend/m4`); `backend/m4` holds all four and is
-green on Linux, macOS and Windows. None is on `main` yet (milestone 1 is
-draft PR #1). Each milestone's plan in `docs/plans/` records what was
-built, what was checked by hand, and what it left open.
+Milestones 1 to 4 are done and on `main`: they were built on stacked
+branches (`backend/m1` to `backend/m4`, each on top of the one before) and
+merged together from `backend/m4` once it was green on Linux, macOS and
+Windows and every plan's manual smokes had passed. The branches stay as
+the record. Each milestone's plan in `docs/plans/` records what was built,
+what was checked by hand, and what it left open.
 
 ## Phase 0: one node, one machine (milestone 1, done)
 

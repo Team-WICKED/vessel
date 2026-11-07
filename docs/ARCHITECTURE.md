@@ -144,7 +144,8 @@ they started.
 ### Milestones
 
 - **Milestone 1** (one node; `docs/plans/backend-m1.md`): merged on
-  `backend/m1`, draft PR #1; CI first all green in run 42141788299.
+  `backend/m1`; CI first all green in run 42141788299. On `main` since
+  2026-11-07, merged with milestones 2 to 4 from `backend/m4`.
   Checked by hand on Linux (2026-11-05) with real binaries: `vesseld`
   with the CLI ran `codex --version` in terminal mode; a structured Claude
   Code session (`claude-agent-acp` 0.100.0) answered; a `SIGTERM` stop
