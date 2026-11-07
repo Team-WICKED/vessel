@@ -31,6 +31,8 @@ mod secret;
 mod session;
 mod terminal;
 mod transfer;
+#[cfg(feature = "ts")]
+pub mod ts;
 
 pub use agent::{
     AgentEvent, ContentBlock, PermissionOption, PermissionOptionKind, PermissionOutcome,

@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Terminal window size in character cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TerminalSize {
     /// Columns.
     pub cols: u16,
@@ -32,6 +33,7 @@ impl Default for TerminalSize {
 /// - Cost: about 33% size overhead on terminal traffic. Revisit with a binary
 ///   codec if terminal bandwidth ever matters; the type does not change.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct TerminalBytes(Bytes);
 
 impl TerminalBytes {
@@ -74,6 +76,7 @@ impl<'de> Deserialize<'de> for TerminalBytes {
 
 /// Input to a terminal-mode session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TerminalInput {
     /// Keystrokes or pasted text, written to the PTY verbatim.
@@ -90,6 +93,7 @@ pub enum TerminalInput {
 
 /// A chunk of PTY output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TerminalOutput {
     /// The bytes, as read from the PTY.
     pub data: TerminalBytes,

@@ -27,6 +27,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 /// A JSON value carried as text and never inspected.
+///
+/// In TypeScript it is `unknown` (ADR 0017): the one type of the wire with
+/// no shape to declare. A page narrows it before use, as Vessel would have
+/// to define a typed struct.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "unknown"))]
 pub struct RawJson(Box<RawValue>);
 
 impl RawJson {

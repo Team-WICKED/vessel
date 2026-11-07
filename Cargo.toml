@@ -190,6 +190,15 @@ tokio-util = "0.7"
 toml_edit = { version = "0.25", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# TypeScript declarations of the wire types for the web UI (vessel-proto's
+# and vessel-web's `ts` feature, ADR 0017): derives only, behind a feature
+# no shipped binary enables, so nothing on the wire changes. Its own
+# `serde-compat` reads our serde attributes; `uuid-impl` and `chrono-impl`
+# cover the two foreign types the wire carries (both already in the tree).
+# Checked 2026-11-07 against AGENTS.md section 9: a proc macro and a
+# small runtime, no `unsafe` of ours, no network or file access outside
+# the export functions we do not call.
+ts-rs = { version = "12", default-features = false, features = ["serde-compat", "no-serde-warnings", "uuid-impl", "chrono-impl"] }
 # NFC for the key under which two file names collide on macOS and Windows
 # (vessel-fleet): names differing only in case or Unicode normalisation are
 # one file there. The unicode-rs crate (`idna` used it for years); its

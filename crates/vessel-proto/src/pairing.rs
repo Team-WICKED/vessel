@@ -13,6 +13,7 @@ use crate::key::{NodePublicKey, base64url, serde_via_text};
 /// A route to a node: a `ws://` or `wss://` URL, for a relay or a direct
 /// address. Only the scheme is checked here; reachability is the client's.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct RouteUrl(String);
 
 /// A route URL with a scheme other than `ws://` or `wss://`.
@@ -67,6 +68,7 @@ serde_via_text!(RouteUrl);
 /// The pairing-link format version. Only version 1 exists; a link from a
 /// newer format is refused with a clear error rather than half-understood.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "1"))]
 pub struct OfferVersion;
 
 impl OfferVersion {
@@ -99,6 +101,7 @@ impl<'de> Deserialize<'de> for OfferVersion {
 /// field this version does not understand must not be silently ignored;
 /// format changes bump `v` instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct PairingOffer {
     /// Format version (always 1).
@@ -125,6 +128,7 @@ const LINK_PREFIX: &str = "vessel://pair#";
 /// [`PairingOffer`]. The offer sits after `#` so that, if a link is ever
 /// opened through a web page, the fragment never reaches a server.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct PairingLink(String);
 
 /// Why a pairing link did not parse.

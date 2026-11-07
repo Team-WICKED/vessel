@@ -14,6 +14,7 @@ use crate::key::{
 /// The registration token a relay operator gives to nodes allowed to
 /// register there. Clients need none. Never printed.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct RelayToken(String);
 
 /// An empty relay token.
@@ -81,6 +82,7 @@ secret!(
 /// registers with, and the relay checks it with the same token, so the
 /// relay keeps no state for it and rotating the token voids every ticket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RelayTicket {
     /// The node it registers: the relay takes it only with this key, and
     /// only once the node proved it holds the key.
@@ -95,6 +97,7 @@ pub struct RelayTicket {
 /// One waiting client's connection on a relay: 128 random bits minted by the
 /// relay, lowercase hex. The node answers with `GET /v1/accept?conn=<id>`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct ConnId([u8; 16]);
 
 impl ConnId {
@@ -127,6 +130,7 @@ impl FromStr for ConnId {
 
 /// One Noise handshake message, base64url on the wire.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct HandshakeMessage(Vec<u8>);
 
 impl HandshakeMessage {
@@ -191,6 +195,7 @@ serde_via_text!(ConnId, HandshakeMessage);
 
 /// A message from a node on its control connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NodeToRelay {
     /// Ask to be reachable under `routing_id`.
@@ -217,6 +222,7 @@ pub enum NodeToRelay {
 
 /// Why a relay refused a registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RegistrationRefusal {
     /// The registration token is wrong, or none and no ticket was given.
@@ -238,6 +244,7 @@ pub enum RegistrationRefusal {
 
 /// A message from a relay on a node's control connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RelayToNode {
     /// Prove you hold the key: the first Noise NK message to it.

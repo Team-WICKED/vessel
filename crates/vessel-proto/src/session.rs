@@ -25,6 +25,7 @@ use crate::terminal::{TerminalInput, TerminalSize};
 ///   speaks ACP (Agent Client Protocol) to the harness or its adapter, so one
 ///   client implementation covers all four harnesses. See ADR 0003.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum SessionMode {
     /// The harness's own TUI in a pseudo-terminal; clients attach and see
@@ -55,6 +56,7 @@ pub enum SessionMode {
 /// with [`SessionSpec::new`] and the `with_*` methods; fields stay public
 /// for reading and for changing after construction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[non_exhaustive]
 pub struct SessionSpec {
     /// Harness to launch.
@@ -105,6 +107,7 @@ impl SessionSpec {
 /// derived from `TurnStarted`/`TurnEnded` events, so there is one source of
 /// truth for each fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SessionStatus {
     /// Spawning, or (structured) waiting for the ACP handshake.
@@ -139,6 +142,7 @@ impl SessionStatus {
 /// `#[non_exhaustive]` for the reason given on [`SessionSpec`]; build one
 /// with [`SessionInfo::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[non_exhaustive]
 pub struct SessionInfo {
     /// Session id.
@@ -179,6 +183,7 @@ pub struct SessionInfo {
 /// agent's own node is in `created_by` already, so `remote` names only the
 /// owner or a device of the other node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionOrigin {
     /// Created by a call forwarded from another node.
@@ -199,6 +204,7 @@ pub enum SessionOrigin {
 
 /// The owner or a device of another node, for [`SessionOrigin::Remote`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RemoteCreator {
     /// That node's owner.
@@ -243,6 +249,7 @@ impl SessionInfo {
 /// Sending a variant that does not match the session's mode fails with
 /// `ErrorCode::Unsupported`; the node never guesses a conversion.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionInput {
     /// Terminal mode: keystrokes or a resize.

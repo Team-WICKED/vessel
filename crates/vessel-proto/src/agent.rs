@@ -16,6 +16,7 @@ use crate::raw::RawJson;
 
 /// One entry in a structured session's timeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum AgentEvent {
     /// The harness accepted the session; its id is kept for resume.
@@ -84,6 +85,7 @@ pub enum AgentEvent {
 
 /// A piece of message content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Plain or markdown text.
@@ -109,6 +111,7 @@ pub enum ContentBlock {
 /// What kind of work a tool call does. Lets clients pick an icon and a
 /// default rendering without knowing harness tool names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     /// Reads files or data.
@@ -135,6 +138,7 @@ pub enum ToolKind {
 
 /// Progress of a tool call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
     /// Announced, not started (possibly awaiting permission).
@@ -149,6 +153,7 @@ pub enum ToolCallStatus {
 
 /// A file location a tool call touches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolLocation {
     /// Path on the node.
     pub path: PathBuf,
@@ -159,6 +164,7 @@ pub struct ToolLocation {
 
 /// Output attached to a tool call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolCallContent {
     /// Regular content.
@@ -180,6 +186,7 @@ pub enum ToolCallContent {
 
 /// A tool call as first announced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolCall {
     /// Harness-assigned id.
     pub id: ToolCallId,
@@ -203,6 +210,7 @@ pub struct ToolCall {
 /// A change to an announced tool call. `None` fields are unchanged; `Some`
 /// collections replace the previous value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolCallUpdate {
     /// Which call.
     pub id: ToolCallId,
@@ -232,6 +240,7 @@ pub struct ToolCallUpdate {
 
 /// Priority of a plan entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum PlanPriority {
     /// High.
@@ -244,6 +253,7 @@ pub enum PlanPriority {
 
 /// Progress of a plan entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum PlanStatus {
     /// Not started.
@@ -256,6 +266,7 @@ pub enum PlanStatus {
 
 /// One step of the agent's plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PlanEntry {
     /// What the step is.
     pub content: String,
@@ -267,6 +278,7 @@ pub struct PlanEntry {
 
 /// What choosing an option means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionOptionKind {
     /// Allow this once.
@@ -281,6 +293,7 @@ pub enum PermissionOptionKind {
 
 /// One choice offered by a permission request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PermissionOption {
     /// Harness-assigned option id, echoed back when chosen.
     pub id: PermissionOptionId,
@@ -292,6 +305,7 @@ pub struct PermissionOption {
 
 /// A request for human approval, pending until a client answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PermissionRequest {
     /// Node-assigned id clients answer with.
     pub id: PermissionId,
@@ -303,6 +317,7 @@ pub struct PermissionRequest {
 
 /// How a permission request was settled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum PermissionOutcome {
     /// A client chose an option.
@@ -316,6 +331,7 @@ pub enum PermissionOutcome {
 
 /// Why a turn stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// The agent finished.

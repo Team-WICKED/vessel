@@ -44,6 +44,7 @@ use crate::name::{EnvName, HeaderName, McpServerName, SecretName};
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
 )]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct Generation(u64);
 
@@ -73,6 +74,7 @@ impl Generation {
 /// The SHA-256 of a blob, lowercase hex on the wire. Blobs are fetched and
 /// stored by it, so equal content is fetched once.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct BlobHash([u8; 32]);
 
 impl BlobHash {
@@ -113,6 +115,7 @@ impl FromStr for BlobHash {
 /// name on every OS Vessel runs on, so joining it under a target directory
 /// can never leave that directory.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct BundlePath(String);
 
 /// Why a bundle path was refused.
@@ -291,6 +294,7 @@ impl FromStr for BundlePath {
 /// an ordinary parameter, so the same rule is stated here rather than
 /// enforced: keep secrets out of URLs.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct HttpUrl(String);
 
 /// A URL that is not `http://` or `https://` with a host, or that carries
@@ -359,6 +363,7 @@ serde_via_text!(BlobHash, BundlePath, HttpUrl);
 
 /// A file in a bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct BundleFile {
     /// Its content's hash.
@@ -375,6 +380,7 @@ pub struct BundleFile {
 /// What a home publishes: every file by its path, and the MCP servers with
 /// secret references unresolved.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     /// Which publication this is.
@@ -391,6 +397,11 @@ pub struct Manifest {
 /// secret each node resolves from its own store. On the wire, a string or
 /// `{"secret": "NAME"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(type = "string | { secret: SecretName }")
+)]
 pub enum ConfigValue {
     /// Literal text, visible to everything that sees the manifest.
     Text(String),
@@ -484,12 +495,11 @@ impl fmt::Debug for ResolvedValue {
 /// and `ResolvedValue` at launch; only environment variables and headers
 /// hold one, so a secret can never become an argument.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    deny_unknown_fields,
-    bound(serialize = "V: Serialize", deserialize = "V: Deserialize<'de>")
-)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+// Apart from the rest: ts-rs reads serde's attributes for the TypeScript
+// declarations (ADR 0017), and drops a whole attribute holding `bound`.
+#[serde(bound(serialize = "V: Serialize", deserialize = "V: Deserialize<'de>"))]
 pub enum McpTransport<V> {
     /// A local process speaking MCP on its stdio.
     Stdio {
@@ -568,11 +578,13 @@ pub type ResolvedMcpServers = McpServers<ResolvedValue>;
 
 /// `fleet.manifest` (protocol 5): the home's current bundle. Needs `Sync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GetManifest;
 
 /// `fleet.blob` (protocol 5): part of a blob, from `offset`. A member asks
 /// only for blobs it lacks, chunk by chunk. Needs `Sync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ReadBlob {
     /// Which blob.
     pub hash: BlobHash,
@@ -583,9 +595,11 @@ pub struct ReadBlob {
 
 /// Reply to `fleet.blob`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BlobChunk {
     /// Bytes from the requested offset: at most `MAX_LEN`, fewer at the end.
     #[serde(with = "crate::base64_bytes")]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub data: Bytes,
     /// The blob's whole size, so the member knows when it is done.
     pub total: u64,
@@ -604,6 +618,7 @@ impl BlobChunk {
 /// (possibly `after` itself) when its wait limit passes, and the member asks
 /// again. Needs `Sync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WatchFleet {
     /// The generation the member has.
     pub after: Generation,
@@ -612,6 +627,7 @@ pub struct WatchFleet {
 /// `fleet.report` (protocol 5): a member says what it applied and which
 /// files it left alone because they were edited locally. Needs `Sync`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ReportApplied {
     /// The generation applied.
     pub generation: Generation,
@@ -623,10 +639,12 @@ pub struct ReportApplied {
 /// `fleet.members` (protocol 5): the home's members and what each last
 /// reported. Needs `Admin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListMembers;
 
 /// A member as its home reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FleetMember {
     /// The member's device on the home.
     pub device: DeviceId,

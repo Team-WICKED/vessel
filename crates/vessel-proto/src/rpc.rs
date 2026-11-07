@@ -105,6 +105,7 @@ macro_rules! rpc_methods {
     )*) => {
         /// Every RPC method.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
         pub enum Method {
             $(
                 $(#[$doc])*
@@ -144,6 +145,7 @@ macro_rules! rpc_methods {
 
         /// A request of any method, as sent on the wire.
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
         #[serde(tag = "method", content = "params")]
         pub enum Call {
             $(
@@ -165,6 +167,7 @@ macro_rules! rpc_methods {
 
         /// A successful response of any method, as sent on the wire.
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
         #[serde(tag = "method", content = "result")]
         pub enum Reply {
             $(
@@ -387,6 +390,7 @@ impl Call {
 
 /// Result of a call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 #[expect(
     clippy::large_enum_variant,

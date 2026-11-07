@@ -10,6 +10,7 @@ use crate::key::NodePublicKey;
 
 /// A wire protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct ProtocolVersion(u32);
 
@@ -53,6 +54,7 @@ pub const MIN_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
 /// - Choice: both sides state a range in the handshake and use the highest
 ///   common version, or refuse with `ErrorCode::ProtocolMismatch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProtocolRange {
     /// Oldest supported version.
     pub min: ProtocolVersion,
@@ -78,6 +80,7 @@ impl ProtocolRange {
 
 /// Whether a node is taking new work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum NodeState {
     /// Accepting new sessions.
@@ -90,6 +93,7 @@ pub enum NodeState {
 
 /// Facts about a node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct NodeInfo {
     /// Stable id for this node.
     pub id: NodeId,

@@ -95,6 +95,7 @@ const KEY_PREFIX: &str = "x25519:";
 /// A node's static X25519 public key: the identity a client pins at pairing
 /// and checks on every secure handshake.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct NodePublicKey([u8; 32]);
 
 impl NodePublicKey {
@@ -139,6 +140,7 @@ impl FromStr for NodePublicKey {
 /// `vessel-secure` (truncated SHA-256), so it reveals nothing the key would
 /// not, and anyone holding the key can compute it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
 pub struct RoutingId([u8; 16]);
 
 impl RoutingId {
@@ -200,6 +202,7 @@ macro_rules! secret {
     ($(#[$meta:meta])* $name:ident, $len:literal) => {
         $(#[$meta])*
         #[derive(Clone, PartialEq, Eq)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "string"))]
         pub struct $name([u8; $len]);
 
         impl $name {

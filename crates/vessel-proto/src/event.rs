@@ -44,6 +44,7 @@ use crate::terminal::TerminalOutput;
 
 /// Something that happened in a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEvent {
     /// The process changed state. A final `Status` is the last event of
@@ -112,6 +113,7 @@ impl SessionEvent {
 
 /// An event with its position and time; the unit of the session log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EventRecord {
     /// Position in the session log.
     pub seq: EventSeq,

@@ -46,6 +46,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The web UI's TypeScript declarations (ADR 0017): vessel-proto's `ts`
+      # feature, linted, and its test failing while web/src/wire differs
+      # from what the wire types declare. The file is the same on every OS.
+      - if: runner.os == 'Linux'
+        run: cargo clippy -p vessel-proto --features ts --all-targets -- -D warnings
+      - if: runner.os == 'Linux'
+        run: cargo test -p vessel-proto --features ts --lib ts::
       # The fake harnesses, under vessel-testkit's own feature set: the first
       # build of that set compiles about 30 crates, and doing it here keeps
       # it out of the test timings (see vessel_testkit::within).
