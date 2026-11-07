@@ -242,6 +242,12 @@ fn refuse(front: Front, refusal: Refusal, message: &str) -> Response {
         }
     };
     let mut response = (refusal.status(), body).into_response();
+    // A refused connection does not stay: renewing it with one refused
+    // request after another held a place without a token (`listen`). Its
+    // body, if any, is unread, which ends it anyway.
+    let _replaced = response
+        .headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("close"));
     if refusal == Refusal::Busy {
         let _replaced = response
             .headers_mut()
@@ -302,6 +308,10 @@ fn admit(models: &Models, parts: &Parts, front: Front) -> Result<Admitted, Box<R
             "this proxy takes a running Vessel session's model token",
         )));
     };
+    // A harness's connection: never closed to make room (`listen`).
+    if let Some(proof) = parts.extensions.get::<super::listen::Proof>() {
+        proof.prove();
+    }
     if !own_host(models, parts) {
         tracing::info!("refused a model call naming another host");
         return Err(Box::new(refuse(

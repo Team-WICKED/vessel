@@ -978,15 +978,68 @@ async fn a_stream_cut_short_is_reported_to_the_harness() {
     .await;
 }
 
-/// Past [`super::listen::MAX_CONNECTIONS`] a connection is answered 503
-/// and closed before any byte is read.
+/// `GET /v1/models` on a kept-alive `stream`, its answer read by its
+/// length: the status.
+async fn models_on(stream: &mut TcpStream, proxy: SocketAddr, token: Option<&str>) -> u16 {
+    let auth = token.map_or_else(String::new, |token| {
+        format!("authorization: Bearer {token}\r\n")
+    });
+    let request = format!("GET /v1/models HTTP/1.1\r\nhost: {proxy}\r\n{auth}\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(stream.read_u8().await.unwrap());
+    }
+    let head = String::from_utf8(head).unwrap();
+    let length = head
+        .lines()
+        .find_map(|line| {
+            let line = line.to_ascii_lowercase();
+            line.strip_prefix("content-length:")
+                .map(|value| value.trim().parse::<usize>().unwrap())
+        })
+        .unwrap_or(0);
+    let mut body = vec![0; length];
+    let _read = stream.read_exact(&mut body).await.unwrap();
+    head.split(' ').nth(1).unwrap().parse().unwrap()
+}
+
+/// Every place held: the oldest connection that never showed a token is
+/// closed to make room, a refused request closes its own connection, and
+/// only when every connection is a harness's is a new one answered 503
+/// (the verification round: tokenless keep-alives starved the harness).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connections_past_the_limit_are_refused() {
+async fn a_full_proxy_makes_room_by_closing_tokenless_connections() {
     within(async {
         let fixture = Fixture::new().await;
-        let mut held = Vec::new();
-        for _ in 0..super::listen::MAX_CONNECTIONS {
-            held.push(TcpStream::connect(fixture.proxy).await.unwrap());
+        let (_handle, token, _records) = fixture.session("sonnet").await;
+        let limit = super::listen::MAX_CONNECTIONS;
+
+        let mut tokenless = Vec::new();
+        for _ in 0..limit {
+            tokenless.push(TcpStream::connect(fixture.proxy).await.unwrap());
+        }
+        let mut harness = TcpStream::connect(fixture.proxy).await.unwrap();
+        assert_eq!(
+            models_on(&mut harness, fixture.proxy, Some(&token)).await,
+            200
+        );
+        let mut oldest = tokenless.remove(0);
+        let mut rest = Vec::new();
+        assert_eq!(oldest.read_to_end(&mut rest).await.unwrap(), 0);
+        let mut refused = tokenless.remove(0);
+        assert_eq!(models_on(&mut refused, fixture.proxy, None).await, 401);
+        assert_eq!(refused.read_to_end(&mut rest).await.unwrap(), 0);
+        drop(tokenless);
+
+        let mut harnesses = vec![harness];
+        while harnesses.len() < limit {
+            let mut stream = TcpStream::connect(fixture.proxy).await.unwrap();
+            assert_eq!(
+                models_on(&mut stream, fixture.proxy, Some(&token)).await,
+                200
+            );
+            harnesses.push(stream);
         }
         let mut extra = TcpStream::connect(fixture.proxy).await.unwrap();
         let mut answer = Vec::new();
@@ -996,7 +1049,38 @@ async fn connections_past_the_limit_are_refused() {
             "{}",
             String::from_utf8_lossy(&answer)
         );
-        drop(held);
+        let mut first = harnesses.swap_remove(0);
+        assert_eq!(
+            models_on(&mut first, fixture.proxy, Some(&token)).await,
+            200
+        );
+        drop(harnesses);
+        fixture.stop().await;
+    })
+    .await;
+}
+
+/// At the header deadline a connection with part of a head read is
+/// answered 408, an idle kept-alive one is closed without a word, and
+/// both give their places back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_head_cut_off_by_its_deadline_is_answered_408() {
+    within(async {
+        let fixture = Fixture::new().await;
+        let (_handle, token, _records) = fixture.session("sonnet").await;
+        let mut partial = TcpStream::connect(fixture.proxy).await.unwrap();
+        partial
+            .write_all(b"GET /v1/models HTTP/1.1\r\nhost:")
+            .await
+            .unwrap();
+        let mut idle = TcpStream::connect(fixture.proxy).await.unwrap();
+        assert_eq!(models_on(&mut idle, fixture.proxy, Some(&token)).await, 200);
+        let mut answer = Vec::new();
+        let _read = partial.read_to_end(&mut answer).await.unwrap();
+        assert_eq!(answer, super::listen::TIMED_OUT);
+        let mut nothing = Vec::new();
+        let _read = idle.read_to_end(&mut nothing).await.unwrap();
+        assert!(nothing.is_empty(), "{}", String::from_utf8_lossy(&nothing));
         fixture.stop().await;
     })
     .await;
