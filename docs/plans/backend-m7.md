@@ -1,6 +1,7 @@
 # Milestone 7: the web UI
 
-Status: drafted 2026-11-07 by Track M7 (web); the coordinator settled
+Status: done, 2026-11-07, after a security review and a verification
+round (ADR 0017's amendment). Drafted the same day by Track M7 (web); the coordinator settled
 every open decision the same day as recommended ("Decisions" below), and
 ADR 0017 records them. Implementation on `backend/m7-web`. Builds on
 `main` with milestones 1 to 4. It is independent of milestones 5 (model

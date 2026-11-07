@@ -31,7 +31,7 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Milestones 1 to 6 are done, on `main`, and green on Linux, macOS and
+Milestones 1 to 7 are done, on `main`, and green on Linux, macOS and
 Windows ([docs/ROADMAP.md](docs/ROADMAP.md) has the details and what is
 next):
 
@@ -53,9 +53,10 @@ next):
 6. **IDE context.** The node runs language servers on saved files and gives
    agents symbols, references, hover, call hierarchy and diagnostics as MCP
    tools, without running repository code by default (below).
-
-Milestone 7, the web UI (`vessel ui`, "Web UI" below), is in review on
-`backend/m7-web`.
+7. **A web UI.** `vessel ui` serves the fleet in a browser on this
+   machine: nodes, sessions (structured and terminal), new sessions on any
+   route, sync, devices and settings, with the session's model calls
+   ("Web UI" below).
 
 ## Try it
 
