@@ -37,9 +37,15 @@ use axum::response::{IntoResponse as _, Response};
 
 /// The policy every response carries: this origin only, no inline script,
 /// no plugins, no framing.
+///
+/// Styles may be inline: xterm.js (the terminal view) writes its theme and
+/// cell sizes into `<style>` elements it creates, and offers no nonce.
+/// Scripts stay `'self'` only, so inline styles could only matter after an
+/// injection of markup, which the page never renders from session content
+/// (React escapes text; Markdown is rendered with raw HTML off).
 const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; \
-                   style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; \
-                   form-action 'none'; frame-ancestors 'none'";
+                   style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; \
+                   base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// The names this server answers to, and the origins its pages have.
 #[derive(Debug)]
