@@ -373,20 +373,28 @@ In the crate table's order.
     be used leaves the routes in effect); `model.list` gives route names,
     models and APIs only. The proxy listens on `127.0.0.1` on a port the
     system picks and is stopped with the node. A request is admitted in
-    order: no `Origin` (403), no compressed body (415), a live session's
-    token (`vslm-`, 256 random bits, kept as SHA-256 and compared against
-    every entry in constant time, refused once the session's end is
-    visible, removed when it is retired; else 401 with nothing of the
-    request logged), the route still defined, room in the limits (4 calls
-    per session, 16 per node; else 429 with `Retry-After`). The model must
+    order, on its headers before any body is read: no `Origin` (403), no
+    compressed body (415), a live session's token (`vslm-`, 256 random
+    bits, kept as SHA-256 and compared against every entry in constant
+    time, refused once the session's end is visible, removed when it is
+    retired; else 401 with nothing of the request logged), its own
+    address as `Host` (`127.0.0.1:<port>` or `localhost:<port>`, else
+    403), the route still defined, room in the limits (4 calls per
+    session, 16 per node; else 429 with `Retry-After`); then the body is
+    read under 32 MiB and 30 s. Its own accept loop (`models::listen`)
+    bounds connections (256) and header reads (10 s). The model must
     be the route's model or small model (else 400 naming both). Same API
     on both sides: the request's bytes go up (less what
     `vessel_llm::passthrough` must strip) with only `anthropic-version`
     and `anthropic-beta` of the harness's headers, and the answer's bytes
-    come back, read alongside for usage. Different APIs: translated
+    come back event by event, decoded and written again with the call's
+    key removed (an error event's JSON strings decoded to find it however
+    escaped), read alongside for usage. Different APIs: translated
     through the neutral form, the upstream always streamed, keepalives
-    every 15 s of silence. The provider's key is read from `secrets.toml`
-    for each call. Each admitted call ends in one `ModelCall` record in
+    every 15 s of silence, failures redacted before they are written.
+    Every answer is bounded (32 MiB, as read) and every write toward the
+    harness has the client's idle timeout. The provider's key is read
+    from `secrets.toml` for each call. Each admitted call ends in one `ModelCall` record in
     its session's log (`SessionHandle::model_call`) and one log line,
     metadata only. `session.create` under a routed profile mints the
     session's token by id before the launch (`Models::launch`), records

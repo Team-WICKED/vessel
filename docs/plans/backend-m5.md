@@ -421,12 +421,74 @@ commits.
   redirects. Nothing in a request chooses where the proxy connects.
 - **What is logged.** Route, model, status, token counts, latency, never a
   prompt, a completion, a header or a body. Upstream error bodies are
-  truncated and passed through a redaction of key-shaped strings before
-  the harness sees them.
+  redacted (the call's key replaced) whole, then shortened, before the
+  harness sees them; so is every error the provider sends inside a
+  successful answer (see "After the review").
 - **The canary** (as M4's): a random provider key in `secrets.toml` must
   not appear in any harness's environment (the fakes report theirs), the
   node's tracing, the event log, CLI output or the bytes the proxy sends a
   harness; the fake upstream confirms it did receive it.
+
+### After the review (2026-11-07)
+
+The independent review of the first build (702b271) found three P1 and
+four P2 problems, each reproduced by a test that now passes
+(`crates/*/tests/m5_*_boundaries.rs`, kept as the reviewer wrote them,
+plus tests of our own beside each fix). The threat notes they add:
+
+- **Ambiguous JSON** (P1). A member named twice is read differently by
+  different readers: the proxy checked the first `model`, a provider ran
+  the last. Every object the proxy decides by is refused if it repeats a
+  name (after unescaping), and a block or item it cannot probe refuses
+  the request instead of passing unread (`passthrough`).
+- **The key in a 200 answer** (P1). A provider may quote the key in an
+  error event inside a successful stream, or in a failed response with
+  status 200. Every answer carries its call's redactor: translated
+  failures are redacted before they are written; a same-API stream is
+  decoded and written again event by event (so a key cut across chunks is
+  whole before anything is released), an error event's JSON strings
+  decoded to find the key however escaped; a whole answer likewise.
+- **Cut before redacted** (P1). An unparsed error body was shortened
+  before the key was replaced, leaving all of it but the tail. The
+  bounded body is redacted whole, then shortened.
+- **Work before admission** (P2). The body was read before any check.
+  Every header check runs first (`Origin` 403, `Content-Encoding` 415,
+  the token 401, `Host` 403, route, limits 429), then the body is read
+  under 32 MiB and 30 s; the proxy's own accept loop bounds connections
+  (256) and header reads (10 s), and drains a refused request's body for
+  up to a second so the refusal is not lost to a reset.
+- **Unbounded answers** (P2). A translated answer collected for a
+  non-streaming caller, and the Responses front's final snapshot, grew
+  with the provider's stream. Every answer read as a stream counts its
+  bytes against 32 MiB, translated or not; past it the provider is cut
+  off and the harness gets a classified failure.
+- **The route overridden from inside** (P2). Codex takes the last of two
+  settings, and a routed session's own `-c` came after Vessel's. Routed
+  profiles and sessions may not set `model`, `model_provider(s)`,
+  `profile(s)` or `oss_provider`, nor pass `-m`, `--oss`,
+  `--local-provider` or `-p`, in any spelling; Claude Code may not get
+  `--settings`. The route's arguments come last (before a `--`).
+- **Envelopes inside envelopes** (P2). An envelope whose payload is
+  another opened as a native Anthropic signature. Nested envelopes open
+  as nothing to replay, and the last step before Anthropic sends no
+  signature or redacted data holding `vsl1:` anywhere.
+- **`Host`** (the review's open point): only `127.0.0.1:<port>` and
+  `localhost:<port>`, after the token, as defence in depth against DNS
+  rebinding (a page cannot know a token).
+- **Stalls and undecodable streams** (open points): every write toward
+  the harness has the client's idle timeout, so a harness that stops
+  reading ends its call (recorded as cut off) instead of holding its
+  places; a same-API stream Vessel cannot decode ends in a classified
+  failure.
+- **The envelope is a hint** (decision): `vsl1:` decides only where a
+  reasoning block may be replayed; it is not proof of origin (a harness
+  can forge one), and authenticity is the provider's own check.
+- **Known limits.** Owner-only `models.toml` is checked on Unix only; on
+  Windows the node relies on the data directory's inherited ACL, as for
+  the store's other files (follow-up: an ACL check). What a harness reads
+  from its own home (Claude Code's settings files with an `env` block or
+  `apiKeyHelper`, Codex's managed requirements) can still steer it: that
+  configuration is the account's, and Vessel does not rewrite it.
 
 ## Done criteria
 
@@ -466,6 +528,11 @@ commits.
   passthrough's stripping of foreign thinking (decision 9) stays either
   way, since an operator may point a route at another API under a live
   session by editing `models.toml`.
+
+- **An ACL check for `models.toml` on Windows**, matching the Unix mode
+  check; today the node relies on the data directory's inherited ACL there,
+  as the store does for its other files (the security review's open
+  point, kept as a known limit).
 
 ## Decisions (coordinator, 2026-11-07)
 

@@ -15,7 +15,8 @@
 //!   profiles.toml    harness profiles (ADR 0011), written by the owner;
 //!                    read at start and on `profile.reload`
 //!   models.toml      model routes (ADR 0015), written by the owner, refused
-//!                    when other users can read it
+//!                    when other users can read it (Unix; on Windows the
+//!                    directory's inherited ACL is relied on, see `files`)
 //!   mcp/             terminal sessions' MCP configuration files (ADR
 //!                    0012), one per live session, emptied at start
 //! ```
@@ -169,7 +170,9 @@ impl DataDir {
 
     /// `models.toml`, or `None` if there is none (the node then routes no
     /// model). Whether other users can read it is reported, not judged:
-    /// the node refuses such a file (ADR 0015, decision 4).
+    /// the node refuses such a file (ADR 0015, decision 4). On Windows it
+    /// is always reported as owner-only (no mode bits; the directory's
+    /// inherited ACL is relied on, as for every file here).
     ///
     /// # Errors
     /// The file exists but cannot be read, or is not UTF-8.

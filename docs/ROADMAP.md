@@ -107,6 +107,10 @@ Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
   session keeps the route it was launched with, since Codex files its
   threads under the model provider; Claude Code does not, so it could
   come first (the plan's "Follow-ups").
+- Follow-up, not scheduled: an ACL check for `models.toml` on Windows;
+  today the owner-only check is Unix's mode bits, and Windows relies on
+  the data directory's inherited ACL, as the store does for its other
+  files.
 
 ## Phase 4: IDE context
 

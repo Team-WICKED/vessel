@@ -441,8 +441,10 @@ server such as OpenRouter, vLLM or Ollama), or passes the bytes through
 when both speak the same one.
 
 Routes live in `models.toml` in the node's data directory, which must be
-readable by you alone (the node refuses it otherwise). The provider's key
-is a secret of the node's, named there, never written in the file:
+readable by you alone (on Unix the node refuses it otherwise; on Windows
+it relies on the data directory's permissions, as for its other files).
+The provider's key is a secret of the node's, named there, never written
+in the file:
 
 ```toml
 [providers.openrouter]
@@ -477,7 +479,13 @@ vessel log 3f2a                              # model calls: route, model, tokens
   call and goes only into the request to the provider.
 - Claude Code and Codex can be routed, in terminal and structured mode;
   Gemini CLI and OpenCode cannot yet. A session keeps its route: moving
-  it to a profile of another route is refused.
+  it to a profile of another route is refused. A routed profile or
+  session cannot pick another model or provider with its own arguments
+  (Codex's `-m`, `-p`, `--oss`, `-c model...`; Claude Code's
+  `--settings`); settings in the account's own home still apply.
+- The proxy answers only on `127.0.0.1`, to a live session's token, with
+  its own address as `Host`; it removes the provider's key from anything
+  the provider sends back.
 - Each call is a `model_call` record in the session's log, with its
   tokens and how it ended; never its content.
 - At most 4 calls at once per session and 16 per node; a call past them

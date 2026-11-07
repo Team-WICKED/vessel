@@ -55,7 +55,9 @@ untyped JSON trees, one crate per job).
    secrets, limits, usage. How each harness is pointed at it stays in
    `vessel-harness` (ADR 0001's amendment).
 4. **Routes** are defined per node in `<data_dir>/models.toml`
-   (owner-only, as is anything derived from it): providers (API, base URL,
+   (owner-only, as is anything derived from it; checked on Unix, while on
+   Windows the data directory's inherited ACL is relied on, as for the
+   store's other files): providers (API, base URL,
    key as `{ secret = "NAME" }` from `secrets.toml`, capability flags) and
    named models (provider, model, small model). A profile names one with
    `model = "<route>"`. Upstream URLs come only from this file; the client
@@ -145,3 +147,32 @@ session (or any local process) from using another's route.
   independent security review before the milestone is done (tokens,
   SSRF, key exposure, isolation between sessions, resource limits, log
   contents).
+- The `vsl1:` envelope is a transport hint, not authenticated
+  provenance: a harness can write any envelope, naming any provider.
+  Vessel uses it only to decide where a reasoning block may be replayed,
+  never sends one to a provider as that provider's own opaque field (not
+  even unwrapped from another), and leaves authenticity to the provider,
+  which checks its own signatures and encrypted content and refuses a
+  forged one.
+
+Amended after the security review (2026-11-07), which found three P1
+and four P2 problems in the first build; each now has its regression
+test (the plan's "Security", "After the review"):
+
+- The proxy checks a request's headers (`Origin`, `Content-Encoding`,
+  the token, `Host`, route, limits) before it reads any body, reads the
+  body under a cap and a deadline, bounds its connections and header
+  reads, and accepts only `127.0.0.1:<port>` and `localhost:<port>` as
+  `Host`.
+- Objects the proxy decides by (the request, messages, blocks, items)
+  may not name a member twice, and a block it cannot read refuses the
+  request.
+- A provider's key is removed from everything the proxy writes from the
+  provider, whatever the status: error bodies whole before they are
+  shortened, inline errors in a 200 stream, failed responses.
+- Every answer is bounded (32 MiB) as it is read, translated or not, and
+  every write toward the harness has a deadline.
+- A routed harness's own arguments may not choose another model,
+  provider or configuration profile, and the route's arguments come
+  last. What the harness reads from its own home (an account's settings,
+  an administrator's managed configuration) is the account's.
