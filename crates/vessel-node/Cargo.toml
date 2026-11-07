@@ -19,6 +19,7 @@ vessel-client.workspace = true
 vessel-fleet.workspace = true
 vessel-harness.workspace = true
 vessel-proto.workspace = true
+vessel-lsp.workspace = true
 vessel-relay.workspace = true
 vessel-rpc.workspace = true
 vessel-secure.workspace = true

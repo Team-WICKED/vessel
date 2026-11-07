@@ -102,6 +102,16 @@ impl Unary for SetSecret {}
 impl Unary for ListSecrets {}
 impl Unary for DeleteSecret {}
 impl Unary for CopySecret {}
+impl Unary for vessel_proto::lsp::WorkspaceSymbols {}
+impl Unary for vessel_proto::lsp::DocumentSymbols {}
+impl Unary for vessel_proto::lsp::Definition {}
+impl Unary for vessel_proto::lsp::References {}
+impl Unary for vessel_proto::lsp::GetHover {}
+impl Unary for vessel_proto::lsp::Implementations {}
+impl Unary for vessel_proto::lsp::TypeDefinition {}
+impl Unary for vessel_proto::lsp::IncomingCalls {}
+impl Unary for vessel_proto::lsp::OutgoingCalls {}
+impl Unary for vessel_proto::lsp::Diagnostics {}
 
 /// `n` as a `NonZeroUsize` for constants.
 const fn at_least_one(n: usize) -> NonZeroUsize {

@@ -31,7 +31,7 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Milestones 1 to 4 are done, on `main`, and green on Linux, macOS and
+Milestones 1 to 4 and 6 are done, on `main`, and green on Linux, macOS and
 Windows ([docs/ROADMAP.md](docs/ROADMAP.md) has the details and what is
 next):
 
@@ -46,8 +46,12 @@ next):
    skills and MCP servers shared from one home node, conversations and
    memory moved on request, first-run setup, and agents that start and
    drive sessions on any node of the fleet (below).
+6. **IDE context.** The node runs language servers on saved files and gives
+   agents symbols, references, hover, call hierarchy and diagnostics as MCP
+   tools, without running repository code by default (below).
 
-Not yet: model routing, the LSP bridge, a web UI.
+Model routing (milestone 5) and the web UI (milestone 7) are separate
+milestones still in review.
 
 ## Try it
 
@@ -484,3 +488,89 @@ Vessel is **source-available, not open source.** It is licensed under the
 Contributions from outside Team-WICKED are not accepted.
 
 Copyright 2026 Team-WICKED.
+
+## IDE context without an editor
+
+Milestone 6 ([plan](docs/plans/backend-m6.md), [ADR 0016](docs/adr/0016-read-only-language-context.md)):
+install the language servers yourself and put trusted binaries on PATH.
+Vessel discovers rust-analyzer, typescript-language-server, basedpyright or
+pyright, gopls and clangd. It never installs servers or downloads toolchains.
+
+```bash
+vessel node start --lsp-root /workspace/project
+# equivalent daemon entry point:
+vesseld --lsp-config /path/to/operator-lsp.json
+```
+
+An operator configuration can pin executable paths and a TypeScript engine:
+
+```json
+{
+  "roots": [{"path": "/workspace/project", "full_analysis": false}],
+  "servers": {"rust": {"program": "/opt/tools/rust-analyzer", "args": []}},
+  "typescript_server": "/opt/tools/typescript/lib/tsserver.js",
+  "rust_toolchain": "/opt/tools/rust-toolchain",
+  "cargo_home": "/opt/tools/cargo-cache",
+  "python_interpreter": "/opt/tools/python/bin/python3"
+}
+```
+
+The optional tool/cache paths are useful with isolated homes; conservative
+TypeScript needs a trusted `tsserver.js` (explicit, or discovered through a
+global `tsserver` on PATH), never one selected from project `node_modules`.
+Conservative Rust uses `rust_toolchain`, else rustup's default toolchain
+(resolved once to absolute binaries, never through a rustup proxy that a
+project's `rust-toolchain.toml` could redirect), else `rustc`/`cargo` on
+PATH; with a custom `RUSTUP_HOME`, pin `rust_toolchain`. A pinned, linked
+or path toolchain must lie outside every configured root. It analyses only
+the Cargo projects it checked: the nearest `Cargo.toml` at or above the
+workspace, else those one directory below it. `python_interpreter` is the
+interpreter pyright runs; on Windows conservative Python needs it. Servers
+run in `<data dir>/lsp/cwd` with temporary files in `<data dir>/lsp/tmp`.
+Config is read once at startup. `--lsp-root` may repeat; each directory grants
+Read callers access, including callers from other fleet nodes. A local
+session also has its own cwd. Requests cannot change these grants.
+
+Agents receive ten `vessel_lsp_*` MCP tools: `workspace_symbols`,
+`document_symbols`, `definition`, `references`, `hover`, `implementations`,
+`type_definition`, `incoming_calls`, `outgoing_calls`, `diagnostics`.
+For example, `vessel_lsp_hover` takes:
+
+```json
+{
+  "workspace": {"root": "/workspace/project", "language": "rust"},
+  "file": "src/lib.rs",
+  "position": {"line": 12, "column": 8}
+}
+```
+
+Language values: `rust`, `type_script`, `python`, `go`, `cpp`. `node` optionally
+selects another fleet node by name/id; that destination checks its own root
+grants. Columns are 1-based Unicode scalar values, not bytes or UTF-16 units.
+Only saved files are visible. List tools take `page: {"offset": 0, "limit": 50}`
+(up to 200 items); sorted pages can shift if files change between calls.
+
+Every result reports covered files, observation time, freshness and observed
+indexing state. Cached diagnostics may be older than a query; an empty cache
+is unknown, never proof that the workspace is clean. A work-done progress
+end does not prove all indexing finished. Unsupported features report that
+explicitly; results beyond resource budgets report truncation.
+
+Conservative analysis disables Rust build scripts/proc macros/check-on-save,
+uses offline dependency handling, disables TypeScript automatic acquisition,
+and refuses executable or unsupported project configuration. This loses
+semantic coverage, including unexpanded derives and uncached offline dependencies.
+Only the operator can enable full analysis for a root, with
+`--lsp-full-analysis-root` or `full_analysis: true`; it may execute repository
+build tools. It covers every directory below that root, including session
+cwds and fleet callers' workspaces inside it: a full-analysis parent makes
+every root under it full. LSP runs as the node account: **this is not an OS sandbox**.
+The per-server restrictions and residual trust boundaries are in ADR 0016.
+
+Servers start lazily (at most four, shared between allowed roots: a root
+holding fewer servers takes over the busiest root's least recently used one
+and waits for it, and a burst from one root cannot take an equal root's
+slot), shut down after five idle minutes, and retry after crashes with
+backoff. Documents, diagnostics, queues and output
+sizes are bounded. To exercise this repository through a real rust-analyzer
+and an isolated agent MCP connection, run `python3 docs/smoke/m6-lsp.py`.

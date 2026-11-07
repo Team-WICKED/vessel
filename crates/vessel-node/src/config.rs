@@ -18,6 +18,10 @@ use crate::fleet::FleetConfig;
 /// override fields as needed.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Language-server selection and bounded lifecycle. Library defaults find no real tools.
+    pub lsp: vessel_lsp::Config,
+    /// Destination roots allowed to Read callers; local agents also have their own cwd.
+    pub lsp_roots: Vec<crate::LspRoot>,
     /// TCP address for the websocket (`/rpc`). Loopback by default;
     /// anything else is reachable by other machines and logs a warning
     /// naming the token file. `None` serves the local socket only (reached
@@ -112,6 +116,18 @@ impl Config {
     #[must_use]
     pub fn new(data_dir: DataDir, harness_env: HarnessEnv) -> Self {
         Self {
+            lsp: vessel_lsp::Config {
+                registry: vessel_lsp::registry::Registry {
+                    home: Some(harness_env.user_home().to_owned()),
+                    // Language servers run in an empty directory of the
+                    // node's own, never in a repository, and keep their
+                    // temporary files there instead of in the account home.
+                    state_dir: Some(data_dir.root().join("lsp")),
+                    ..vessel_lsp::registry::Registry::default()
+                },
+                ..vessel_lsp::Config::default()
+            },
+            lsp_roots: Vec::new(),
             bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_PORT))),
             name: None,
             data_dir,

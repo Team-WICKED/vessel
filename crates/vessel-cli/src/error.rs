@@ -13,6 +13,9 @@ use vessel_remote::{
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
+    /// Explicit operator LSP configuration failed.
+    #[error(transparent)]
+    LspConfiguration(#[from] vessel_node::LspConfigError),
     /// No `--token`, and the local token file could not be read.
     #[error(
         "no token: pass --token (or VESSEL_TOKEN), or run on the node's machine ({} could not be read)",

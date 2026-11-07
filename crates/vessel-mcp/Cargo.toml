@@ -19,6 +19,8 @@ tokio = { workspace = true, features = ["io-std"] }
 tracing.workspace = true
 
 [dev-dependencies]
+vessel-lsp.workspace = true
+which.workspace = true
 tempfile.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }
 vessel-node.workspace = true

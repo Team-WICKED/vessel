@@ -19,6 +19,8 @@ pub struct CommandSpec {
     /// Executable to run: an absolute path resolved by the caller, so the
     /// runner never searches `PATH` itself.
     pub program: PathBuf,
+    /// Start with inherited variables or an empty environment before `env`.
+    pub environment: Environment,
     /// Arguments, passed verbatim.
     pub args: Vec<OsString>,
     /// Changes to the inherited environment, applied in order (a later entry
@@ -26,6 +28,16 @@ pub struct CommandSpec {
     pub env: Vec<(OsString, EnvValue)>,
     /// Working directory; `None` inherits the caller's.
     pub cwd: Option<PathBuf>,
+}
+
+/// How a command obtains its base environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Environment {
+    /// Preserve the parent environment, as existing harnesses require.
+    #[default]
+    Inherit,
+    /// Begin empty; callers explicitly supply required platform variables.
+    Clear,
 }
 
 /// One change to an inherited environment variable. `Debug` hides the value.
@@ -50,6 +62,7 @@ impl fmt::Debug for CommandSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CommandSpec")
             .field("program", &self.program)
+            .field("environment", &self.environment)
             .field("args", &self.args)
             .field("env", &self.env)
             .field("cwd", &self.cwd)
@@ -64,6 +77,7 @@ impl CommandSpec {
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
+            environment: Environment::Inherit,
             args: Vec::new(),
             env: Vec::new(),
             cwd: None,
@@ -102,6 +116,16 @@ impl CommandSpec {
         self
     }
 
+    /// Start from an empty environment, then apply explicit `env` entries.
+    ///
+    /// Opt-in: existing commands continue inheriting. Windows callers must
+    /// supply `SystemRoot` explicitly when the launched runtime needs it.
+    #[must_use]
+    pub const fn env_clear(mut self) -> Self {
+        self.environment = Environment::Clear;
+        self
+    }
+
     /// Set the working directory.
     #[must_use]
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
@@ -125,6 +149,9 @@ impl CommandSpec {
     pub fn to_command(&self) -> std::process::Command {
         let mut command = std::process::Command::new(&self.program);
         let _ = command.args(&self.args);
+        if self.environment == Environment::Clear {
+            let _ = command.env_clear();
+        }
         for (name, value) in &self.env {
             let _ = match value {
                 EnvValue::Set(value) => command.env(name, value),
@@ -141,6 +168,35 @@ impl CommandSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cleared_environment_child_sees_only_explicit_variables() {
+        let mut spec = CommandSpec::new(std::env::current_exe().unwrap())
+            .env_clear()
+            .env("VESSEL_ENV_PROBE", "1")
+            .args(["--exact", "spec::tests::environment_probe", "--nocapture"]);
+        if cfg!(windows) {
+            spec = spec.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+        }
+        let output = spec.to_command().output().unwrap();
+        assert!(output.status.success(), "environment probe failed");
+        assert_eq!(CommandSpec::new("unused").environment, Environment::Inherit);
+    }
+
+    #[test]
+    fn environment_probe() {
+        if std::env::var_os("VESSEL_ENV_PROBE").is_none() {
+            return;
+        }
+        let names: std::collections::BTreeSet<_> = std::env::vars_os()
+            .map(|(name, _)| name.to_string_lossy().to_ascii_uppercase())
+            .collect();
+        let mut expected = std::collections::BTreeSet::from(["VESSEL_ENV_PROBE".to_owned()]);
+        if cfg!(windows) {
+            let _inserted = expected.insert("SYSTEMROOT".to_owned());
+        }
+        assert_eq!(names, expected);
+    }
 
     #[test]
     fn debug_shows_names_not_values() {

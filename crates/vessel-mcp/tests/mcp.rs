@@ -6,6 +6,7 @@
 //! The environment is read with this crate's variable names from what the
 //! node actually set, so the two cannot drift apart unnoticed.
 
+use std::io::Write as _;
 use std::time::Duration;
 
 use serde_json::json;
@@ -50,6 +51,10 @@ mod support {
 
     impl Fixture {
         pub(super) async fn start() -> Self {
+            Self::start_with(|_, _| {}).await
+        }
+
+        pub(super) async fn start_with(adjust: impl FnOnce(&mut Config, &std::path::Path)) -> Self {
             let data = tempfile::tempdir().unwrap();
             let bin = tempfile::tempdir().unwrap();
             let tui = Fake::Tui.path().unwrap();
@@ -66,6 +71,7 @@ mod support {
             config.bind = None;
             config.harness_lookup = Lookup::new([bin.path().to_path_buf()]);
             config.vessel_mcp = Some(VesselMcp::vessel(data.path().join("vessel")));
+            adjust(&mut config, data.path());
             let node = Node::start(config).await.unwrap();
             Self {
                 data,
@@ -268,7 +274,7 @@ async fn an_agent_starts_a_session_reads_its_reply_and_stops_it() {
 
         let names = mcp.initialize().await;
         assert_eq!(
-            names,
+            &names[..8],
             [
                 "list_nodes",
                 "list_sessions",
@@ -280,6 +286,9 @@ async fn an_agent_starts_a_session_reads_its_reply_and_stops_it() {
                 "kill_session"
             ]
         );
+
+        assert_eq!(names.len(), 18);
+        assert!(names.iter().any(|name| name == "vessel_lsp_diagnostics"));
 
         // Not in a fleet: a fleet of one, this node.
         let (failed, nodes) = mcp.call("list_nodes", json!({})).await;
@@ -376,4 +385,95 @@ async fn an_ended_sessions_credential_is_refused() {
         fixture.node.stop().await.unwrap();
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_uses_every_lsp_tool_through_mcp() {
+    within(async {
+        // A stand-in Rust toolchain outside the session's root.
+        let tools = tempfile::tempdir().unwrap();
+        let fixture = Fixture::start_with(|config, data| {
+            std::fs::write(data.join("fixture.rs"), "pub fn caller() { target(); }\npub fn target() {}\n").unwrap();
+            std::fs::write(data.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
+            config.lsp.registry.rust_toolchain = Some(vessel_testkit::rust_toolchain(tools.path()).unwrap());
+            let _previous = config.lsp.registry.overrides.insert(vessel_proto::lsp::Language::Rust, vessel_lsp::registry::Override { program: vessel_testkit::Fake::Lsp.path().unwrap(), args: vec!["normal".into()] });
+        }).await;
+        let owner = owner(&fixture).await;
+        let (_, env) = agent_env(&owner).await;
+        let tools = VesselTools::new(vessel_mcp::connect(&env).await.unwrap());
+        let (server_end, client_end) = tokio::io::duplex(64 * 1024);
+        let (read, write) = tokio::io::split(server_end);
+        let server = tokio::spawn(vessel_mcp::serve(tools, read, write));
+        let mut mcp = McpClient::new(client_end);
+        let names = mcp.initialize().await;
+        let workspace = json!({"root":fixture.data.path(),"language":"rust"});
+        for name in names.iter().filter(|name| name.starts_with("vessel_lsp_")) {
+            let args = json!({"workspace":workspace,"file":"fixture.rs","position":{"line":2,"column":8},"query":"target"});
+            let (failed, reply) = mcp.call(name, args).await;
+            assert!(!failed, "{name}: {reply}");
+            assert!(reply["context"]["files"].is_array(), "{name}: {reply}");
+            assert!(reply["context"]["observed_at"].is_string(), "{name}: {reply}");
+        }
+        drop(mcp);
+        server.await.unwrap().unwrap();
+        drop(owner);
+        fixture.node.stop().await.unwrap();
+    }).await;
+}
+
+/// Optional real-server probe; never runs in the ordinary account-free gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires rust-analyzer on PATH; run docs/smoke/m6-lsp.py"]
+async fn real_rust_analyzer_context_through_agent_mcp() {
+    within(async {
+        let executable = which::which("rust-analyzer").expect("rust-analyzer must be on PATH");
+        let sysroot = std::process::Command::new("rustc").args(["--print", "sysroot"]).output().unwrap();
+        assert!(sysroot.status.success());
+        let mut toolchain = std::path::PathBuf::from(String::from_utf8(sysroot.stdout).unwrap().trim());
+        if let Ok(server) = executable.canonicalize()
+            && let Some(candidate) = server.parent().and_then(std::path::Path::parent)
+            && candidate.join("lib/rustlib/src/rust/library").is_dir() {
+            toolchain = candidate.to_owned();
+        }
+        let cargo_home = std::env::var_os("CARGO_HOME").map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cargo")));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().canonicalize().unwrap();
+        let fixture = Fixture::start_with(|config, _| {
+            config.lsp.registry.rust_toolchain = Some(toolchain);
+            config.lsp.registry.cargo_home = cargo_home;
+            config.lsp.registry.system_root = std::env::var_os("SystemRoot");
+            config.lsp_roots.push(vessel_node::LspRoot { path: root.clone(), full_analysis: false });
+            let _previous = config.lsp.registry.overrides.insert(vessel_proto::lsp::Language::Rust, vessel_lsp::registry::Override { program: executable, args: Vec::new() });
+        }).await;
+        let owner = owner(&fixture).await;
+        let (_, env) = agent_env(&owner).await;
+        let tools = VesselTools::new(vessel_mcp::connect(&env).await.unwrap());
+        let (server_end, client_end) = tokio::io::duplex(128 * 1024);
+        let (read, write) = tokio::io::split(server_end);
+        let server = tokio::spawn(vessel_mcp::serve(tools, read, write));
+        let mut mcp = McpClient::new(client_end);
+        let _tools = mcp.initialize().await;
+        let file = "crates/vessel-lsp/src/position.rs";
+        let source = std::fs::read_to_string(root.join(file)).unwrap();
+        let line = source.lines().position(|line| line.starts_with("pub fn to_utf16(")).unwrap().saturating_add(1);
+        let workspace = json!({"root":root,"language":"rust"});
+        for name in ["document_symbols", "workspace_symbols", "definition", "references", "hover", "implementations", "type_definition", "incoming_calls", "outgoing_calls", "diagnostics"] {
+            let name = format!("vessel_lsp_{name}");
+            let args = json!({"workspace":workspace,"file":file,"position":{"line":line,"column":8},"query":"to_utf16"});
+            let (failed, reply) = mcp.call(&name, args).await;
+            // Unsupported is an honest feature outcome; every supported
+            // response still has coverage and must survive MCP serialization.
+            if failed { assert!(reply.as_str().is_some_and(|text| text.contains("unsupported")), "{name}: {reply}"); }
+            else { assert!(reply["context"].is_object(), "{name}: {reply}"); }
+            let record = json!({"tool":name,"failed":failed,"context":reply.get("context"),"items":reply.get("items").and_then(|items| items.as_array()).map(Vec::len)});
+            writeln!(std::io::stdout().lock(), "{record}").unwrap();
+            if name == "vessel_lsp_hover" { assert!(reply["text"].as_str().is_some_and(|text| !text.is_empty()), "semantic hover was empty: {reply}"); }
+            if name == "vessel_lsp_workspace_symbols" { assert!(!reply["items"].as_array().unwrap().is_empty(), "workspace was not indexed: {reply}"); }
+            if name == "vessel_lsp_document_symbols" { assert!(!failed); assert!(!reply["items"].as_array().unwrap().is_empty()); }
+        }
+        drop(mcp);
+        server.await.unwrap().unwrap();
+        drop(owner);
+        fixture.node.stop().await.unwrap();
+    }).await;
 }

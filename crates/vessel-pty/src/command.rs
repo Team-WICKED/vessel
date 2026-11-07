@@ -4,7 +4,7 @@
 //! `TERM`). Must not spawn anything.
 
 use portable_pty::CommandBuilder;
-use vessel_proc::{CommandSpec, EnvValue};
+use vessel_proc::{CommandSpec, EnvValue, Environment};
 
 /// `TERM` given to programs whose spec does not mention it.
 ///
@@ -21,6 +21,9 @@ const DEFAULT_TERM: &str = "xterm-256color";
 pub(crate) fn command_builder(spec: &CommandSpec) -> CommandBuilder {
     let mut builder = CommandBuilder::new(&spec.program);
     builder.args(&spec.args);
+    if spec.environment == Environment::Clear {
+        builder.env_clear();
+    }
     for (name, value) in &spec.env {
         match value {
             EnvValue::Set(value) => builder.env(name, value),
