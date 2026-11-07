@@ -1,21 +1,28 @@
 //! Routed profiles end to end (milestone 5, ADR 0015): a profile with a
 //! `model` route launches its harness pointed at the node's proxy, with a
 //! token of the session's own, pinned to the route's models; a session
-//! keeps its route when it moves, and its restarted agent gets a new token.
-//! The provider is never called here (`model_proxy` covers the calls).
+//! keeps its route when it moves, and its restarted agent gets a new token;
+//! and the fake harnesses' calls (`model <text>`) go through the proxy to a
+//! fake provider, in each harness's own API, and land in the session's log.
 
 use std::path::Path;
 
+use bytes::Bytes;
 use vessel_client::{NodeClient, SessionStream};
 use vessel_harness::fakes::claude_project;
 use vessel_node::Node;
+use vessel_node::fleet::{FleetFiles, set_secret};
 use vessel_proto::{
-    ErrorCode, EventRecord, EventSeq, HarnessKind, ModelId, ProfileName, SessionId, SessionInfo,
-    SessionModel, SessionStatus,
+    ErrorCode, EventRecord, EventSeq, HarnessKind, ModelApi, ModelCall, ModelId, ModelStop,
+    ProfileName, SessionEvent, SessionId, SessionInfo, SessionModel, SessionStatus,
 };
 use vessel_rpc::CallError;
+use vessel_testkit::upstream::{FakeUpstream, Reply};
 
-use crate::support::{Fixture, ask, read_until, status_of, structured_spec, within};
+use crate::support::{
+    Fixture, ask, collect_until, keys, read_all, read_until, status_of, structured_spec,
+    terminal_spec, within,
+};
 
 fn name(text: &str) -> ProfileName {
     text.parse().unwrap()
@@ -65,9 +72,9 @@ model = "qwen"
     )
 }
 
-fn write_models(fixture: &Fixture) {
+fn write_models(fixture: &Fixture, models: &str) {
     let path = fixture.data_dir().models_path();
-    std::fs::write(&path, MODELS).unwrap();
+    std::fs::write(&path, models).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -89,13 +96,13 @@ async fn env(
         .map(str::to_owned)
 }
 
-/// A node with [`MODELS`] and the profiles of [`profiles_toml`] (homes
+/// A node with `models` and the profiles of [`profiles_toml`] (homes
 /// under `homes`).
-async fn start(fixture: &Fixture, homes: &Path) -> (Node, NodeClient) {
+async fn start(fixture: &Fixture, homes: &Path, models: &str) -> (Node, NodeClient) {
     for home in ["alt", "work"] {
         std::fs::create_dir_all(homes.join(home)).unwrap();
     }
-    write_models(fixture);
+    write_models(fixture, models);
     std::fs::write(fixture.data_dir().profiles_path(), profiles_toml(homes)).unwrap();
     let node = fixture.start().await;
     let client = fixture.connect(&node).await;
@@ -127,7 +134,7 @@ async fn routes_are_listed_and_an_unknown_one_is_refused_by_name() {
     within(async {
         let fixture = Fixture::new();
         let homes = tempfile::tempdir().unwrap();
-        let (node, client) = start(&fixture, homes.path()).await;
+        let (node, client) = start(&fixture, homes.path(), MODELS).await;
 
         let routes = client.models().await.unwrap();
         assert_eq!(routes.len(), 1);
@@ -161,7 +168,7 @@ async fn a_routed_session_is_pointed_at_the_proxy_and_keeps_its_route() {
     within(async {
         let fixture = Fixture::new();
         let homes = tempfile::tempdir().unwrap();
-        let (node, client) = start(&fixture, homes.path()).await;
+        let (node, client) = start(&fixture, homes.path(), MODELS).await;
         let (info, mut stream, mut seen) =
             running(&fixture, &client, HarnessKind::ClaudeCode, "claude-qwen").await;
         let id = info.id;
@@ -238,7 +245,7 @@ async fn a_routed_codex_gets_a_vessel_provider() {
     within(async {
         let fixture = Fixture::with_codex();
         let homes = tempfile::tempdir().unwrap();
-        let (node, client) = start(&fixture, homes.path()).await;
+        let (node, client) = start(&fixture, homes.path(), MODELS).await;
         let (info, mut stream, mut seen) =
             running(&fixture, &client, HarnessKind::Codex, "codex-qwen").await;
         let codex = info.id;
@@ -259,6 +266,124 @@ async fn a_routed_codex_gets_a_vessel_provider() {
         .unwrap();
         assert!(secret.starts_with("vslm-"));
         client.kill(codex).await.unwrap();
+        node.stop().await.unwrap();
+    })
+    .await;
+}
+
+/// The provider's key in these tests.
+const KEY: &str = "sk-e2e-provider-key";
+
+/// A short Chat Completions stream: `Hel`, `lo`, a stop, usage.
+const CHAT_STREAM: &str = concat!(
+    r#"data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"qwen/qwen3-coder","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22}}"#,
+    "\n\n",
+    "data: [DONE]\n\n",
+);
+
+/// The route `qwen` at `upstream`, its key a secret of the node's.
+fn upstream_models(upstream: &FakeUpstream) -> String {
+    format!(
+        "[providers.local]\napi = \"openai-chat-completions\"\nbase_url = \"{}/v1\"\n\
+         key = {{ secret = \"LOCAL_KEY\" }}\n\n\
+         [models.qwen]\nprovider = \"local\"\nmodel = \"qwen/qwen3-coder\"\n",
+        upstream.url()
+    )
+}
+
+/// The model calls in session `id`'s log.
+async fn calls(client: &NodeClient, id: SessionId) -> Vec<ModelCall> {
+    read_all(client, id)
+        .await
+        .into_iter()
+        .filter_map(|record| match record.event {
+            SessionEvent::ModelCall(call) => Some(call),
+            SessionEvent::Status { .. }
+            | SessionEvent::Terminal(_)
+            | SessionEvent::Agent { .. }
+            | SessionEvent::ProfileChanged { .. } => None,
+        })
+        .collect()
+}
+
+/// Claude Code (structured and terminal) and Codex (structured), all on a
+/// Chat Completions route: each call goes up with the provider's key and
+/// comes back in the harness's own API, and the session's log records it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_routed_sessions_calls_reach_the_provider_and_are_recorded() {
+    within(async {
+        let upstream = FakeUpstream::start().await.unwrap();
+        let fixture = Fixture::with_codex();
+        set_secret(
+            &FleetFiles::new(&fixture.data_dir()),
+            &"LOCAL_KEY".parse().unwrap(),
+            KEY,
+        )
+        .unwrap();
+        let homes = tempfile::tempdir().unwrap();
+        let (node, client) = start(&fixture, homes.path(), &upstream_models(&upstream)).await;
+        let stream = || Reply::Stream {
+            body: Bytes::from_static(CHAT_STREAM.as_bytes()),
+            piece: 23,
+        };
+
+        let mut sessions = Vec::new();
+        for (harness, profile) in [
+            (HarnessKind::ClaudeCode, "claude-qwen"),
+            (HarnessKind::Codex, "codex-qwen"),
+        ] {
+            upstream.reply(stream());
+            let (info, mut stream, mut seen) = running(&fixture, &client, harness, profile).await;
+            let reply = ask(&client, &mut stream, &mut seen, info.id, "model hi").await;
+            assert_eq!(reply, "model Hello", "{harness}");
+            sessions.push(info.id);
+        }
+
+        upstream.reply(stream());
+        let mut terminal = terminal_spec(&fixture, HarnessKind::ClaudeCode);
+        terminal.profile = Some(name("claude-qwen"));
+        let terminal = client.create_session(terminal).await.unwrap().id;
+        let mut output = client.follow(terminal, EventSeq::ZERO).await.unwrap();
+        let mut seen = Vec::new();
+        collect_until(&mut output, &mut seen, "ready").await;
+        client.send(terminal, keys("model hi\r")).await.unwrap();
+        collect_until(&mut output, &mut seen, "model Hello").await;
+        sessions.push(terminal);
+
+        let seen = upstream.seen();
+        assert_eq!(seen.len(), 3);
+        for request in &seen {
+            assert_eq!(request.path, "/v1/chat/completions");
+            assert_eq!(
+                request.header("authorization"),
+                Some(format!("Bearer {KEY}").as_str())
+            );
+            assert!(
+                request
+                    .headers
+                    .iter()
+                    .all(|(_, value)| !value.contains("vslm-")),
+                "{:?}",
+                request.headers
+            );
+        }
+        for id in sessions {
+            client.kill(id).await.unwrap();
+            let calls = calls(&client, id).await;
+            assert_eq!(calls.len(), 1, "{calls:?}");
+            let call = &calls[0];
+            assert_eq!(call.route.as_str(), "qwen");
+            assert_eq!(call.model.as_str(), "qwen/qwen3-coder");
+            assert_eq!(call.api, ModelApi::OpenAiChatCompletions);
+            assert_eq!(call.usage.input.get(), 20);
+            assert_eq!(call.usage.output.get(), 2);
+            assert_eq!(call.stop, ModelStop::EndTurn);
+            assert_eq!(call.failure, None);
+        }
         node.stop().await.unwrap();
     })
     .await;

@@ -49,7 +49,8 @@ vessel-relay.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }
 # The SSH tests stop any node they started (its lock names its pid).
 vessel-store.workspace = true
-vessel-testkit.workspace = true
+# The fake model provider (feature `upstream`) for the model canary.
+vessel-testkit = { workspace = true, features = ["upstream"] }
 
 [lints]
 workspace = true
