@@ -385,7 +385,14 @@ commits.
 8. **B8 CLI and end to end:** `vessel models`, routes in `profiles`, model
    calls in `log`; e2e: a routed session's fake harness calls the proxy,
    the fake upstream answers, the event lands in the log; the canary
-   (below); the manual smoke script.
+   (below); the manual smoke script. As built: the fakes answer `model
+   <text>` with one call where their environment and arguments point
+   (`vessel_testkit::model`), so the e2e covers Claude Code in both modes
+   and Codex structured through a Chat Completions route; the canary
+   (`vessel-cli`'s `canary.rs`, its second test) plants the provider key,
+   has a provider refuse while quoting it, and treats every session's
+   model token as a canary too; `docs/smoke/model-route.sh` runs S1, and
+   with `--fake` checks itself against `fake-provider`.
 9. **B9 docs:** ADR 0015 (the proxy), ADR 0001 (the edge), PROTOCOL v7,
    ARCHITECTURE, README (a "Models" section), ROADMAP.
 
