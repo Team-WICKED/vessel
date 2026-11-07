@@ -127,6 +127,28 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// Serve the web UI on this machine and open it in the browser: every
+    /// node in your book, their sessions, the fleet and devices. It runs
+    /// until interrupted.
+    Ui(UiArgs),
+}
+
+/// `vessel ui`'s default port (`vesseld` has 7077, its relay 7078).
+pub(crate) const DEFAULT_UI_PORT: u16 = 7079;
+
+/// `vessel ui`'s options.
+#[derive(Debug, Args)]
+pub(crate) struct UiArgs {
+    /// The port to serve on; when the default is taken, any free one.
+    #[arg(long, default_value_t = DEFAULT_UI_PORT)]
+    pub(crate) port: u16,
+    /// The loopback address to serve on: `127.0.0.1` or `::1`. The UI is for
+    /// this machine only.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) bind: std::net::IpAddr,
+    /// Print the address instead of opening the browser.
+    #[arg(long)]
+    pub(crate) no_open: bool,
 }
 
 /// `vessel init`'s options.

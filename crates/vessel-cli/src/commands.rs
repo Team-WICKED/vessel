@@ -19,7 +19,7 @@ use crate::attach::{self, terminal};
 use crate::connect::{connect, connect_to, data_dir, is_here};
 use crate::error::CliError;
 use crate::selector::SessionSelector;
-use crate::{devices, fleet, init, io, nodes, remote, render, transfer};
+use crate::{devices, fleet, init, io, nodes, remote, render, transfer, ui};
 
 pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
     let target = &cli.target;
@@ -105,6 +105,7 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
         Command::Session {
             command: SessionCommand::Move { to },
         } => Box::pin(transfer::copy_session(target, to, true, true)).await,
+        Command::Ui(args) => Box::pin(ui::ui(args)).await,
     }
 }
 

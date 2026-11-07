@@ -90,6 +90,7 @@ vessel-secure = { path = "crates/vessel-secure" }
 vessel-session = { path = "crates/vessel-session" }
 vessel-store = { path = "crates/vessel-store" }
 vessel-testkit = { path = "crates/vessel-testkit" }
+vessel-web = { path = "crates/vessel-web" }
 
 # The Agent Client Protocol SDK (Zed's); one pinned version, used only by
 # vessel-agent (and the fake agent in vessel-testkit). ADR 0003.

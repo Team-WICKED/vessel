@@ -2647,6 +2647,7 @@ dependencies = [
  "vessel-remote",
  "vessel-store",
  "vessel-testkit",
+ "vessel-web",
 ]
 
 [[package]]
@@ -2938,6 +2939,24 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+]
+
+[[package]]
+name = "vessel-web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "vessel-proto",
 ]
 
 [[package]]

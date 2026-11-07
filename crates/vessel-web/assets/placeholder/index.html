@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vessel</title>
+    <link rel="stylesheet" href="/placeholder.css" />
+  </head>
+  <body>
+    <main>
+      <h1>The web UI was not built into this binary</h1>
+      <p>
+        This <code>vessel</code> was built without the web bundle. Build it,
+        then build <code>vessel</code> again:
+      </p>
+      <pre><code>cd web
+npm ci
+npm run build
+cd ..
+cargo build -p vessel-cli</code></pre>
+      <p>Releases of <code>vessel</code> always include it.</p>
+    </main>
+  </body>
+</html>

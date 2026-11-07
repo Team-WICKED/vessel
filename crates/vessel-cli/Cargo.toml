@@ -20,6 +20,8 @@ vessel-mcp.workspace = true
 vessel-node.workspace = true
 vessel-proto.workspace = true
 vessel-remote.workspace = true
+# `vessel ui` (ADR 0017).
+vessel-web.workspace = true
 
 bytes.workspace = true
 # The pairing link's expiry (`vessel nodes add --pair`); already in the
@@ -36,6 +38,8 @@ qrcode.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
+# Stopping `vessel ui`'s server; already in the workspace.
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -43,7 +47,6 @@ tracing-subscriber.workspace = true
 # `vessel mcp` speaks JSON-RPC lines; its test reads them.
 serde_json.workspace = true
 tempfile.workspace = true
-tokio-util.workspace = true
 # An in-process relay for `vessel nodes add --pair` end to end.
 vessel-relay.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }

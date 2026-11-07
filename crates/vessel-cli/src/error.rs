@@ -175,6 +175,10 @@ pub(crate) enum CliError {
     FleetFile(#[from] vessel_node::fleet::FileError),
     #[error("terminal I/O failed")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    UiToken(#[from] vessel_web::MintError),
+    #[error(transparent)]
+    Ui(#[from] vessel_web::ServeError),
     #[error("an input task failed")]
     Task(#[from] tokio::task::JoinError),
 }

@@ -75,7 +75,8 @@ vessel-session  -> proto, harness, pty, agent   (session actors, seq, fan-out)
 vessel-store    -> proto           (data dir, identity, token, SQLite log)
 vessel-node     -> proto, rpc, harness, session, store   (daemon assembly)
 vessel-client   -> proto, rpc      (typed client; no clap, no printing)
-vessel-cli      -> proto, client, node   (the `vessel` binary)
+vessel-web      -> proto, client      (`vessel ui`: loopback server, bridge)
+vessel-cli      -> proto, client, node, web   (the `vessel` binary)
 vessel-testkit  (fake harness binaries; dev-dependency only)
 ```
 

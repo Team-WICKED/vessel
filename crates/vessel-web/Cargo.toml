@@ -1,0 +1,32 @@
+[package]
+name = "vessel-web"
+description = "Vessel's web UI: the local server `vessel ui` runs, its embedded single-page app, and the bridge to the book's nodes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+vessel-proto.workspace = true
+
+axum.workspace = true
+futures-util.workspace = true
+# The per-launch token (ADR 0017); already in the workspace.
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Comparing the token in constant time; already in the workspace (the
+# relay's token check).
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# A browser's websocket, for the server's tests.
+tokio-tungstenite.workspace = true
+
+[lints]
+workspace = true
