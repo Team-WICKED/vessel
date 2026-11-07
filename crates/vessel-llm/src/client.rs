@@ -43,6 +43,25 @@
 //! - The key is replaced as it is and as JSON escapes it (`/` as `\/`);
 //!   [`Redactor::json`] also finds it inside JSON strings however they
 //!   are escaped, by decoding them.
+//!
+//! [Decision Log] (the verification round on the review's fixes)
+//! - Problem: redaction still depended on how the provider spelled
+//!   things. An error body that was JSON but not the API's error shape
+//!   (`{"detail":"\u0073k-…"}`) was matched as raw text, so the escaped
+//!   key went through, to be decoded by whoever read it; a key spelled as
+//!   a member name was never looked at, since only string values were.
+//! - Choice: JSON is decoded before it is matched, member names included
+//!   ([`Redactor::holds`], [`Redactor::json`]); an error body that is
+//!   neither the API's error shape nor JSON is not shown at all, only its
+//!   status ("give anything that doesn't parse a generic message").
+//! - Alternative: keep showing an unparseable body, redacted as text. A
+//!   plain-text or HTML error page does help a reader, but text has no
+//!   decoding Vessel can know, so the redaction could not be complete.
+//! - Boundary: the key is found as written and in any JSON spelling of
+//!   it. Other encodings (base64, a key cut across events, JSON inside a
+//!   JSON string) are not looked for; a provider set on sending its own
+//!   key back cannot be stopped by matching, and none of those is how an
+//!   error quotes a credential by accident.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -181,9 +200,41 @@ impl Redactor {
         failure
     }
 
-    /// JSON text with the key replaced in every string, found after
-    /// decoding (so however the provider escaped it), and in the text
-    /// itself when it is not JSON. Unchanged text comes back borrowed.
+    /// Whether `text` holds the key anywhere: as written, as JSON escapes
+    /// it, or, when `text` is JSON, in any string or member name once
+    /// decoded (`\u0073k-…` is the key to whoever decodes it).
+    #[must_use]
+    pub fn holds(&self, text: &str) -> bool {
+        if self.forms.is_empty() {
+            return false;
+        }
+        if self.finds(text) {
+            return true;
+        }
+        // Without a backslash, decoding changes no string: what was not
+        // found as written is not there.
+        text.contains('\\')
+            && serde_json::from_str::<serde_json::Value>(text)
+                .is_ok_and(|value| self.held_in(&value))
+    }
+
+    fn held_in(&self, value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(text) => self.finds(text),
+            serde_json::Value::Array(items) => items.iter().any(|item| self.held_in(item)),
+            serde_json::Value::Object(members) => members
+                .iter()
+                .any(|(name, member)| self.finds(name) || self.held_in(member)),
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                false
+            }
+        }
+    }
+
+    /// JSON text with the key replaced in every string and member name,
+    /// found after decoding (so however the provider escaped it), and in
+    /// the text itself when it is not JSON. Unchanged text comes back
+    /// borrowed.
     #[must_use]
     pub fn json<'a>(&self, text: &'a str) -> Cow<'a, str> {
         if self.forms.is_empty() {
@@ -201,7 +252,8 @@ impl Redactor {
         )
     }
 
-    /// Replace the key in every string of `value`; whether any held it.
+    /// Replace the key in every string and member name of `value`;
+    /// whether any held it.
     fn scrub(&self, value: &mut serde_json::Value) -> bool {
         match value {
             serde_json::Value::String(text) => match self.text(text) {
@@ -214,9 +266,21 @@ impl Redactor {
             serde_json::Value::Array(items) => items
                 .iter_mut()
                 .fold(false, |found, item| self.scrub(item) || found),
-            serde_json::Value::Object(members) => members
-                .values_mut()
-                .fold(false, |found, member| self.scrub(member) || found),
+            serde_json::Value::Object(members) => {
+                let in_values = members
+                    .values_mut()
+                    .fold(false, |found, member| self.scrub(member) || found);
+                let in_names = members.keys().any(|name| self.finds(name));
+                if in_names {
+                    // Two names may now be the same: the later one stays,
+                    // which only loses what quoted the key.
+                    *members = std::mem::take(members)
+                        .into_iter()
+                        .map(|(name, member)| (self.text(&name).into_owned(), member))
+                        .collect();
+                }
+                in_values || in_names
+            }
             serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
                 false
             }
@@ -488,20 +552,33 @@ fn transport_failure(error: &reqwest::Error) -> Failure {
 }
 
 /// An error status as a failure, its message taken from the API's error
-/// body where it has one, else the body itself: whole (it is bounded),
-/// redacted, then cut (finding 3: cut first, a key across the cut would
-/// no longer match).
+/// body where it has one, else from the body if it is JSON, decoded and
+/// redacted whole (it is bounded) before it is cut (finding 3: cut
+/// first, a key across the cut would no longer match). A body that is
+/// neither gives only its status: text has no decoding to redact under.
 fn status_failure(endpoint: &Endpoint, status: u16, body: &[u8]) -> Failure {
-    let message = error_message(endpoint.api, body)
-        .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
-    let message = redact(&message, endpoint.key.as_ref());
+    let redactor = Redactor::new(endpoint.key.as_ref());
+    let message = error_message(endpoint.api, body).map_or_else(
+        || {
+            std::str::from_utf8(body)
+                .ok()
+                .filter(|text| serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok())
+                .map(|text| redactor.json(text).into_owned())
+                .unwrap_or_default()
+        },
+        |message| redactor.text(&message).into_owned(),
+    );
+    let message = cut(message);
+    // The class may read what is not shown: it carries none of the text.
+    let overflow = looks_like_context_overflow(&message)
+        || (message.is_empty() && looks_like_context_overflow(&String::from_utf8_lossy(body)));
     let class = match status {
         401..=403 => FailureClass::Unauthorized,
         408 | 504 => FailureClass::Timeout,
         429 => FailureClass::RateLimited,
         503 | 529 => FailureClass::Overloaded,
         500..=599 => FailureClass::UpstreamError,
-        _ if looks_like_context_overflow(&message) => FailureClass::ContextTooLong,
+        _ if overflow => FailureClass::ContextTooLong,
         _ => FailureClass::RefusedRequest,
     };
     let message = if message.is_empty() {
@@ -542,9 +619,8 @@ fn looks_like_context_overflow(message: &str) -> bool {
     .any(|phrase| message.contains(phrase))
 }
 
-/// `message` with the key removed, then cut to a bounded length.
-fn redact(message: &str, key: Option<&ApiKey>) -> String {
-    let mut message = Redactor::new(key).text(message).into_owned();
+/// `message` (redacted already) cut to a bounded length.
+fn cut(mut message: String) -> String {
     if message.len() > MESSAGE_LIMIT {
         let mut end = MESSAGE_LIMIT;
         while !message.is_char_boundary(end) {
@@ -691,7 +767,7 @@ mod tests {
         );
 
         let long = "é".repeat(MESSAGE_LIMIT);
-        let cut = redact(&long, None);
+        let cut = cut(long);
         assert!(cut.len() <= MESSAGE_LIMIT.saturating_add('…'.len_utf8()));
         assert!(
             format!("{:?}", ApiKey::new("sk-secret-key".into()))
@@ -700,9 +776,10 @@ mod tests {
         );
     }
 
-    /// The security review's finding 3: an error body Vessel cannot parse
-    /// is redacted whole before it is cut, so a key across the cut does
-    /// not survive minus its tail.
+    /// The security review's finding 3, and its verification: an error
+    /// body that is JSON but not the API's error shape is decoded and
+    /// redacted whole before it is cut, so neither a key across the cut
+    /// nor an escaped key survives; a body that is not JSON is not shown.
     #[test]
     fn an_untyped_body_is_redacted_before_it_is_cut() {
         let chat = endpoint(Api::OpenAiChat, "https://c");
@@ -710,9 +787,21 @@ mod tests {
         for before in [MESSAGE_LIMIT.saturating_sub(5), MESSAGE_LIMIT, 1, 0] {
             let body = format!("{}{key} trailing", "x".repeat(before));
             let failure = status_failure(&chat, 401, body.as_bytes());
-            assert!(!failure.message.contains("sk-secret"), "{failure:?}");
+            assert_eq!(failure.message, "the provider answered 401");
+            let body = format!(r#"{{"detail":"{}{key} trailing"}}"#, "x".repeat(before));
+            let failure = status_failure(&chat, 401, body.as_bytes());
             assert!(!failure.message.contains("sk-sec"), "{failure:?}");
         }
+        let escaped = r#"{"detail":"\u0073k-secret-key","sk-secret-key":1}"#;
+        let failure = status_failure(&chat, 401, escaped.as_bytes());
+        assert_eq!(
+            failure.message,
+            r#"the provider answered 401: {"detail":"[redacted]","[redacted]":1}"#
+        );
+        let plain = b"prompt is too long for this model";
+        let failure = status_failure(&chat, 400, plain);
+        assert_eq!(failure.class, FailureClass::ContextTooLong);
+        assert_eq!(failure.message, "the provider answered 400");
     }
 
     /// One call's redactor: its key as written, as JSON escapes a `/`, and
@@ -732,6 +821,17 @@ mod tests {
         assert!(json.contains("[redacted]"), "{json}");
         assert!(json.contains(r#""code":7"#), "{json}");
         assert!(matches!(redactor.json(r#"{"ok":true}"#), Cow::Borrowed(_)));
+        let named = r#"{"metadata":{"\u0073k-a\/b-key":"echoed"}}"#;
+        assert!(redactor.holds(named));
+        assert_eq!(
+            redactor.json(named),
+            r#"{"metadata":{"[redacted]":"echoed"}}"#
+        );
+        assert!(redactor.holds(escaped));
+        assert!(redactor.holds("event-sk-a/b-key"));
+        assert!(!redactor.holds(r#"{"text":"\u0073k-a"}"#));
+        assert!(!redactor.holds(r"not json \u0073k-a\/b-key"));
+        assert!(!Redactor::new(None).holds("sk-a/b-key"));
         assert_eq!(redactor.json("not json sk-a/b-key"), "not json [redacted]");
         let failure = redactor.failure(Failure::new(FailureClass::UpstreamError, "sk-a/b-key"));
         assert_eq!(failure.message, "[redacted]");
