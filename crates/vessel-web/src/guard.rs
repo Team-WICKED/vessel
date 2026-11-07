@@ -93,11 +93,24 @@ pub(crate) async fn guard(
         Some(refused) => refused,
         None => next.run(request).await,
     };
+    if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        let _previous = response
+            .headers_mut()
+            .insert("connection", HeaderValue::from_static("close"));
+    }
     let headers = response.headers_mut();
     let _previous = headers.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
     let _previous = headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     let _previous = headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     let _previous = headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    let _previous = response.headers_mut().insert(
+        "cross-origin-opener-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    let _previous = response.headers_mut().insert(
+        "cross-origin-resource-policy",
+        HeaderValue::from_static("same-origin"),
+    );
     response
 }
 

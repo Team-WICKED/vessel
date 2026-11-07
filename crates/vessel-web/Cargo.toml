@@ -35,6 +35,9 @@ tokio-util.workspace = true
 tracing.workspace = true
 ts-rs = { workspace = true, optional = true }
 
+[build-dependencies]
+sha2.workspace = true
+
 [dev-dependencies]
 # A browser's websocket, for the server's tests.
 tokio-tungstenite.workspace = true

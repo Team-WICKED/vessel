@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "build": "tsc --noEmit -p tsconfig.json && vite build && node scripts/integrity.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . && prettier --check . && node scripts/check-fonts.mjs",
     "format": "prettier --write .",
