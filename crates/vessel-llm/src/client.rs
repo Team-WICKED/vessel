@@ -25,9 +25,26 @@
 //!   failure, a timeout, 429, 500, 502, 503, 504 or 529, waiting as the
 //!   provider's `Retry-After` says (capped) or backing off. After the
 //!   headers, a failure goes to the harness, whose own retry takes over.
-//! - Error bodies are read bounded, cut short and stripped of the key
+//! - Error bodies are read bounded, stripped of the key and cut short
 //!   before anything else sees them (a provider may echo it back).
+//!
+//! [Decision Log] (the security review of milestone 5, findings 2 and 3)
+//! - Problem: a provider that echoes the key does it in more places than
+//!   an error status: an error event inside a successful (200) stream, a
+//!   failed response object with status 200. Those reached the harness
+//!   untouched, since an [`Answer`] knew nothing of the key. And an error
+//!   body Vessel could not parse was cut to its display length before the
+//!   key was replaced, so a key across the cut survived but for its tail.
+//! - Choice: a [`Redactor`] for the whole call, held by every [`Answer`]
+//!   ([`Answer::redactor`]) for the proxy to apply to everything it writes
+//!   from the provider's errors (see `vessel-node`'s proxy); and an error
+//!   body is redacted whole (it is bounded, `ERROR_BODY_LIMIT`) before
+//!   it is cut. A body over the bound is not read at all.
+//! - The key is replaced as it is and as JSON escapes it (`/` as `\/`);
+//!   [`Redactor::json`] also finds it inside JSON strings however they
+//!   are escaped, by decoding them.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -105,6 +122,111 @@ impl ApiKey {
 impl std::fmt::Debug for ApiKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ApiKey(..)")
+    }
+}
+
+/// What replaces a key in text a call produced.
+const REDACTED: &str = "[redacted]";
+
+/// Removes one call's key from what its provider sent: every error
+/// message, inline error and failed response passes through it before
+/// anything leaves the proxy. `Debug` shows nothing of the key; a call
+/// without a key redacts nothing.
+#[derive(Clone, Default)]
+pub struct Redactor {
+    /// The key as written, and as JSON escapes it when that differs.
+    forms: Vec<Arc<str>>,
+}
+
+impl Redactor {
+    /// A redactor for `key`.
+    #[must_use]
+    pub fn new(key: Option<&ApiKey>) -> Self {
+        let Some(key) = key.filter(|key| !key.0.is_empty()) else {
+            return Self::default();
+        };
+        let mut forms: Vec<Arc<str>> = vec![Arc::from(key.0.as_str())];
+        let escaped = key.0.replace('/', "\\/");
+        if escaped != key.0 {
+            forms.push(Arc::from(escaped.as_str()));
+        }
+        Self { forms }
+    }
+
+    /// Whether `text` holds the key.
+    #[must_use]
+    pub fn finds(&self, text: &str) -> bool {
+        self.forms.iter().any(|form| text.contains(&**form))
+    }
+
+    /// `text` with every occurrence of the key replaced.
+    #[must_use]
+    pub fn text<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        if !self.finds(text) {
+            return Cow::Borrowed(text);
+        }
+        let mut redacted = text.to_owned();
+        for form in &self.forms {
+            redacted = redacted.replace(&**form, REDACTED);
+        }
+        Cow::Owned(redacted)
+    }
+
+    /// A failure with its message redacted.
+    #[must_use]
+    pub fn failure(&self, mut failure: Failure) -> Failure {
+        if let Cow::Owned(message) = self.text(&failure.message) {
+            failure.message = message;
+        }
+        failure
+    }
+
+    /// JSON text with the key replaced in every string, found after
+    /// decoding (so however the provider escaped it), and in the text
+    /// itself when it is not JSON. Unchanged text comes back borrowed.
+    #[must_use]
+    pub fn json<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        if self.forms.is_empty() {
+            return Cow::Borrowed(text);
+        }
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
+            return self.text(text);
+        };
+        if !self.scrub(&mut value) {
+            return self.text(text);
+        }
+        serde_json::to_string(&value).map_or_else(
+            |_never| Cow::Owned(self.text(text).into_owned()),
+            Cow::Owned,
+        )
+    }
+
+    /// Replace the key in every string of `value`; whether any held it.
+    fn scrub(&self, value: &mut serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(text) => match self.text(text) {
+                Cow::Owned(redacted) => {
+                    *text = redacted;
+                    true
+                }
+                Cow::Borrowed(_) => false,
+            },
+            serde_json::Value::Array(items) => items
+                .iter_mut()
+                .fold(false, |found, item| self.scrub(item) || found),
+            serde_json::Value::Object(members) => members
+                .values_mut()
+                .fold(false, |found, member| self.scrub(member) || found),
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                false
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for Redactor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Redactor(..)")
     }
 }
 
@@ -213,6 +335,12 @@ impl Client {
         Ok(Self { http, limits })
     }
 
+    /// The bounds on its calls.
+    #[must_use]
+    pub const fn limits(&self) -> Limits {
+        self.limits
+    }
+
     /// Send `body` to `endpoint`, with `headers` from the harness that the
     /// API lets through (Anthropic's version and betas), retrying before
     /// the response's headers. The answer is the response, its body not
@@ -288,16 +416,19 @@ impl Client {
             Ok(Ok(response)) => response,
         };
         let status = response.status();
+        let redactor = Redactor::new(endpoint.key.as_ref());
         if status.is_success() {
             return Ok(Answer {
                 response,
                 limits: self.limits,
+                redactor,
             });
         }
         let retry_after = retry_after(response.headers());
         let body = Answer {
             response,
             limits: self.limits,
+            redactor,
         }
         .read_bounded(ERROR_BODY_LIMIT)
         .await
@@ -357,15 +488,12 @@ fn transport_failure(error: &reqwest::Error) -> Failure {
 }
 
 /// An error status as a failure, its message taken from the API's error
-/// body where it has one.
+/// body where it has one, else the body itself: whole (it is bounded),
+/// redacted, then cut (finding 3: cut first, a key across the cut would
+/// no longer match).
 fn status_failure(endpoint: &Endpoint, status: u16, body: &[u8]) -> Failure {
-    let message = error_message(endpoint.api, body).unwrap_or_else(|| {
-        String::from_utf8_lossy(
-            body.get(..body.len().min(MESSAGE_LIMIT))
-                .unwrap_or_default(),
-        )
-        .into_owned()
-    });
+    let message = error_message(endpoint.api, body)
+        .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
     let message = redact(&message, endpoint.key.as_ref());
     let class = match status {
         401..=403 => FailureClass::Unauthorized,
@@ -414,12 +542,9 @@ fn looks_like_context_overflow(message: &str) -> bool {
     .any(|phrase| message.contains(phrase))
 }
 
-/// `message` with the key removed and cut to a bounded length.
+/// `message` with the key removed, then cut to a bounded length.
 fn redact(message: &str, key: Option<&ApiKey>) -> String {
-    let mut message = match key {
-        Some(key) if !key.0.is_empty() => message.replace(&key.0, "[redacted]"),
-        Some(_) | None => message.to_owned(),
-    };
+    let mut message = Redactor::new(key).text(message).into_owned();
     if message.len() > MESSAGE_LIMIT {
         let mut end = MESSAGE_LIMIT;
         while !message.is_char_boundary(end) {
@@ -436,9 +561,17 @@ fn redact(message: &str, key: Option<&ApiKey>) -> String {
 pub struct Answer {
     response: reqwest::Response,
     limits: Limits,
+    redactor: Redactor,
 }
 
 impl Answer {
+    /// What removes the call's key from what the provider sent: a
+    /// successful status does not mean the body holds no error.
+    #[must_use]
+    pub fn redactor(&self) -> Redactor {
+        self.redactor.clone()
+    }
+
     /// The next chunk of the body; `None` at its end.
     ///
     /// # Errors
@@ -565,6 +698,45 @@ mod tests {
                 .find("sk-")
                 .is_none()
         );
+    }
+
+    /// The security review's finding 3: an error body Vessel cannot parse
+    /// is redacted whole before it is cut, so a key across the cut does
+    /// not survive minus its tail.
+    #[test]
+    fn an_untyped_body_is_redacted_before_it_is_cut() {
+        let chat = endpoint(Api::OpenAiChat, "https://c");
+        let key = "sk-secret-key";
+        for before in [MESSAGE_LIMIT.saturating_sub(5), MESSAGE_LIMIT, 1, 0] {
+            let body = format!("{}{key} trailing", "x".repeat(before));
+            let failure = status_failure(&chat, 401, body.as_bytes());
+            assert!(!failure.message.contains("sk-secret"), "{failure:?}");
+            assert!(!failure.message.contains("sk-sec"), "{failure:?}");
+        }
+    }
+
+    /// One call's redactor: its key as written, as JSON escapes a `/`, and
+    /// inside JSON strings however escaped; nothing without a key.
+    #[test]
+    fn a_redactor_finds_the_key_in_every_form() {
+        let redactor = Redactor::new(Some(&ApiKey::new("sk-a/b-key".into())));
+        assert_eq!(redactor.text("bad key sk-a/b-key."), "bad key [redacted].");
+        assert_eq!(
+            redactor.text(r"bad key sk-a\/b-key."),
+            "bad key [redacted]."
+        );
+        assert!(matches!(redactor.text("nothing"), Cow::Borrowed("nothing")));
+        let escaped = r#"{"error":{"message":"bad \u0073k-a\/b-key","code":7}}"#;
+        let json = redactor.json(escaped);
+        assert!(!json.contains("u0073k"), "{json}");
+        assert!(json.contains("[redacted]"), "{json}");
+        assert!(json.contains(r#""code":7"#), "{json}");
+        assert!(matches!(redactor.json(r#"{"ok":true}"#), Cow::Borrowed(_)));
+        assert_eq!(redactor.json("not json sk-a/b-key"), "not json [redacted]");
+        let failure = redactor.failure(Failure::new(FailureClass::UpstreamError, "sk-a/b-key"));
+        assert_eq!(failure.message, "[redacted]");
+        assert_eq!(format!("{redactor:?}"), "Redactor(..)");
+        assert_eq!(Redactor::new(None).text("sk-a/b-key"), "sk-a/b-key");
     }
 
     #[test]
