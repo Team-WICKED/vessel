@@ -249,3 +249,34 @@ fn failures_carry_the_codes_codex_acts_on() {
                 == Some(IncompleteReason::MaxOutputTokens)
     ));
 }
+
+/// A conversation too long for the model reaches Codex the way `OpenAI`
+/// says it, which is what Codex compacts on: `response.failed` with the
+/// code `context_length_exceeded`, whether or not the answer had started.
+#[test]
+fn a_context_overflow_is_what_codex_compacts_on() {
+    let overflow = || {
+        ir::Event::Failed(ir::Failure::new(
+            ir::FailureClass::ContextTooLong,
+            "prompt is too long: 210000 tokens > 200000 maximum",
+        ))
+    };
+    for events in [
+        vec![overflow()],
+        vec![ir::Event::Text("Part".into()), overflow()],
+    ] {
+        let out = encode(events);
+        assert!(matches!(out.first(), Some(StreamEvent::Created(_))));
+        let Some(StreamEvent::Failed(end)) = out.last() else {
+            panic!("{out:?}");
+        };
+        assert_eq!(end.response.status, ResponseStatus::Failed);
+        let text = serde_json::to_string(out.last().unwrap()).unwrap();
+        assert!(
+            text.contains(
+                r#""error":{"code":"context_length_exceeded","message":"prompt is too long"#
+            ),
+            "{text}"
+        );
+    }
+}

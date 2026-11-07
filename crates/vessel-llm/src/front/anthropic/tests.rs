@@ -287,3 +287,38 @@ fn failures_before_the_answer_are_statuses_claude_code_acts_on() {
             .contains(r#""type":"error""#)
     );
 }
+
+/// A conversation too long for the model reaches Claude Code the way
+/// Anthropic says it, which is what Claude Code compacts on: an
+/// `invalid_request_error` whose message starts "prompt is too long",
+/// as a 400 before the answer started and as an `error` event after.
+#[test]
+fn a_context_overflow_is_what_claude_code_compacts_on() {
+    let overflow = ir::Failure::new(
+        ir::FailureClass::ContextTooLong,
+        "This model's maximum context length is 32768 tokens",
+    );
+    let response = error_response(&overflow);
+    assert_eq!(response.status, 400);
+    assert_eq!(response.retry_after, None);
+    let body = serde_json::to_string(&response.body).unwrap();
+    assert!(
+        body.starts_with(
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: "#
+        ),
+        "{body}"
+    );
+
+    let out = encode(vec![
+        ir::Event::Text("Part".into()),
+        ir::Event::Failed(overflow),
+    ]);
+    let Some(StreamEvent::Error(ErrorEvent { error })) = out.last() else {
+        panic!("{out:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::InvalidRequest);
+    assert!(
+        error.message.starts_with("prompt is too long: "),
+        "{error:?}"
+    );
+}
