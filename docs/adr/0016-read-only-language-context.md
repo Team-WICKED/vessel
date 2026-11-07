@@ -65,3 +65,15 @@ pull diagnostics. No universal LSP indexing-complete signal exists.
   policy; `vessel-proto` owns agent-facing types; MCP is only an adapter.
 - Zed's lifecycle, worktree keys, snapshots and progress separation informed
   the design. No GPL source was copied; grounding is in the milestone plan.
+
+## Explicit child environments
+
+`vessel-proc::CommandSpec::env_clear` is opt-in, with the inherited default
+unchanged for harnesses. Both piped and PTY runners honor it. Removing a list
+of known variables is insufficient: a future loader/runtime variable could
+still enter a server. LSP commands start empty, then receive a filtered PATH,
+an explicit home, locale, temporary-directory variables and the small
+per-language policy set. Windows receives the node-supplied `SystemRoot`;
+clearing the environment must not make platform DLL/runtime lookup depend
+on a repository path. A process-crate child test enumerates its environment
+and verifies that only explicitly supplied variables remain.

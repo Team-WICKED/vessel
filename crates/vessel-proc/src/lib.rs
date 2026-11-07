@@ -50,4 +50,4 @@ pub use error::{InvalidGroup, SignalError, SpawnError, Stream, WaitError};
 #[cfg(unix)]
 pub use group::{ProcessGroup, REAP_GRACE};
 pub use signal::Signal;
-pub use spec::{CommandSpec, EnvValue};
+pub use spec::{CommandSpec, EnvValue, Environment};
