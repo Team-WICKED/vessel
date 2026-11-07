@@ -305,7 +305,7 @@ several lower issues; regression tests reproduce each before the fix.
 | Slots keyed by requested subdirectory | per-allowed-root fairness with parked admissions | `subdirectories_of_one_root_cannot_lock_out_another_root` (node e2e, failed before), `a_root_holding_every_slot_yields_one_to_another_root` |
 | Symlink existence oracle | one `Forbidden` answer for missing/escaping/non-regular | `missing_and_escaping_symlinks_get_the_same_answer` (failed before), node e2e |
 | FIFO swapped in before open | non-blocking open, `fstat` on the handle | `a_fifo_is_refused_without_blocking` (failed before: blocked) |
-| TypeScript plugin options | `plugins: []` sent explicitly; child tsconfig gap in ADR 0016 | `launch::typescript_receives_no_plugin_locations` |
+| TypeScript plugin options | `plugins: []` sent explicitly, so no plugin loads from the workspace (only ones installed beside the pinned tsserver can); child tsconfig gap in ADR 0016 | `launch::typescript_receives_no_plugin_locations` |
 
 Deliberate deviation: the review suggested keying servers by the allowed
 root. Servers stay keyed by the requested workspace and are *accounted* to
@@ -329,3 +329,18 @@ smoke (`docs/smoke/m6-lsp.py`'s test), whose counts match the earlier
 record (document symbols 15, workspace 1, definition 1, references 7, hover
 nonempty, incoming 3, outgoing 1, cached diagnostics 3). Three-platform CI
 results are in the track handoff.
+
+
+## Verification round (2026-11-07)
+
+A second review at `10d64e4` confirmed the round above and the decisions
+on slot keying, full mode, root scope and lazy resolution, and found three
+P2 issues (each test failed before its fix) and two inaccurate claims:
+
+| Finding | Fix | Proof |
+| --- | --- | --- |
+| An explicit `rust_toolchain` pin inside another configured root ran that root's tools (reproduced with rust-analyzer 1.98.1) | a pin is unverified, like a linked/path default: outside every configured root | `real_rust_analyzer::review_explicit_path_toolchain_cannot_live_in_another_root` (ignored, real server), `launch::an_explicit_toolchain_pin_inside_another_configured_root_is_refused`, `toolchain::pinned::an_explicit_pin_is_unverified` |
+| A burst from one root retired an equal root's slot: retiring slots and their waiting admissions were not counted | a retiring slot is reserved for its admission and counts toward that root; the freed slot goes to it first; parking room is checked before retiring | `review_parked_replacements_do_not_steal_an_equal_roots_slot`, `no_server_is_retired_for_an_admission_that_cannot_wait` |
+| A byte-budget eviction during a bulk refresh made the refresh fail and restart a healthy server | the pass skips entries evicted earlier in it | `review_byte_eviction_during_refresh_keeps_server_healthy` |
+| ADR: "project files do not outrank the client" | rewritten: scoped `rust-analyzer.toml` can outrank client settings in 1.98.1, but the execution paths ignore scoped config; re-verify when the pinned version moves | `real_rust_analyzer::review_rust_layout_variations` (ignored; nine layouts, nothing runs) |
+| TypeScript plugin claim | "no plugin from the workspace; only plugins installed beside the pinned tsserver can load" | documentation |

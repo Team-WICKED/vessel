@@ -69,10 +69,11 @@ impl NodeService {
         let workspace = vessel_lsp::documents::canonical_root(requested)
             .await
             .map_err(|error| wire_error(&error))?;
-        // The server is keyed by the innermost allowed root containing the
-        // workspace, so many subdirectories of one root share one server.
-        // Full analysis follows any containing entry: an operator's
-        // full-analysis parent makes every root under it full.
+        // The server's slot is accounted to the innermost allowed root
+        // containing the workspace, so many subdirectories of one root
+        // cannot lock another root out (the server itself analyses the
+        // workspace). Full analysis follows any containing entry: an
+        // operator's full-analysis parent makes every root under it full.
         let mut scope_root: Option<PathBuf> = None;
         let mut full = false;
         for entry in allowed {

@@ -225,8 +225,9 @@ pub(crate) struct TypeScriptOptions {
     pub(crate) disable_automatic_typing_acquisition: bool,
     /// Always empty. typescript-language-server turns this list into
     /// tsserver's `--globalPlugins`/`--pluginProbeLocations`; with none,
-    /// and without `--allowLocalPluginLoads` (never passed), a project's
-    /// tsconfig plugins resolve only beside the trusted TypeScript engine.
+    /// and without `--allowLocalPluginLoads` (never passed), no plugin loads
+    /// from the workspace. A tsconfig can still select a plugin installed
+    /// beside the operator's pinned tsserver.
     pub(crate) plugins: [Empty; 0],
     pub(crate) tsserver: TypeScriptServer,
 }

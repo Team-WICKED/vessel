@@ -21,6 +21,8 @@
 //!   toolchain and never reads a toolchain file. A directory (not a name) is
 //!   used because rustup accepts it for installed, linked and standalone
 //!   toolchains alike, and a name could later be re-linked elsewhere.
+//!   Only a toolchain rustup installed itself is trusted wherever it is;
+//!   a pin, link or path must lie outside every configured root.
 //! - Trade-off: a toolchain installed or re-defaulted after the first Rust
 //!   launch is seen only after a node restart. Resolution failures are not
 //!   cached, so a missing rustup is retried on the next launch.

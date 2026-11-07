@@ -518,7 +518,8 @@ global `tsserver` on PATH), never one selected from project `node_modules`.
 Conservative Rust uses `rust_toolchain`, else rustup's default toolchain
 (resolved once to absolute binaries, never through a rustup proxy that a
 project's `rust-toolchain.toml` could redirect), else `rustc`/`cargo` on
-PATH; with a custom `RUSTUP_HOME`, pin `rust_toolchain`. It analyses only
+PATH; with a custom `RUSTUP_HOME`, pin `rust_toolchain`. A pinned, linked
+or path toolchain must lie outside every configured root. It analyses only
 the Cargo projects it checked: the nearest `Cargo.toml` at or above the
 workspace, else those one directory below it. `python_interpreter` is the
 interpreter pyright runs; on Windows conservative Python needs it. Servers
@@ -563,9 +564,10 @@ cwds and fleet callers' workspaces inside it: a full-analysis parent makes
 every root under it full. LSP runs as the node account: **this is not an OS sandbox**.
 The per-server restrictions and residual trust boundaries are in ADR 0016.
 
-Servers start lazily (at most four, shared fairly between allowed roots: a
-root holding fewer servers takes over the busiest root's least recently used
-one), shut down after five idle minutes, and retry after crashes with
+Servers start lazily (at most four, shared between allowed roots: a root
+holding fewer servers takes over the busiest root's least recently used one
+and waits for it, and a burst from one root cannot take an equal root's
+slot), shut down after five idle minutes, and retry after crashes with
 backoff. Documents, diagnostics, queues and output
 sizes are bounded. To exercise this repository through a real rust-analyzer
 and an isolated agent MCP connection, run `python3 docs/smoke/m6-lsp.py`.

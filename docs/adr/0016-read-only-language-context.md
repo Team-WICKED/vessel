@@ -87,8 +87,8 @@ argument. It does not restore arbitrary inherited environment or downloads.
 
 | Server | What could execute | Conservative policy | Full analysis |
 | --- | --- | --- | --- |
-| rust-analyzer | `build.rs`, proc macros, Cargo wrappers/rustc/runners/aliases, forced `[env]` loader injection, a repository-selected rustup toolchain, projects the server discovers itself | Build scripts, proc macros and check-on-save off; offline Cargo; `RUSTUP_AUTO_INSTALL=0`; wrappers empty. **Toolchain:** resolved once per node to absolute binaries, never through a rustup proxy (from the operator pin, else rustup's *default* via `rustup default` and `rustup which --toolchain`, run in the node-owned empty directory, else a plain `rustc`/`cargo` on PATH); `RUSTC`/`CARGO` are those binaries, the toolchain's `bin` is first on PATH and `RUSTUP_TOOLCHAIN` names the toolchain directory, so no `rust-toolchain(.toml)` is consulted. A linked or path default toolchain must lie outside every configured root; any toolchain must lie outside the served root. **Projects:** `linkedProjects` lists exactly the Cargo projects the policy checked (the nearest manifest at or above the root, else manifests one directory below it), which turns the server's own discovery off; a root with none is `unavailable` for Rust. Every directory from the root and from each project up to `/` is checked: Cargo configs there accept only inert `build.target-dir/jobs/incremental` and `profile.*.debug`; `rust-analyzer.toml`, `(.)rust-project.json`, other settings, includes, symlinked manifests and path/named toolchain files are refused before launch and before queries. Operator-home Cargo config remains trusted. | Enables build scripts, proc macros and check-on-save; permits project configuration, including a project toolchain file honoured by the rustup proxies on PATH and the server's own project discovery. |
-| typescript-language-server | Workspace `node_modules/typescript/tsserver.js`, plugins and automatic npm type acquisition | Trusted global/operator `tsserver.js` pinned in initialization; ATA off; `plugins` sent explicitly empty, so tsserver gets no `--globalPlugins`/`--pluginProbeLocations` and (never passed) no `--allowLocalPluginLoads`: a tsconfig plugin then resolves only beside the trusted engine. Plugin/extends/project-reference configuration at the root and its parents is refused. A `tsconfig.json` in a *child* directory is not checked (tsserver reads the nearest one per file); with the settings above its plugins still cannot load from the repository, and extends/references there are inert JSON. Relative/empty/repository PATH entries never select tools. | May use the workspace engine and project configuration; ATA remains off. |
+| rust-analyzer | `build.rs`, proc macros, Cargo wrappers/rustc/runners/aliases, forced `[env]` loader injection, a repository-selected rustup toolchain, projects the server discovers itself | Build scripts, proc macros and check-on-save off; offline Cargo; `RUSTUP_AUTO_INSTALL=0`; wrappers empty. **Toolchain:** resolved once per node to absolute binaries, never through a rustup proxy (from the operator pin, else rustup's *default* via `rustup default` and `rustup which --toolchain`, run in the node-owned empty directory, else a plain `rustc`/`cargo` on PATH); `RUSTC`/`CARGO` are those binaries, the toolchain's `bin` is first on PATH and `RUSTUP_TOOLCHAIN` names the toolchain directory, so no `rust-toolchain(.toml)` is consulted. A toolchain rustup did not install itself (an explicit pin, or a linked or path default) must lie outside every configured root; any toolchain must lie outside the served root. **Projects:** `linkedProjects` lists exactly the Cargo projects the policy checked (the nearest manifest at or above the root, else manifests one directory below it), which turns the server's own discovery off; a root with none is `unavailable` for Rust. Every directory from the root and from each project up to `/` is checked: Cargo configs there accept only inert `build.target-dir/jobs/incremental` and `profile.*.debug`; `rust-analyzer.toml`, `(.)rust-project.json`, other settings, includes, symlinked manifests and path/named toolchain files are refused before launch and before queries. Operator-home Cargo config remains trusted. | Enables build scripts, proc macros and check-on-save; permits project configuration, including a project toolchain file honoured by the rustup proxies on PATH and the server's own project discovery. |
+| typescript-language-server | Workspace `node_modules/typescript/tsserver.js`, plugins and automatic npm type acquisition | Trusted global/operator `tsserver.js` pinned in initialization; ATA off; `plugins` sent explicitly empty, so tsserver gets no `--globalPlugins`/`--pluginProbeLocations` and (never passed) no `--allowLocalPluginLoads`: a tsconfig plugin then resolves only beside the trusted engine. Plugin/extends/project-reference configuration at the root and its parents is refused. A `tsconfig.json` in a *child* directory is not checked (tsserver reads the nearest one per file); with the settings above, no plugin loads from the workspace: only plugins installed beside the operator's pinned tsserver can load, and a child tsconfig may select one of those. Extends/references there are inert JSON. Relative/empty/repository PATH entries never select tools. | May use the workspace engine and project configuration; ATA remains off. |
 | gopls | A downloaded Go toolchain, dependency fetching, cgo toolchains | `GOTOOLCHAIN=local`, `GOFLAGS=-mod=readonly`, `GOPROXY=off`, `GOSUMDB=off`, `GOENV=off`, `GOVCS=*:off`, `CGO_ENABLED=0`. The exposed queries never invoke `go generate`, test or run. Its package discovery uses trusted `go list`/`go env`, which do not run package initializers. | Allows cgo; download and generate/run restrictions remain. |
 | clangd | Compiler-driver queries from compilation databases, executable project configuration | Empty `--query-driver` list, reject operator arguments that would add entries in conservative mode, `--enable-config=false`; no code-action/execute-command path. | Operator command arguments and project clangd configuration may apply. |
 | pyright / basedpyright | Python used to discover search paths, a configured venv/interpreter, startup imports | No interpreter/venv/extends overrides: only the supported inert JSON/TOML settings are accepted. `PYTHONSAFEPATH=1`, `PYTHONNOUSERSITE=1`, no `PYTHONPATH`; startup-shadow files at the root are refused. An operator `python_interpreter` is answered as `python.pythonPath`; without one the trusted PATH selects the interpreter, except on Windows, where Node's spawn search can look in the working directory first: there conservative Python is `unavailable` until the operator pins an interpreter (not exercised on a Windows host yet). | Allows project interpreter/venv configuration. |
@@ -162,7 +162,12 @@ review's other findings and what replaced them:
   session cwd): when all are taken, a root holding fewer servers than the
   busiest root takes over that root's least recently used server, otherwise
   a root recycles its own; the request waits for the slot instead of being
-  refused. Servers still analyse the requested workspace, not the allowed
+  refused. A retiring slot is reserved for the request it was freed for and
+  counts toward that request's root, so a burst of requests from one root
+  cannot take an equal root's slot (a verification-round finding). At most
+  eight requests wait; beyond that, and before any server is retired, a
+  request is refused. This bounds what one root can take from another; it
+  does not schedule equal throughput between roots. Servers still analyse the requested workspace, not the allowed
   root: rooting one server at a broad allowed root (a home directory as a
   session cwd) would make pyright/gopls index the whole tree and put
   user-installed tools inside "the root".
@@ -175,9 +180,22 @@ review's other findings and what replaced them:
 - `nix` (already a workspace dependency on Unix) supplies `O_NONBLOCK` to
   `vessel-lsp`, rather than a hand-written per-platform constant.
 
-Residual gaps: member crates' `rust-analyzer.toml` below a linked project
-are not checked (the review observed rust-analyzer 1.98.1 not letting a
-project file outrank the client's settings, and the project's own file is
-refused); projects deeper than one directory below a manifest-less root are
-not linked; the Windows interpreter rule is covered by CI only, not by a
-real pyright run on Windows.
+Residual gaps: projects deeper than one directory below a manifest-less
+root are not linked; the Windows interpreter rule is covered by CI only, not
+by a real pyright run on Windows; and `rust-analyzer.toml` files in member
+crates or nested dependencies below a linked project are not checked (the
+project's own file and every ancestor's are refused).
+
+That last gap is safe only for the rust-analyzer version tested, for a
+narrower reason than "project files do not outrank the client". In
+rust-analyzer 1.98.1 (`48a229c`), scoped `rust-analyzer.toml` *does* take
+precedence over client settings for the options it may set. No execution
+follows from it because the execution paths read unscoped configuration:
+workspace loading calls `cargo(None)` and build-script runs call
+`run_build_scripts(None)`, which ignore scoped files, and proc-macro
+enablement is a global, client-only option. Vessel sends no `didSave` or
+execute-command requests. The verification round's layout matrix (member
+and nested-workspace `rust-analyzer.toml` asking for build scripts and an
+override command) ran nothing. Re-verify this, with
+`real_rust_analyzer::review_rust_layout_variations`, whenever the pinned
+rust-analyzer version moves.
