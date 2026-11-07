@@ -20,7 +20,8 @@ use vessel_node::{Config, DataDir, Node};
 use vessel_proto::{Call, ClientInfo, HarnessKind, NodeId, RawJson};
 use vessel_testkit::Fake;
 use vessel_web::wire::{
-    BookNode, CallId, ClientFrame, NodeKey, Op, PresentedToken, ServerFrame, Transport,
+    AuthMode, BookNode, CallId, ClientFrame, NodeKey, Nonce, Op, PresentedToken, ServerFrame,
+    Transport,
 };
 use vessel_web::{LaunchToken, NodeSource, UiConfig};
 
@@ -42,12 +43,17 @@ pub(crate) struct Ui {
     pub(crate) address: SocketAddr,
     pub(crate) token: LaunchToken,
     _stop: DropGuard,
+    pub(crate) session: tokio::sync::Mutex<Option<String>>,
 }
 
 impl Ui {
     /// A UI offering `source`'s nodes, with a short hello deadline and fast
     /// redials.
     pub(crate) async fn start(source: Source) -> Self {
+        Self::configured(source, |_| {}).await
+    }
+
+    pub(crate) async fn configured(source: Source, configure: impl FnOnce(&mut UiConfig)) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let token = LaunchToken::mint().unwrap();
@@ -57,6 +63,7 @@ impl Ui {
             first: Duration::from_millis(20),
             max: Duration::from_millis(100),
         };
+        configure(&mut config);
         let stop = CancellationToken::new();
         drop(tokio::spawn(vessel_web::serve(
             listener,
@@ -68,6 +75,7 @@ impl Ui {
             address,
             token,
             _stop: stop.drop_guard(),
+            session: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -82,7 +90,7 @@ impl Ui {
     /// The token as the page has it (from the URL's fragment).
     pub(crate) fn secret(&self) -> String {
         let url = self.token.url(self.address);
-        url.split_once("#token=").unwrap().1.to_owned()
+        url.split_once("#bootstrap=").unwrap().1.to_owned()
     }
 
     /// A tab: a websocket with our origin, welcomed.
@@ -97,14 +105,77 @@ impl Ui {
             .await
             .unwrap();
         let mut tab = Tab { socket, next_id: 0 };
+        let mut session = self.session.lock().await;
+        let (mode, key) = match session.as_ref() {
+            Some(key) => (AuthMode::Resume, key.clone()),
+            None => (AuthMode::Bootstrap, self.secret()),
+        };
+        let challenge = tab.next().await;
+        let ServerFrame::Challenge {
+            launch,
+            nonce: server,
+        } = challenge
+        else {
+            panic!("expected challenge")
+        };
+        let client = Nonce::try_from("a".repeat(64)).unwrap();
+        let proof = sign(
+            &key,
+            &format!(
+                "vessel-ui-v1\nclient\n{}\n{}\n{}\n",
+                launch.as_str(),
+                server.as_str(),
+                client.as_str()
+            ),
+        );
         tab.send(&ClientFrame::Hello {
-            token: PresentedToken::new(self.secret()),
+            mode,
+            nonce: client.clone(),
+            proof: PresentedToken::new(proof),
         })
         .await;
-        tab.until(|frame| matches!(frame, ServerFrame::Welcome { .. }).then_some(()))
-            .await;
+        let frame = tab.next().await;
+        let ServerFrame::Welcome {
+            version,
+            launch: confirmed,
+            proof,
+            session: issued,
+        } = frame
+        else {
+            panic!("expected welcome")
+        };
+        assert_eq!(launch, confirmed);
+        let expected = sign(
+            &key,
+            &format!(
+                "vessel-ui-v1\nserver\n{}\n{}\n{}\n{}\n{}",
+                launch.as_str(),
+                server.as_str(),
+                client.as_str(),
+                version,
+                issued.as_ref().map_or("", PresentedToken::as_str)
+            ),
+        );
+        assert_eq!(proof.as_str(), expected);
+        if let Some(issued) = issued {
+            *session = Some(issued.as_str().to_owned());
+        }
         tab
     }
+}
+
+pub(crate) fn sign(key: &str, message: &str) -> String {
+    use hmac::{Hmac, KeyInit as _, Mac as _};
+    use std::fmt::Write as _;
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(message.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .fold(String::new(), |mut text, byte| {
+            write!(text, "{byte:02x}").unwrap();
+            text
+        })
 }
 
 type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;

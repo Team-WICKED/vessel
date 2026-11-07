@@ -8,7 +8,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
-use vessel_web::wire::{CLOSE_UNAUTHORIZED, ServerFrame};
+use vessel_web::wire::CLOSE_UNAUTHORIZED;
 use vessel_web::{LaunchToken, ServeError, UiConfig};
 
 use crate::support::{Source, Ui, within};
@@ -63,6 +63,14 @@ async fn the_page_is_served_with_its_guards() {
     assert!(csp.contains("default-src 'self'") && csp.contains("frame-ancestors 'none'"));
     assert_eq!(header(&headers, "x-frame-options"), Some("DENY"));
     assert_eq!(header(&headers, "referrer-policy"), Some("no-referrer"));
+    assert_eq!(
+        header(&headers, "cross-origin-opener-policy"),
+        Some("same-origin")
+    );
+    assert_eq!(
+        header(&headers, "cross-origin-resource-policy"),
+        Some("same-origin")
+    );
     assert!(header(&headers, "access-control-allow-origin").is_none());
     assert!(body.contains("<html"));
     // A route of the app is the page too; a missing file is not.
@@ -98,7 +106,11 @@ async fn a_rebinding_site_is_refused() {
 #[tokio::test]
 async fn the_api_needs_the_token_and_our_origin() {
     let ui = Ui::start(Source::default()).await;
-    let bearer = format!("Authorization: Bearer {}\r\n", ui.secret());
+    let _tab = ui.tab().await;
+    let bearer = format!(
+        "Authorization: Bearer {}\r\n",
+        ui.session.lock().await.as_ref().unwrap()
+    );
     let (code, _headers, _body) = http(ui.address, &get("/api/status", &ui.host(), "")).await;
     assert_eq!(code, 401);
     let wrong = "Authorization: Bearer 00\r\n";
@@ -180,18 +192,8 @@ async fn a_websocket_must_present_the_token_first_and_in_time() {
     // Nothing at all, past the deadline.
     let mut silent = socket(&ui, Some(&origin)).await.unwrap();
     assert_eq!(closed_with(&mut silent).await, Some(CLOSE_UNAUTHORIZED));
-    // The token: welcome.
-    let mut good = socket(&ui, Some(&origin)).await.unwrap();
-    within(good.send(hello(&ui.secret()))).await.unwrap();
-    let welcome = loop {
-        match within(good.next()).await {
-            Some(Ok(Message::Text(text))) => break text,
-            Some(Ok(_other)) => {}
-            other => panic!("expected a welcome, got {other:?}"),
-        }
-    };
-    let frame: ServerFrame = serde_json::from_str(&welcome).unwrap();
-    assert!(matches!(frame, ServerFrame::Welcome { .. }), "{frame:?}");
+    // The new handshake proves both peers (the helper verifies the HMAC).
+    let _tab = ui.tab().await;
 }
 
 #[tokio::test]
@@ -209,4 +211,140 @@ async fn the_ui_listens_on_loopback_only() {
         matches!(served, Err(ServeError::NotLoopback(_))),
         "{served:?}"
     );
+}
+
+#[tokio::test]
+async fn oversized_preauth_frame_is_rejected_from_its_header() {
+    within(async {
+        let ui = Ui::configured(Source::default(), |config| {
+            config.hello_deadline = std::time::Duration::from_secs(30);
+        })
+        .await;
+        let mut pending = socket(&ui, Some(&ui.origin())).await.unwrap();
+        let _challenge = pending.next().await.unwrap().unwrap();
+        let tokio_tungstenite::MaybeTlsStream::Plain(raw) = pending.get_mut() else {
+            panic!("not plain")
+        };
+        // A masked 8 KiB frame header, with no payload. Refuse before
+        // allocating/reading that payload, not at the 30-second deadline.
+        raw.write_all(&[0x82, 0xfe, 0x20, 0, 1, 2, 3, 4])
+            .await
+            .unwrap();
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(2), pending.next()).await;
+        assert!(matches!(
+            ended,
+            Ok(None | Some(Err(_) | Ok(Message::Close(_))))
+        ));
+        // Authentication grows the limit: ordinary large requests survive.
+        let mut tab = ui.tab().await;
+        let id = tab
+            .op(vessel_web::wire::Op::Inspect {
+                link: "x".repeat(8192),
+            })
+            .await;
+        tab.until(|frame| {
+            matches!(frame, vessel_web::wire::ServerFrame::OpReply { id: got, .. } if got == id)
+                .then_some(())
+        })
+        .await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn fragmented_preauth_messages_are_bounded_too() {
+    use tokio_tungstenite::tungstenite::protocol::{
+        Message,
+        frame::{
+            Frame,
+            coding::{Data, OpCode},
+        },
+    };
+    let ui = Ui::configured(Source::default(), |config| {
+        config.hello_deadline = std::time::Duration::from_secs(30);
+    })
+    .await;
+    let mut pending = socket(&ui, Some(&ui.origin())).await.unwrap();
+    let _challenge = pending.next().await.unwrap().unwrap();
+    pending
+        .send(Message::Frame(Frame::message(
+            vec![b' '; 3000],
+            OpCode::Data(Data::Text),
+            false,
+        )))
+        .await
+        .unwrap();
+    pending
+        .send(Message::Frame(Frame::message(
+            vec![b' '; 3000],
+            OpCode::Data(Data::Continue),
+            true,
+        )))
+        .await
+        .unwrap();
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), pending.next()).await;
+    assert!(matches!(
+        closed,
+        Ok(None | Some(Err(_) | Ok(Message::Close(_))))
+    ));
+}
+
+#[tokio::test]
+async fn idle_and_partial_http_headers_have_a_deadline() {
+    let ui = Ui::configured(Source::default(), |config| {
+        config.header_deadline = std::time::Duration::from_millis(100);
+    })
+    .await;
+    for prefix in ["", "GET / HTTP/1.1\r\nHost: "] {
+        let mut stream = TcpStream::connect(ui.address).await.unwrap();
+        stream.write_all(prefix.as_bytes()).await.unwrap();
+        let mut bytes = Vec::new();
+        let closed = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            stream.read_to_end(&mut bytes),
+        )
+        .await;
+        assert!(closed.is_ok(), "idle HTTP connection was retained");
+    }
+}
+
+#[tokio::test]
+async fn unauthenticated_and_total_caps_include_upgraded_sockets() {
+    use vessel_web::wire::{Op, ServerFrame};
+    let ui = Ui::configured(Source::default(), |config| {
+        config.max_connections = 3;
+        config.max_unauthenticated = 2;
+        config.hello_deadline = std::time::Duration::from_secs(30);
+    })
+    .await;
+    let mut first = ui.tab().await;
+    let _second = ui.tab().await;
+    let mut pending = socket(&ui, Some(&ui.origin())).await.unwrap();
+    let _challenge = pending.next().await.unwrap().unwrap();
+    let mut excess = TcpStream::connect(ui.address).await.unwrap();
+    let mut byte = [0];
+    assert!(matches!(
+        within(excess.read(&mut byte)).await,
+        Ok(0) | Err(_)
+    ));
+    let id = first.op(Op::Nodes).await;
+    first
+        .until(|frame| {
+            matches!(frame, ServerFrame::OpReply { id: got, .. } if got == id).then_some(())
+        })
+        .await;
+    // Separately fill only the pending cap, leaving total places free.
+    let ui = Ui::configured(Source::default(), |config| {
+        config.max_connections = 8;
+        config.max_unauthenticated = 1;
+        config.hello_deadline = std::time::Duration::from_secs(30);
+    })
+    .await;
+    let mut pending = socket(&ui, Some(&ui.origin())).await.unwrap();
+    let _challenge = pending.next().await.unwrap().unwrap();
+    let mut excess = TcpStream::connect(ui.address).await.unwrap();
+    assert!(matches!(
+        within(excess.read(&mut byte)).await,
+        Ok(0) | Err(_)
+    ));
 }

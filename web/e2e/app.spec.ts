@@ -6,11 +6,11 @@ import { join } from "node:path";
 
 import { expect, type Page, test } from "@playwright/test";
 
+import { openUi } from "./open";
 import { loadEnv } from "./fleet";
 
 async function open(page: Page): Promise<void> {
-  await page.goto(loadEnv().url);
-  await expect(page.getByRole("navigation", { name: "Fleet" })).toBeVisible();
+  await openUi(page);
 }
 
 /** Create a session from the New session dialog. */
@@ -91,7 +91,7 @@ test("a session is killed", async ({ page }) => {
 test("a device is invited, pairs, and is revoked", async ({ page }) => {
   const env = loadEnv();
   await open(page);
-  await page.goto(`${new URL(env.url).origin}/devices?node=laptop`);
+  await page.goto(`${new URL(page.url()).origin}/devices?node=laptop`);
   await page.getByLabel("Label").fill("phone");
   await page.getByRole("button", { name: "New link" }).click();
   await expect(

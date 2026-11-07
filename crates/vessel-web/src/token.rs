@@ -7,10 +7,14 @@ use std::sync::Arc;
 use subtle::ConstantTimeEq as _;
 
 /// The secret a browser presents to `vessel ui`: 256 random bits, as hex,
-/// minted for one launch and never written to disk. It reaches the page in
+/// minted for a one-time bootstrap. The private browser handoff file and
+/// terminal carry it; it reaches the page in
 /// the URL's fragment, which browsers send to no server.
 #[derive(Clone)]
-pub struct LaunchToken(Arc<str>);
+pub struct LaunchToken {
+    secret: Arc<str>,
+    host: Arc<str>,
+}
 
 /// The system's random number generator failed.
 #[derive(Debug, thiserror::Error)]
@@ -23,29 +27,48 @@ impl LaunchToken {
     /// # Errors
     /// The system's random number generator failed.
     pub fn mint() -> Result<Self, MintError> {
-        let mut bytes = [0_u8; 32];
+        let mut bytes = [0_u8; 48];
         getrandom::fill(&mut bytes).map_err(MintError)?;
-        let hex = bytes
-            .iter()
-            .fold(String::with_capacity(64), |mut hex, byte| {
+        let hex = |bytes: &[u8]| {
+            bytes.iter().fold(String::new(), |mut hex, byte| {
                 let _written = write!(hex, "{byte:02x}");
                 hex
-            });
-        Ok(Self(hex.into()))
+            })
+        };
+        // A separate 128-bit hostname makes the browser origin fresh even
+        // when the port is reused. The URL code retains its full 256 bits.
+        let (secret, host) = bytes.split_at(32);
+        Ok(Self {
+            secret: hex(secret).into(),
+            host: format!("vessel-{}.localhost", hex(host)).into(),
+        })
+    }
+
+    pub(crate) fn expose(&self) -> &str {
+        &self.secret
+    }
+
+    pub(crate) fn host(&self) -> &str {
+        &self.host
     }
 
     /// Whether `presented` is this token, compared in constant time (its
     /// length is not secret).
     #[must_use]
     pub fn matches(&self, presented: &str) -> bool {
-        self.0.as_bytes().ct_eq(presented.as_bytes()).into()
+        self.secret.as_bytes().ct_eq(presented.as_bytes()).into()
     }
 
     /// The address to open: the UI at `address`, with the token in the
     /// fragment.
     #[must_use]
     pub fn url(&self, address: SocketAddr) -> String {
-        format!("http://{address}/#token={}", self.0)
+        format!(
+            "http://{}:{}/#bootstrap={}",
+            self.host,
+            address.port(),
+            self.secret
+        )
     }
 }
 
@@ -63,17 +86,22 @@ mod tests {
     fn tokens_are_fresh_hex_and_compared_whole() {
         let one = LaunchToken::mint().unwrap();
         let two = LaunchToken::mint().unwrap();
-        assert_eq!(one.0.len(), 64);
-        assert!(one.0.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert!(one.matches(&one.0));
-        assert!(!one.matches(&two.0));
+        assert_eq!(one.secret.len(), 64);
+        assert!(one.secret.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(one.matches(&one.secret));
+        assert!(!one.matches(&two.secret));
         assert!(!one.matches(""));
-        let shorter: String = one.0.chars().take(63).collect();
+        let shorter: String = one.secret.chars().take(63).collect();
         assert!(!one.matches(&shorter));
         assert_eq!(format!("{one:?}"), "LaunchToken(..)");
         let url = one.url("127.0.0.1:7079".parse().unwrap());
-        assert_eq!(url, format!("http://127.0.0.1:7079/#token={}", one.0));
+        assert_eq!(
+            url,
+            format!("http://{}:7079/#bootstrap={}", one.host, one.secret)
+        );
+        assert_ne!(one.host, two.host);
+        assert!(!one.host.contains(one.secret.as_ref()));
         let six = one.url("[::1]:7079".parse().unwrap());
-        assert!(six.starts_with("http://[::1]:7079/#token="));
+        assert_eq!(six, url);
     }
 }

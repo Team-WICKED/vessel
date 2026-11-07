@@ -50,19 +50,20 @@ const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:;
 /// The names this server answers to, and the origins its pages have.
 #[derive(Debug)]
 pub(crate) struct Allowed {
-    hosts: [String; 3],
-    origins: [String; 3],
+    hosts: [String; 4],
+    origins: [String; 4],
 }
 
 impl Allowed {
     /// For a server listening on `address` (loopback; its port is what
     /// matters).
-    pub(crate) fn for_address(address: SocketAddr) -> Self {
+    pub(crate) fn for_address(address: SocketAddr, launch_host: &str) -> Self {
         let port = address.port();
         let hosts = [
             format!("127.0.0.1:{port}"),
             format!("localhost:{port}"),
             format!("[::1]:{port}"),
+            format!("{launch_host}:{port}"),
         ];
         let origins = hosts.clone().map(|host| format!("http://{host}"));
         Self { hosts, origins }
@@ -137,7 +138,8 @@ mod tests {
 
     #[test]
     fn only_loopback_names_with_our_port_are_ours() {
-        let allowed = Allowed::for_address("127.0.0.1:7079".parse().unwrap());
+        let allowed =
+            Allowed::for_address("127.0.0.1:7079".parse().unwrap(), "vessel-test.localhost");
         let host = |value: &'static str| {
             let mut headers = HeaderMap::new();
             let _previous = headers.insert(HOST, HeaderValue::from_static(value));
@@ -155,6 +157,8 @@ mod tests {
         ] {
             assert!(!host(bad), "{bad}");
         }
+        assert!(host("vessel-test.localhost:7079"));
+        assert!(!host("vessel-other.localhost:7079"));
         assert!(!allowed.host(&HeaderMap::new()), "no Host at all");
         assert!(allowed.origin(&HeaderValue::from_static("http://localhost:7079")));
         assert!(!allowed.origin(&HeaderValue::from_static("https://localhost:7079")));

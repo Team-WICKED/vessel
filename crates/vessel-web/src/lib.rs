@@ -2,10 +2,12 @@
 //!
 //! It serves the single-page app embedded at build time (`build.rs`) on
 //! loopback, and is the browser's only way to the fleet: the browser
-//! authenticates to it with a token minted per launch ([`LaunchToken`]),
+//! redeems a one-use code ([`LaunchToken`]) for a session with mutual proofs,
 //! and never holds a node's credentials or speaks Noise.
 //!
 //! Modules:
+//! - `auth`: one-use bootstrap and role-separated HMAC session proofs;
+//! - `transport`: counted TCP admission, bounded headers and shutdown;
 //! - `server`: the router, loopback-only serving, the HTTP API;
 //! - `guard`: the `Host` and `Origin` checks and the security headers on
 //!   every response;
@@ -22,6 +24,7 @@
 //! This crate must not know how a book entry becomes a connection (tokens,
 //! SSH, credentials): that is the CLI's, given through [`NodeSource`].
 
+mod auth;
 mod bridge;
 mod files;
 mod guard;
@@ -30,6 +33,7 @@ mod server;
 mod socket;
 mod source;
 mod token;
+mod transport;
 pub mod wire;
 
 pub use server::{ServeError, UiConfig, serve};

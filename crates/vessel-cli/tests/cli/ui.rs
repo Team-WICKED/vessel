@@ -55,11 +55,12 @@ async fn vessel_ui_prints_its_address_and_serves_the_page_there() {
                 break url.to_owned();
             }
         };
-        let (base, token) = url.split_once("/#token=").unwrap();
+        let (base, token) = url.split_once("/#bootstrap=").unwrap();
         assert_eq!(token.len(), 64, "{url}");
         let host = base.strip_prefix("http://").unwrap();
-        assert!(host.starts_with("127.0.0.1:"));
-        let mut stream = TcpStream::connect(host).await.unwrap();
+        assert!(host.starts_with("vessel-") && host.contains(".localhost:"));
+        let port = host.rsplit_once(':').unwrap().1.parse::<u16>().unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let request = format!("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut said = String::new();
@@ -135,7 +136,7 @@ async fn opener_is_private_and_removed_on_termination() {
                 0o600
             );
             let page = std::fs::read_to_string(&file).unwrap();
-            assert!(page.contains("http://"));
+            assert!(page.contains(".localhost:"));
             assert!(
                 std::process::Command::new("kill")
                     .args([format!("-{signal}"), child.id().unwrap().to_string()])

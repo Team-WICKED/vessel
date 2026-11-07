@@ -11,7 +11,7 @@ import {
 import { type ReactElement, useEffect, useState } from "react";
 
 import { Bridge } from "./bridge/client";
-import { forgetToken } from "./bridge/token";
+import { forgetToken, type Credential } from "./bridge/token";
 import { FleetContext } from "./context";
 import { Fleet } from "./data/fleet";
 import { DevicesPage } from "./routes/devices";
@@ -96,18 +96,18 @@ function NoToken({ refused }: { refused: boolean }) {
     <div className="empty" role="main">
       <h2>
         {refused
-          ? "This page belongs to an earlier launch"
+          ? "The UI was restarted or its identity could not be verified"
           : "Open Vessel from its address"}
       </h2>
       <p>
         Run <code>vessel ui</code> and open the address it prints. Each launch
-        has its own key, kept in that address.
+        has a one-time address; keep this tab open after using it.
       </p>
     </div>
   );
 }
 
-export function App({ token }: { token: string | null }) {
+export function App({ token }: { token: Credential | null }) {
   const [fleet] = useState(() =>
     token === null ? null : new Fleet(new Bridge(token)),
   );

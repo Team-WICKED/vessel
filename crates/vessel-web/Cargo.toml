@@ -20,6 +20,12 @@ axum.workspace = true
 futures-util.workspace = true
 # The per-launch token (ADR 0017); already in the workspace.
 getrandom.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
+tokio-tungstenite.workspace = true
 # Pairing links as QR codes for the devices screen, drawn here as SVG (ADR
 # 0017, decision 9); the CLI's crate, with its dependency-free `svg`
 # renderer.
@@ -39,8 +45,6 @@ ts-rs = { workspace = true, optional = true }
 sha2.workspace = true
 
 [dev-dependencies]
-# A browser's websocket, for the server's tests.
-tokio-tungstenite.workspace = true
 # The bridge's tests: real nodes in this process, with the fake harnesses.
 bytes.workspace = true
 tempfile.workspace = true

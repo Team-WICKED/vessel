@@ -22,7 +22,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::ws::{Message, WebSocket};
+use tokio_tungstenite::tungstenite::Message;
+use crate::socket::WebSocket;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::{Semaphore, broadcast, mpsc};
@@ -127,7 +128,7 @@ async fn read<S: NodeSource>(
         let text = match message {
             Some(Ok(Message::Text(text))) => text,
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-            Some(Ok(Message::Binary(_))) => {
+            Some(Ok(Message::Binary(_) | Message::Frame(_))) => {
                 unreadable(&tab.out, "frames are JSON text".to_owned()).await;
                 continue;
             }

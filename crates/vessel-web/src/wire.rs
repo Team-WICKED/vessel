@@ -2,7 +2,8 @@
 //! frames on `/api/ws`, one message each, and the HTTP API's bodies.
 //!
 //! The browser's first frame must be [`ClientFrame::Hello`] with the
-//! launch's token, within a short deadline; anything else closes the
+//! proof of its bootstrap/session key after the server challenge, within
+//! a short deadline; anything else closes the
 //! socket with [`CLOSE_UNAUTHORIZED`]. After the [`ServerFrame::Welcome`]
 //! the browser:
 //!
@@ -20,6 +21,9 @@
 //! them, so they need to be unique among one socket's open calls and
 //! streams, nothing more.
 
+mod auth;
+pub use auth::{AuthMode, InvalidAuthValue, LaunchId, Nonce};
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -36,10 +40,14 @@ pub const CLOSE_UNAUTHORIZED: u16 = 4401;
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
-    /// The first frame: the launch's token.
+    /// The client's response to the server challenge.
     Hello {
-        /// The token from the page's URL.
-        token: PresentedToken,
+        /// Bootstrap or a session resumed by this tab.
+        mode: AuthMode,
+        /// The browser's fresh challenge; binds the welcome to this socket.
+        nonce: Nonce,
+        /// HMAC of both challenges, launch id and role (never the key).
+        proof: PresentedToken,
     },
     /// Call a method on a node.
     Call {
@@ -84,10 +92,23 @@ pub enum ClientFrame {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
-    /// The token was right: the socket is the browser's.
+    /// The server's fresh challenge, before authentication.
+    Challenge {
+        /// This UI launch.
+        launch: LaunchId,
+        /// A fresh random value, used on this connection only.
+        nonce: Nonce,
+    },
+    /// Both peers prove their key before the browser opens the bridge.
     Welcome {
         /// The server's version (`vessel`'s).
         version: String,
+        /// Must match the challenge and the tab's previous launch.
+        launch: LaunchId,
+        /// HMAC including the client nonce and any issued session key.
+        proof: PresentedToken,
+        /// An independent key, only when redeeming the one-time code.
+        session: Option<PresentedToken>,
     },
     /// The answer to a call.
     Reply {

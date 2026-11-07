@@ -16,6 +16,8 @@
 //   refused the token (close 4401): a new launch has a new token, and
 //   only opening the new address helps.
 
+import { Handshake } from "./auth";
+import { rememberSession, type Credential } from "./token";
 import type { MethodName, ParamsOf, ResultOf } from "../wire/calls";
 import type {
   ClientFrame,
@@ -90,6 +92,7 @@ interface Followed {
 const CLOSE_UNAUTHORIZED = 4401;
 const FIRST_RETRY_MS = 500;
 const MAX_RETRY_MS = 10_000;
+const MAX_RETRIES = 5;
 
 /** The websocket address of the page's own server. */
 function socketUrl(): string {
@@ -98,7 +101,7 @@ function socketUrl(): string {
 }
 
 export class Bridge {
-  readonly #token: string;
+  #credential: Credential;
   readonly #url: string;
   #socket: WebSocket | null = null;
   #nextId = 1;
@@ -115,8 +118,8 @@ export class Bridge {
   readonly #linkListeners = new Set<(link: LinkState) => void>();
   #link: LinkState = { kind: "connecting", attempt: 0 };
 
-  constructor(token: string, url: string = socketUrl()) {
-    this.#token = token;
+  constructor(token: Credential, url: string = socketUrl()) {
+    this.#credential = token;
     this.#url = url;
   }
 
@@ -245,15 +248,47 @@ export class Bridge {
     this.#setLink({ kind: "connecting", attempt: this.#attempt });
     const socket = new WebSocket(this.#url);
     this.#socket = socket;
-    socket.addEventListener("open", () => {
-      this.#send({ type: "hello", token: this.#token });
-    });
+    const handshake = new Handshake(this.#credential);
+    let verified = false;
+    let messages = Promise.resolve();
+    const deadline = setTimeout(() => {
+      if (this.#socket === socket && !verified) this.#refuse();
+    }, 10_000);
     socket.addEventListener("message", (event: MessageEvent<unknown>) => {
-      if (typeof event.data === "string") {
-        this.#receive(JSON.parse(event.data) as ServerFrame);
-      }
+      if (!this.#current(socket)) return;
+      const data = event.data;
+      messages = messages
+        .then(async () => {
+          if (!this.#current(socket)) return;
+          if (typeof data !== "string") throw new Error("Not a frame");
+          const frame = JSON.parse(data) as ServerFrame;
+          if (!verified) {
+            if (frame.type === "challenge") {
+              const hello = await handshake.hello(frame);
+              if (this.#current(socket)) this.#send(hello);
+            } else if (frame.type === "welcome") {
+              const credential = await handshake.welcome(frame);
+              if (!this.#current(socket)) return;
+              this.#credential = credential;
+              rememberSession(credential);
+              verified = true;
+              clearTimeout(deadline);
+              this.#receive(frame);
+            } else {
+              throw new Error("Server has not proved its identity");
+            }
+          } else {
+            if (frame.type === "challenge" || frame.type === "welcome")
+              throw new Error("Repeated handshake");
+            this.#receive(frame);
+          }
+        })
+        .catch(() => {
+          if (this.#socket === socket) this.#refuse();
+        });
     });
     socket.addEventListener("close", (event) => {
+      clearTimeout(deadline);
       if (this.#socket !== socket) {
         return;
       }
@@ -265,6 +300,13 @@ export class Bridge {
       }
       if (!this.#stopped) {
         this.#attempt += 1;
+        // A restarted process rejects this launch's old hostname at HTTP
+        // upgrade, where browsers hide the response status. Bound those
+        // failures too, instead of reconnecting an obsolete tab forever.
+        if (this.#attempt >= MAX_RETRIES) {
+          this.#refuse();
+          return;
+        }
         const retryInMs = Math.min(
           FIRST_RETRY_MS * 2 ** (this.#attempt - 1),
           MAX_RETRY_MS,
@@ -275,6 +317,16 @@ export class Bridge {
         }, retryInMs);
       }
     });
+  }
+
+  #current(socket: WebSocket): boolean {
+    return this.#socket === socket && !this.#stopped;
+  }
+
+  #refuse(): void {
+    this.stop();
+    this.#lost();
+    this.#setLink({ kind: "refused" });
   }
 
   /** The socket went: calls in flight fail, never retried. */
@@ -291,6 +343,8 @@ export class Bridge {
 
   #receive(frame: ServerFrame): void {
     switch (frame.type) {
+      case "challenge":
+        return;
       case "welcome":
         this.#attempt = 0;
         this.#setLink({ kind: "open", version: frame.version });

@@ -1,30 +1,51 @@
-// The launch's token (ADR 0017). `vessel ui` opens the page with
-// `#token=<hex>`; the fragment never reaches a server. It is kept in
-// `localStorage` (scoped to this origin, port included, so another
-// launch's page never sees it) and removed from the address bar at once,
-// so it is not left in history, bookmarks or a screenshot.
+// History may retain a URL fragment even after replaceState. It therefore
+// carries only a one-use code, never the independent session key. Keep the
+// latter in this tab's sessionStorage for reloads, not origin localStorage.
+import type { LaunchId } from "../wire/bridge";
 
-const KEY = "vessel.token";
-const FRAGMENT = /(?:^#|&)token=([0-9a-f]{64})(?:&|$)/;
+export type Credential =
+  | { kind: "bootstrap"; key: string }
+  | { kind: "session"; key: string; launch: LaunchId };
+const KEY = "vessel.session";
+const HEX = /^[0-9a-f]{64}$/;
 
-/** The token from the URL's fragment (kept, then removed from the
- * address), else the one kept from earlier in this launch. */
-export function takeToken(): string | null {
-  const match = FRAGMENT.exec(window.location.hash);
-  const token = match?.[1];
-  if (token !== undefined) {
-    window.localStorage.setItem(KEY, token);
-    window.history.replaceState(
-      window.history.state,
-      "",
-      window.location.pathname + window.location.search,
-    );
-    return token;
+export function takeToken(): Credential | null {
+  // Remove legacy credentials on upgrade, even when opening a fresh URL.
+  window.localStorage.removeItem("vessel.token");
+  const fragment = window.location.hash;
+  window.history.replaceState(
+    window.history.state,
+    "",
+    window.location.pathname + window.location.search,
+  );
+  const code = new URLSearchParams(fragment.slice(1)).get("bootstrap");
+  if (code !== null && HEX.test(code)) {
+    window.sessionStorage.removeItem(KEY);
+    return { kind: "bootstrap", key: code };
   }
-  return window.localStorage.getItem(KEY);
+  const saved = window.sessionStorage.getItem(KEY);
+  if (saved === null) return null;
+  const [launch, key, extra] = saved.split(":");
+  if (
+    launch === undefined ||
+    key === undefined ||
+    extra !== undefined ||
+    !HEX.test(launch) ||
+    !HEX.test(key)
+  )
+    return null;
+  return { kind: "session", launch, key };
 }
 
-/** Forget a token the server refused (a new launch has a new one). */
+export function rememberSession(credential: Credential): void {
+  if (credential.kind === "session") {
+    window.sessionStorage.setItem(
+      KEY,
+      `${credential.launch}:${credential.key}`,
+    );
+  }
+}
 export function forgetToken(): void {
-  window.localStorage.removeItem(KEY);
+  window.localStorage.removeItem("vessel.token");
+  window.sessionStorage.removeItem(KEY);
 }

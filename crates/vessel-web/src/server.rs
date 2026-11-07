@@ -28,9 +28,15 @@ use crate::{files, socket};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct UiConfig {
-    /// The launch's token.
+    /// The launch's one-time URL bootstrap.
     pub token: LaunchToken,
-    /// How long a browser's websocket has to present the token.
+    /// Overall sockets, including upgraded websockets.
+    pub max_connections: usize,
+    /// Sockets not yet authenticated, counted before HTTP headers arrive.
+    pub max_unauthenticated: usize,
+    /// Time to receive an HTTP request's headers.
+    pub header_deadline: Duration,
+    /// How long a browser's websocket has to complete authentication.
     pub hello_deadline: Duration,
     /// How long to wait between dials of a node that is down (the CLI's
     /// default; tests shorten it).
@@ -43,6 +49,9 @@ impl UiConfig {
     pub const fn new(token: LaunchToken) -> Self {
         Self {
             token,
+            max_connections: 128,
+            max_unauthenticated: 32,
+            header_deadline: Duration::from_secs(5),
             hello_deadline: Duration::from_secs(5),
             backoff: Backoff {
                 first: Duration::from_millis(500),
@@ -59,6 +68,14 @@ pub enum ServeError {
     /// machine's browser only (ADR 0017).
     #[error("the UI listens on loopback only, not {0}")]
     NotLoopback(SocketAddr),
+    /// Limits must leave a bounded, nonempty admission budget.
+    #[error(
+        "UI connection limits must be nonzero and unauthenticated <= total <= Semaphore::MAX_PERMITS"
+    )]
+    InvalidLimits,
+    /// Randomness for the session or launch id failed.
+    #[error(transparent)]
+    Mint(#[from] crate::MintError),
     /// The listener failed.
     #[error("serving the UI failed")]
     Io(#[from] io::Error),
@@ -67,7 +84,8 @@ pub enum ServeError {
 /// What the handlers share.
 #[derive(Debug)]
 pub(crate) struct Ui<S> {
-    pub(crate) token: LaunchToken,
+    pub(crate) auth: crate::auth::Auth,
+    pub(crate) shutdown: CancellationToken,
     pub(crate) hello_deadline: Duration,
     pub(crate) registry: Arc<Registry<S>>,
 }
@@ -87,30 +105,44 @@ pub async fn serve<S: NodeSource>(
     if !address.ip().is_loopback() {
         return Err(ServeError::NotLoopback(address));
     }
+    if config.max_unauthenticated == 0
+        || config.max_connections == 0
+        || config.max_unauthenticated > config.max_connections
+        || config.max_connections > tokio::sync::Semaphore::MAX_PERMITS
+    {
+        return Err(ServeError::InvalidLimits);
+    }
     // The nodes' connections stop with the server.
     let connections = shutdown.child_token();
     let _stop_connections = connections.clone().drop_guard();
+    let allowed = Arc::new(Allowed::for_address(address, config.token.host()));
     let ui = Arc::new(Ui {
-        token: config.token,
+        auth: crate::auth::Auth::new(config.token)?,
+        shutdown: connections.clone(),
         hello_deadline: config.hello_deadline,
         registry: Registry::new(source, config.backoff, connections),
     });
-    let allowed = Arc::new(Allowed::for_address(address));
     let app = Router::new()
         .route("/api/status", get(status::<S>))
         .route("/api/ws", get(socket::upgrade::<S>))
         .fallback(files::serve)
         .with_state(ui)
         .layer(middleware::from_fn_with_state(allowed, guard));
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown.cancelled_owned())
-        .await?;
+    crate::transport::serve(
+        listener,
+        app,
+        config.max_connections,
+        config.max_unauthenticated,
+        config.header_deadline,
+        shutdown,
+    )
+    .await?;
     Ok(())
 }
 
-/// `GET /api/status`, with the token as a bearer.
+/// `GET /api/status`, with an issued session key as a bearer.
 async fn status<S: NodeSource>(State(ui): State<Arc<Ui<S>>>, headers: HeaderMap) -> Response {
-    if !authorized(&ui.token, &headers) {
+    if !authorized(&ui.auth, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     Json(Status {
@@ -120,11 +152,11 @@ async fn status<S: NodeSource>(State(ui): State<Arc<Ui<S>>>, headers: HeaderMap)
     .into_response()
 }
 
-/// Whether `headers` carry the token as `Authorization: Bearer`.
-fn authorized(token: &LaunchToken, headers: &HeaderMap) -> bool {
+/// Whether `headers` carry the issued session key as `Authorization: Bearer`.
+fn authorized(auth: &crate::auth::Auth, headers: &HeaderMap) -> bool {
     headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|presented| token.matches(presented))
+        .is_some_and(|presented| auth.authorized(presented))
 }

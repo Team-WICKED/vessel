@@ -5,6 +5,11 @@
 import type { Call, EventRecord, EventSeq, Method, NodeId, NodeInfo, PairingOffer, ProtocolVersion, Reply, SessionId, WireError } from "./proto";
 
 /**
+ * Which key proves the connection: never send the key itself in a hello.
+ */
+export type AuthMode = "bootstrap" | "resume";
+
+/**
  * A node the UI lists.
  */
 export type BookNode = { 
@@ -49,9 +54,17 @@ export type CallOutcome = { "ok": Reply } | { "err": Failure };
  */
 export type ClientFrame = { "type": "hello", 
 /**
- * The token from the page's URL.
+ * Bootstrap or a session resumed by this tab.
  */
-token: PresentedToken, } | { "type": "call", 
+mode: AuthMode, 
+/**
+ * The browser's fresh challenge; binds the welcome to this socket.
+ */
+nonce: Nonce, 
+/**
+ * HMAC of both challenges, launch id and role (never the key).
+ */
+proof: PresentedToken, } | { "type": "call", 
 /**
  * The browser's id for the call, echoed in the reply.
  */
@@ -130,6 +143,11 @@ message: string, } | { "kind": "failed",
 message: string, };
 
 /**
+ *The public identity of one UI process launch.
+ */
+export type LaunchId = string;
+
+/**
  * How the browser names a node: a book entry's name, or [`NodeKey::HERE`]
  * for this machine's node. Book names start with a letter or a digit, so
  * the two never meet.
@@ -164,6 +182,11 @@ retry_in_ms: number, } | { "state": "failed",
  * Why.
  */
 message: string, };
+
+/**
+ *A fresh 256-bit connection challenge.
+ */
+export type Nonce = string;
 
 /**
  * What the browser asks the bridge itself.
@@ -233,11 +256,31 @@ export type PresentedToken = string;
 /**
  * A frame to the browser.
  */
-export type ServerFrame = { "type": "welcome", 
+export type ServerFrame = { "type": "challenge", 
+/**
+ * This UI launch.
+ */
+launch: LaunchId, 
+/**
+ * A fresh random value, used on this connection only.
+ */
+nonce: Nonce, } | { "type": "welcome", 
 /**
  * The server's version (`vessel`'s).
  */
-version: string, } | { "type": "reply", 
+version: string, 
+/**
+ * Must match the challenge and the tab's previous launch.
+ */
+launch: LaunchId, 
+/**
+ * HMAC including the client nonce and any issued session key.
+ */
+proof: PresentedToken, 
+/**
+ * An independent key, only when redeeming the one-time code.
+ */
+session: PresentedToken | null, } | { "type": "reply", 
 /**
  * The call's id.
  */
