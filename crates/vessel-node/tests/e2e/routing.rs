@@ -272,7 +272,7 @@ async fn a_routed_codex_gets_a_vessel_provider() {
 }
 
 /// The provider's key in these tests.
-const KEY: &str = "sk-e2e-provider-key";
+const KEY: &str = "sk-e2e-provider-key-0042";
 
 /// A short Chat Completions stream: `Hel`, `lo`, a stop, usage.
 const CHAT_STREAM: &str = concat!(

@@ -14,7 +14,13 @@
 //!   life; a restart voids them with the sessions it interrupts.
 //! - Keys: a provider's key is read from `secrets.toml` for each call, in
 //!   memory only, and goes nowhere but the upstream's authorization header
-//!   (`vessel_llm::client`).
+//!   (`vessel_llm::client`). A key that is not distinctive
+//!   (`ApiKey::distinctive`: under 20 bytes, or under ten different ones)
+//!   refuses the call, before anything goes up: every answer is searched
+//!   for the key, and a model writes `EMPTY` or `sk-1234` as ordinary
+//!   text. The check sits where the key is read, the only place its value
+//!   is known (a secret may be set or changed after `models.toml` is
+//!   loaded); a local server is given no key at all.
 //! - Limits: a session makes at most [`PER_SESSION`] calls at once and the
 //!   node at most [`PER_NODE`], so a leaked token or a looping agent cannot
 //!   spend without bound in parallel; a call past them is refused as a rate
@@ -280,9 +286,16 @@ impl Models {
             tracing::warn!(%error, "cannot read secrets.toml for a model call");
             "the node could not read its secrets".to_owned()
         })?;
-        value
-            .map(|value| Some(ApiKey::new(value.expose().to_owned())))
-            .ok_or_else(|| missing_key(&name))
+        let key = value
+            .map(|value| ApiKey::new(value.expose().to_owned()))
+            .ok_or_else(|| missing_key(&name))?;
+        // Every answer is searched for the key (`proxy`): one a model may
+        // write as ordinary text would end valid answers.
+        if !key.distinctive() {
+            tracing::warn!(secret = %name, "refused a model call: the route's key is too plain");
+            return Err(plain_key(&name));
+        }
+        Ok(Some(key))
     }
 
     /// The upstream client.
@@ -327,6 +340,15 @@ fn missing_route(profile: Option<&Profile>, name: &ModelRouteName) -> ServiceErr
         profile: profile.map(|profile| profile.name().clone()),
         route: name.clone(),
     }
+}
+
+fn plain_key(name: &SecretName) -> String {
+    format!(
+        "the route's provider key `{name}` is too short or too plain to keep out of model \
+         answers: give the provider no key in models.toml (a local server needs none), \
+         or a random one of at least {} characters",
+        vessel_llm::client::MIN_KEY_BYTES
+    )
 }
 
 fn missing_key(name: &SecretName) -> String {
