@@ -1,17 +1,18 @@
 //! `vessel ui`: the web UI on this machine (ADR 0017).
 //!
 //! [Decision Log]
-//! - The browser is opened on a file, not on the URL. The URL holds the
-//!   launch's token, and a command line (the opener's, the browser's) can
-//!   be read by every user of the machine (`ps`, `/proc/*/cmdline`). The
-//!   file sits in a temporary directory only this user can read, sends the
-//!   browser on to the URL, and goes when the UI does. Jupyter does the
-//!   same for the same reason.
-//! - The URL is also printed, for `--no-open` and for a browser that did
-//!   not open: the terminal is the user's.
-//! - The default port is 7079 (`vesseld` has 7077, `vesseld relay` 7078);
-//!   when it is taken, any free port. The token changes with every launch
-//!   anyway, so nothing depends on the port staying the same.
+//! - Unix opens a private file rather than a capability URL in argv:
+//!   process lists are visible to other local users. Directory/file modes
+//!   are 0700/0600 at creation, under `XDG_RUNTIME_DIR` when set. Registered
+//!   SIGINT/SIGTERM/SIGHUP handlers remove it; forced kills cannot promise
+//!   cleanup. Only a one-use bootstrap code reaches disk, not a session key.
+//! - Windows prints the URL without an opener file until we have an atomic
+//!   protected ACL implementation. A configurable temp path is not proof
+//!   of privacy. The terminal fallback also handles opener failures on Unix.
+//! - The default port is 7079, or a free port when taken. Port reuse is not
+//!   an identity guarantee: mutual proofs pin a launch; SRI authenticates
+//!   executable assets, and a random `.localhost` origin per launch prevents
+//!   old cached HTML and service workers from intercepting that index.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -23,6 +24,7 @@ use crate::args::{DEFAULT_UI_PORT, Target, UiArgs};
 use crate::error::CliError;
 use crate::io;
 
+mod launch;
 mod source;
 
 /// Serve the UI until interrupted, bridging to the book's nodes and this
@@ -33,11 +35,13 @@ pub(crate) async fn ui(target: &Target, args: UiArgs) -> Result<(), CliError> {
             "--bind takes a loopback address (127.0.0.1 or ::1): the UI is for this machine",
         ));
     }
+    // Install all termination handlers before publishing a capability.
+    let mut signals = launch::Signals::new()?;
     let listener = listen(args.bind, args.port).await?;
     let token = LaunchToken::mint()?;
     let url = token.url(listener.local_addr()?);
     io::out(
-        format!("Vessel UI: {url}\nThe address holds this launch's key: keep it to yourself.\n")
+        format!("Vessel UI: {url}\nThe address holds a one-use code: keep it to yourself and keep the tab open.\n")
             .as_bytes(),
     )
     .await?;
@@ -48,7 +52,7 @@ pub(crate) async fn ui(target: &Target, args: UiArgs) -> Result<(), CliError> {
     let serving = vessel_web::serve(listener, UiConfig::new(token), source, shutdown.clone());
     tokio::select! {
         served = serving => Ok(served?),
-        interrupted = tokio::signal::ctrl_c() => {
+        interrupted = signals.wait() => {
             shutdown.cancel();
             Ok(interrupted?)
         }
@@ -72,16 +76,18 @@ async fn listen(bind: IpAddr, port: u16) -> Result<TcpListener, CliError> {
 /// runs. Best effort: when anything fails, the printed URL is still
 /// there.
 async fn open(url: &str) -> Option<tempfile::TempDir> {
-    let dir = tempfile::Builder::new()
-        .prefix("vessel-ui-")
-        .tempdir()
-        .ok()?;
+    let url = url.to_owned();
+    let dir = match tokio::task::spawn_blocking(move || launch::file(&url))
+        .await
+        .ok()?
+    {
+        Ok(dir) => dir,
+        Err(error) => {
+            tracing::warn!(%error, "could not create a private browser handoff; open the printed address");
+            return None;
+        }
+    };
     let file = dir.path().join("open.html");
-    let page = format!(
-        "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0; url={url}\">\
-         <title>Vessel</title><a href=\"{url}\">Open Vessel</a>\n"
-    );
-    tokio::fs::write(&file, page).await.ok()?;
     let mut opener = opener(&file);
     let spawned = opener
         .stdin(std::process::Stdio::null())
