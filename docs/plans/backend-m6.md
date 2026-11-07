@@ -273,3 +273,18 @@ installers, editing/code-action tools and a process sandbox remain out of
 scope. Local and three-platform gate results are recorded after the final
 push; an early baseline run timed out during unrelated host I/O saturation,
 and no existing timeout was changed.
+
+### Local gate
+
+Final local gate on 2026-11-07, code commit `8fefe2d`:
+`cargo fmt --all -- --check` passed;
+`cargo clippy --workspace --all-targets -- -D warnings` passed;
+`cargo test --workspace -- --test-threads=4` passed: 763 passed, 0 failed,
+1 intentionally ignored real-server test (passed separately as recorded
+above). Builds used four jobs and the worktree's external target directory.
+The explicit forwarding allowlist test was updated to pin exactly the ten
+approved LSP rows. No existing test timeout was relaxed.
+
+Three-platform CI runs on the track push; the coordinator merges only after
+Linux, macOS and Windows pass on the submitted head. CI run details are in
+the track handoff, rather than claiming platform execution from Linux alone.
