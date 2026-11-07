@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New session · Vessel</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <a class="skip" href="#dialog">Skip to dialog</a>
+    <div class="app" aria-hidden="true">
+      <header class="topbar" role="banner">
+        <a class="brand" href="fleet.html">
+          <span class="mark" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M2 8.5 6 2.5 10 8.5" />
+              <path d="M4 8.5h4" />
+            </svg>
+          </span>
+          <span>Vessel</span>
+        </a>
+        <nav class="crumb" aria-label="Breadcrumb">
+          <a href="fleet.html">Fleet</a>
+          <span class="sep">/</span>
+          <span class="here">Sessions</span>
+        </nav>
+        <label class="topbar-search">
+          <span class="ico ico-search" aria-hidden="true"></span>
+          <input type="search" placeholder="Search nodes, sessions, commands" />
+          <kbd class="kbd">⌘K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <a class="btn primary sm" href="new-session.html"
+            ><span class="ico ico-plus sm" aria-hidden="true"></span> New</a
+          >
+          <a class="chip" href="fleet.html#settings">
+            <span class="pulse" aria-hidden="true"></span>
+            laptop · direct
+          </a>
+        </div>
+      </header>
+      <nav class="sidebar">
+        <div class="nav-block">
+          <a class="nav-item" href="fleet.html"
+            ><span class="ico ico-fleet" aria-hidden="true"></span
+            ><span class="label">Fleet</span></a
+          >
+          <a class="nav-item active" href="sessions.html"
+            ><span class="ico ico-sessions" aria-hidden="true"></span
+            ><span class="label">Sessions</span><span class="count">6</span></a
+          >
+          <a class="nav-item" href="fleet-sync.html"
+            ><span class="ico ico-sync" aria-hidden="true"></span
+            ><span class="label">Sync</span></a
+          >
+          <a class="nav-item" href="devices.html"
+            ><span class="ico ico-devices" aria-hidden="true"></span
+            ><span class="label">Devices</span></a
+          >
+        </div>
+      </nav>
+      <main class="main">
+        <div class="page">
+          <div class="page-head"><h1>Sessions</h1></div>
+        </div>
+      </main>
+    </div>
+
+    <div class="overlay" role="presentation">
+      <form
+        class="dialog"
+        id="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-title"
+      >
+        <div class="dialog-h">
+          <h1 id="new-title">New session</h1>
+          <a class="btn ghost icon-btn" href="sessions.html" aria-label="Close"
+            ><span class="ico ico-close"></span
+          ></a>
+        </div>
+        <div class="dialog-b">
+          <p class="hint">
+            Each field filters the next. Offline nodes cannot take sessions.
+          </p>
+          <div class="grid-2">
+            <label class="field">
+              <span>Node</span>
+              <select aria-label="Node">
+                <option selected>laptop · serving · this client</option>
+                <option>gpu-box · serving · relay</option>
+                <option>build-server · draining · ssh</option>
+                <option disabled>studio · offline</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Harness</span>
+              <select aria-label="Harness">
+                <option selected>claude</option>
+                <option>codex</option>
+                <option>gemini</option>
+                <option>opencode</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Profile</span>
+              <select aria-label="Profile">
+                <option>claude · default</option>
+                <option selected>claude-work</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Model</span>
+              <select aria-label="Model">
+                <optgroup label="Node default">
+                  <option>harness default</option>
+                </optgroup>
+                <optgroup label="Anthropic">
+                  <option selected>anthropic/claude-sonnet-4.5</option>
+                  <option>anthropic/claude-opus-4.5</option>
+                </optgroup>
+                <optgroup label="OpenAI">
+                  <option>openai/gpt-5</option>
+                  <option>openai/o3</option>
+                </optgroup>
+                <optgroup label="gpu-box local">
+                  <option>local/qwen2.5-coder-32b</option>
+                </optgroup>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span>Working directory</span>
+            <input type="text" value="/Users/you/src/app" spellcheck="false" />
+            <span class="hint"
+              >Recent: /Users/you/src/app · /srv/app ·
+              /home/you/work/kernel</span
+            >
+          </label>
+          <div class="field">
+            <span>Mode</span>
+            <div class="seg" role="radiogroup" aria-label="Mode">
+              <label>
+                <input type="radio" name="mode" checked />
+                <span
+                  ><span class="ico ico-message sm" aria-hidden="true"></span>
+                  Structured</span
+                >
+              </label>
+              <label>
+                <input type="radio" name="mode" />
+                <span
+                  ><span class="ico ico-terminal sm" aria-hidden="true"></span>
+                  Terminal</span
+                >
+              </label>
+            </div>
+            <p class="hint">
+              Structured is a timeline (ACP). Terminal is the harness TUI in a
+              PTY.
+            </p>
+          </div>
+        </div>
+        <div class="dialog-f">
+          <a class="btn" href="sessions.html">Cancel</a>
+          <a class="btn primary" href="session-structured.html">Create</a>
+        </div>
+      </form>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Devices · gpu-box · Vessel</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to main</a>
+    <div class="app">
+      <header class="topbar" role="banner">
+        <a class="brand" href="fleet.html">
+          <span class="mark" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M2 8.5 6 2.5 10 8.5" />
+              <path d="M4 8.5h4" />
+            </svg>
+          </span>
+          <span>Vessel</span>
+        </a>
+        <nav class="crumb" aria-label="Breadcrumb">
+          <a href="fleet.html">Fleet</a>
+          <span class="sep">/</span>
+          <a href="sessions.html">gpu-box</a>
+          <span class="sep">/</span>
+          <span class="here">Devices</span>
+        </nav>
+        <label class="topbar-search">
+          <span class="ico ico-search" aria-hidden="true"></span>
+          <input
+            type="search"
+            placeholder="Search nodes, sessions, commands"
+            aria-label="Search"
+          />
+          <kbd class="kbd">⌘K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <a class="btn primary sm" href="new-session.html"
+            ><span class="ico ico-plus sm" aria-hidden="true"></span> New</a
+          >
+          <a class="chip" href="#settings">
+            <span class="pulse" aria-hidden="true"></span>
+            laptop · direct
+          </a>
+        </div>
+      </header>
+
+      <nav class="sidebar" role="navigation" aria-label="Fleet">
+        <div class="nav-block">
+          <div class="nav-kicker">Place</div>
+          <a class="nav-item" href="fleet.html"
+            ><span class="ico ico-fleet" aria-hidden="true"></span
+            ><span class="label">Fleet</span></a
+          >
+          <a class="nav-item node" href="fleet.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">laptop</span>
+            <span class="count">3</span>
+          </a>
+          <a class="nav-item node active" href="sessions.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">gpu-box</span>
+            <span class="count">2</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot warn" aria-label="draining"></span>
+            <span class="label">build-server</span>
+            <span class="count">1</span>
+          </a>
+          <a class="nav-item node offline" href="sessions.html">
+            <span class="status-dot offline" aria-label="offline"></span>
+            <span class="label">studio</span>
+            <span class="dash">—</span>
+          </a>
+        </div>
+        <div class="nav-block">
+          <div class="nav-kicker">Work</div>
+          <a class="nav-item" href="sessions.html"
+            ><span class="ico ico-sessions" aria-hidden="true"></span
+            ><span class="label">Sessions</span><span class="count">6</span></a
+          >
+          <a class="nav-item" href="fleet-sync.html"
+            ><span class="ico ico-sync" aria-hidden="true"></span
+            ><span class="label">Sync</span><span class="count">1</span></a
+          >
+          <a class="nav-item active" href="devices.html" aria-current="page"
+            ><span class="ico ico-devices" aria-hidden="true"></span
+            ><span class="label">Devices</span></a
+          >
+        </div>
+        <div class="nav-foot">
+          <a class="nav-item" href="#settings"
+            ><span class="ico ico-settings" aria-hidden="true"></span
+            ><span class="label">Settings</span></a
+          >
+        </div>
+      </nav>
+
+      <main class="main" id="main" role="main">
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <h1>Devices · gpu-box</h1>
+              <p>
+                Paired clients for this node. Revoke closes open connections.
+                Pairing links expire in 10 minutes and are single-use.
+              </p>
+            </div>
+          </div>
+          <div class="page-body">
+            <div class="panel" style="margin-bottom: 16px">
+              <h2>Pair a new device</h2>
+              <div class="pad pair">
+                <div class="qr" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 29 29"
+                    xmlns="http://www.w3.org/2000/svg"
+                    role="img"
+                    aria-label="Pairing QR code"
+                  >
+                    <rect width="29" height="29" fill="#e6e8eb" />
+                    <g fill="#0a0b0d">
+                      <rect x="2" y="2" width="7" height="7" />
+                      <rect x="3" y="3" width="5" height="5" fill="#e6e8eb" />
+                      <rect x="4" y="4" width="3" height="3" />
+                      <rect x="20" y="2" width="7" height="7" />
+                      <rect x="21" y="3" width="5" height="5" fill="#e6e8eb" />
+                      <rect x="22" y="4" width="3" height="3" />
+                      <rect x="2" y="20" width="7" height="7" />
+                      <rect x="3" y="21" width="5" height="5" fill="#e6e8eb" />
+                      <rect x="4" y="22" width="3" height="3" />
+                      <rect x="11" y="2" width="1" height="1" />
+                      <rect x="13" y="2" width="2" height="1" />
+                      <rect x="16" y="2" width="1" height="1" />
+                      <rect x="11" y="4" width="1" height="2" />
+                      <rect x="13" y="5" width="3" height="1" />
+                      <rect x="18" y="4" width="1" height="1" />
+                      <rect x="2" y="11" width="2" height="1" />
+                      <rect x="5" y="11" width="1" height="1" />
+                      <rect x="7" y="12" width="2" height="1" />
+                      <rect x="4" y="14" width="3" height="1" />
+                      <rect x="2" y="16" width="1" height="2" />
+                      <rect x="6" y="17" width="2" height="1" />
+                      <rect x="11" y="11" width="1" height="1" />
+                      <rect x="13" y="11" width="1" height="3" />
+                      <rect x="15" y="12" width="2" height="1" />
+                      <rect x="18" y="11" width="1" height="1" />
+                      <rect x="20" y="11" width="3" height="1" />
+                      <rect x="24" y="11" width="2" height="1" />
+                      <rect x="26" y="13" width="1" height="2" />
+                      <rect x="21" y="14" width="4" height="1" />
+                      <rect x="11" y="16" width="2" height="1" />
+                      <rect x="14" y="16" width="1" height="2" />
+                      <rect x="16" y="18" width="3" height="1" />
+                      <rect x="12" y="20" width="1" height="2" />
+                      <rect x="14" y="21" width="2" height="1" />
+                      <rect x="17" y="20" width="1" height="1" />
+                      <rect x="19" y="22" width="2" height="1" />
+                      <rect x="22" y="20" width="1" height="3" />
+                      <rect x="24" y="21" width="3" height="1" />
+                      <rect x="26" y="24" width="1" height="3" />
+                      <rect x="11" y="24" width="3" height="1" />
+                      <rect x="15" y="25" width="1" height="2" />
+                      <rect x="17" y="26" width="4" height="1" />
+                      <rect x="22" y="26" width="2" height="1" />
+                    </g>
+                  </svg>
+                </div>
+                <div>
+                  <p class="hint" style="margin-bottom: 8px">
+                    Show this on gpu-box. Paste the link into the other device
+                    at the prompt, never on a command line. Compare the
+                    fingerprint with
+                    <span class="mono">vessel node status</span> before
+                    confirming.
+                  </p>
+                  <div class="link-box">
+                    <span class="ico ico-link sm" aria-hidden="true"></span>
+                    <span
+                      >vessel://pair#eyJ2IjoxLCJub2RlIjoibl9jNGUxLi4uIn0</span
+                    >
+                    <button
+                      class="btn ghost sm icon-btn"
+                      type="button"
+                      aria-label="Copy pairing link"
+                    >
+                      <span class="ico ico-copy"></span>
+                    </button>
+                  </div>
+                  <p class="hint" style="margin-top: 8px">
+                    Fingerprint <span class="mono">A3F1 90C2 7B44 1E0D</span>
+                    · expires 09:42 · single use
+                  </p>
+                  <div class="inline" style="margin-top: 12px">
+                    <label class="field" style="max-width: 200px">
+                      <span>Label</span>
+                      <input type="text" value="phone" />
+                    </label>
+                    <button
+                      class="btn primary"
+                      type="button"
+                      style="margin-top: 20px"
+                    >
+                      New link
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="data" aria-label="Paired devices">
+                <thead>
+                  <tr>
+                    <th scope="col">Device</th>
+                    <th scope="col">Scopes</th>
+                    <th scope="col">Last seen</th>
+                    <th scope="col">Created</th>
+                    <th scope="col"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <div class="stack">
+                        <span class="name">laptop</span>
+                        <span class="mono muted">d_3fa9 · this client</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="badge">read</span>
+                      <span class="badge">operate</span>
+                      <span class="badge">admin</span>
+                    </td>
+                    <td class="mono muted">now</td>
+                    <td class="mono muted">12d</td>
+                    <td></td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="stack">
+                        <span class="name">studio</span>
+                        <span class="mono muted">d_88c1</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="badge">read</span>
+                      <span class="badge">operate</span>
+                      <span class="badge">admin</span>
+                    </td>
+                    <td class="mono muted">2h</td>
+                    <td class="mono muted">12d</td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="btn sm danger" type="button">
+                          Revoke
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="stack">
+                        <span class="name">ci-runner</span>
+                        <span class="mono muted">d_12ab</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="badge">read</span>
+                      <span class="badge">operate</span>
+                    </td>
+                    <td class="mono muted">4d</td>
+                    <td class="mono muted">9d</td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="btn sm danger" type="button">
+                          Revoke
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div class="toast-stack" aria-live="polite">
+      <div class="toast error" role="alert">
+        <div>
+          <strong>ci-runner revoked</strong>
+          <div class="hint">
+            Open connections on gpu-box were closed. Pair again to restore.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      id="settings"
+      class="overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+    >
+      <div class="dialog narrow">
+        <div class="dialog-h">
+          <h1 id="settings-title">Settings</h1>
+          <a class="btn ghost icon-btn" href="#" aria-label="Close"
+            ><span class="ico ico-close"></span
+          ></a>
+        </div>
+        <div class="dialog-b">
+          <div class="field">
+            <span>Theme</span>
+            <div class="seg">
+              <label
+                ><input type="radio" name="theme" checked /><span
+                  >Dark</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="theme" id="theme-light" /><span
+                  >Light</span
+                ></label
+              >
+            </div>
+          </div>
+        </div>
+        <div class="dialog-f"><a class="btn" href="#">Done</a></div>
+      </div>
+    </div>
+  </body>
+</html>

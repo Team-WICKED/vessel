@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sessions · Vessel</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to sessions</a>
+    <div class="app">
+      <header class="topbar" role="banner">
+        <a class="brand" href="fleet.html">
+          <span class="mark" aria-hidden="true">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M2 8.5 6 2.5 10 8.5" />
+              <path d="M4 8.5h4" />
+            </svg>
+          </span>
+          <span>Vessel</span>
+        </a>
+        <nav class="crumb" aria-label="Breadcrumb">
+          <a href="fleet.html">Fleet</a>
+          <span class="sep">/</span>
+          <span class="here">Sessions</span>
+        </nav>
+        <label class="topbar-search">
+          <span class="ico ico-search" aria-hidden="true"></span>
+          <input
+            type="search"
+            placeholder="Search nodes, sessions, commands"
+            aria-label="Search"
+          />
+          <kbd class="kbd">⌘K</kbd>
+        </label>
+        <div class="topbar-actions">
+          <a class="btn primary sm" href="new-session.html"
+            ><span class="ico ico-plus sm" aria-hidden="true"></span> New</a
+          >
+          <a class="chip" href="#settings" title="This client">
+            <span class="pulse" aria-hidden="true"></span>
+            laptop · direct
+          </a>
+        </div>
+      </header>
+
+      <nav class="sidebar" role="navigation" aria-label="Fleet">
+        <div class="nav-block">
+          <div class="nav-kicker">Place</div>
+          <a class="nav-item" href="fleet.html"
+            ><span class="ico ico-fleet" aria-hidden="true"></span
+            ><span class="label">Fleet</span></a
+          >
+          <a class="nav-item node" href="fleet.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">laptop</span>
+            <span class="count">3</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot" aria-label="online"></span>
+            <span class="label">gpu-box</span>
+            <span class="count">2</span>
+          </a>
+          <a class="nav-item node" href="sessions.html">
+            <span class="status-dot warn" aria-label="draining"></span>
+            <span class="label">build-server</span>
+            <span class="count">1</span>
+          </a>
+          <a class="nav-item node offline" href="sessions.html">
+            <span class="status-dot offline" aria-label="offline"></span>
+            <span class="label">studio</span>
+            <span class="dash">—</span>
+          </a>
+        </div>
+        <div class="nav-block">
+          <div class="nav-kicker">Work</div>
+          <a class="nav-item active" href="sessions.html" aria-current="page"
+            ><span class="ico ico-sessions" aria-hidden="true"></span
+            ><span class="label">Sessions</span><span class="count">6</span></a
+          >
+          <a class="nav-item" href="fleet-sync.html"
+            ><span class="ico ico-sync" aria-hidden="true"></span
+            ><span class="label">Sync</span><span class="count">1</span></a
+          >
+          <a class="nav-item" href="devices.html"
+            ><span class="ico ico-devices" aria-hidden="true"></span
+            ><span class="label">Devices</span></a
+          >
+        </div>
+        <div class="nav-foot">
+          <a class="nav-item" href="#settings"
+            ><span class="ico ico-settings" aria-hidden="true"></span
+            ><span class="label">Settings</span></a
+          >
+        </div>
+      </nav>
+
+      <main class="main" id="main" role="main">
+        <div class="page">
+          <div class="page-head">
+            <div>
+              <h1>Sessions</h1>
+              <p>
+                All nodes. Agent-created sessions nest under the session that
+                started them.
+              </p>
+            </div>
+            <a class="btn primary" href="new-session.html"
+              ><span class="ico ico-plus sm" aria-hidden="true"></span> New
+              session</a
+            >
+          </div>
+          <div class="filters" aria-label="Filters">
+            <div class="seg">
+              <a class="active" href="sessions.html">All nodes</a>
+              <a href="sessions.html">laptop</a>
+              <a href="sessions.html">gpu-box</a>
+            </div>
+            <div class="seg">
+              <a class="active" href="sessions.html">Live</a>
+              <a href="sessions.html">Recent</a>
+            </div>
+            <span class="spacer"></span>
+            <span class="hint">j / k to move · Enter to open</span>
+          </div>
+          <div class="page-body flush">
+            <div class="table-wrap" style="border: 0; border-radius: 0">
+              <table class="data" aria-label="Sessions">
+                <thead>
+                  <tr>
+                    <th scope="col">Session</th>
+                    <th scope="col">Node</th>
+                    <th scope="col">Harness</th>
+                    <th scope="col">Model / cwd</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Started</th>
+                    <th scope="col">
+                      <span class="visually-hidden">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <div class="tree-pad">
+                        <span
+                          class="ico ico-message sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">3f2a</span>
+                          <span class="muted">you · this device</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">laptop</td>
+                    <td>
+                      <span class="badge accent">structured</span>
+                      <span class="muted"> claude-work</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="mono">anthropic/claude-sonnet-4.5</span>
+                        <span class="path">/Users/you/src/app</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="badge running">running</span>
+                      <span class="muted">turn</span>
+                    </td>
+                    <td class="mono muted">14m</td>
+                    <td>
+                      <div class="row-actions">
+                        <a
+                          class="btn ghost sm icon-btn"
+                          href="session-structured.html"
+                          aria-label="Open 3f2a"
+                          ><span class="ico ico-chevron sm"></span
+                        ></a>
+                        <button
+                          class="btn ghost sm icon-btn"
+                          type="button"
+                          aria-label="Kill 3f2a"
+                        >
+                          <span class="ico ico-kill sm"></span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="tree-pad l1">
+                        <span class="tree-rail" aria-hidden="true"></span>
+                        <span
+                          class="ico ico-message sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">a91c</span>
+                          <span class="muted">agent of 3f2a on laptop</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">gpu-box</td>
+                    <td>
+                      <span class="badge accent">structured</span>
+                      <span class="muted"> claude</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="mono">local/qwen2.5-coder-32b</span>
+                        <span class="path">/srv/app</span>
+                      </div>
+                    </td>
+                    <td><span class="badge running">running</span></td>
+                    <td class="mono muted">11m</td>
+                    <td>
+                      <div class="row-actions">
+                        <a
+                          class="btn ghost sm icon-btn"
+                          href="session-structured.html"
+                          aria-label="Open a91c"
+                          ><span class="ico ico-chevron sm"></span
+                        ></a>
+                        <button
+                          class="btn ghost sm icon-btn"
+                          type="button"
+                          aria-label="Kill a91c"
+                        >
+                          <span class="ico ico-kill sm"></span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="tree-pad l2">
+                        <span class="tree-rail" aria-hidden="true"></span>
+                        <span
+                          class="ico ico-message sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">c07e</span>
+                          <span class="muted">agent of a91c on gpu-box</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">build-server</td>
+                    <td>
+                      <span class="badge accent">structured</span>
+                      <span class="muted"> claude</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="mono">anthropic/claude-sonnet-4.5</span>
+                        <span class="path">/home/you/work/kernel</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="badge running">running</span>
+                      <span class="badge pending">permission</span>
+                    </td>
+                    <td class="mono muted">6m</td>
+                    <td>
+                      <div class="row-actions">
+                        <a
+                          class="btn ghost sm icon-btn"
+                          href="session-structured.html"
+                          aria-label="Open c07e"
+                          ><span class="ico ico-chevron sm"></span
+                        ></a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="tree-pad">
+                        <span
+                          class="ico ico-terminal sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">b4e1</span>
+                          <span class="muted">you · this device</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">laptop</td>
+                    <td>
+                      <span class="badge">terminal</span>
+                      <span class="muted"> claude</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="muted">harness TUI</span>
+                        <span class="path">/Users/you/src/app</span>
+                      </div>
+                    </td>
+                    <td><span class="badge running">running</span></td>
+                    <td class="mono muted">32m</td>
+                    <td>
+                      <div class="row-actions">
+                        <a
+                          class="btn ghost sm icon-btn"
+                          href="session-terminal.html"
+                          aria-label="Open b4e1"
+                          ><span class="ico ico-chevron sm"></span
+                        ></a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="tree-pad">
+                        <span
+                          class="ico ico-terminal sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">d12f</span>
+                          <span class="muted">you · this device</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">gpu-box</td>
+                    <td>
+                      <span class="badge">terminal</span>
+                      <span class="muted"> opencode</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="muted">harness TUI</span>
+                        <span class="path">/srv/models</span>
+                      </div>
+                    </td>
+                    <td><span class="badge running">running</span></td>
+                    <td class="mono muted">1h</td>
+                    <td>
+                      <div class="row-actions">
+                        <a
+                          class="btn ghost sm icon-btn"
+                          href="session-terminal.html"
+                          aria-label="Open d12f"
+                          ><span class="ico ico-chevron sm"></span
+                        ></a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="tree-pad">
+                        <span
+                          class="ico ico-message sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">9aa0</span>
+                          <span class="muted">you · this device</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">laptop</td>
+                    <td>
+                      <span class="badge accent">structured</span>
+                      <span class="muted"> gemini</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="mono">google/gemini-3-pro</span>
+                        <span class="path">/Users/you/src/notes</span>
+                      </div>
+                    </td>
+                    <td><span class="badge starting">starting</span></td>
+                    <td class="mono muted">12s</td>
+                    <td></td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="tree-pad">
+                        <span
+                          class="ico ico-message sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">71bc</span>
+                          <span class="muted">you · laptop</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">laptop</td>
+                    <td>
+                      <span class="badge accent">structured</span>
+                      <span class="muted"> codex</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="mono">openai/o3</span>
+                        <span class="path">/Users/you/src/app</span>
+                      </div>
+                    </td>
+                    <td><span class="badge interrupted">interrupted</span></td>
+                    <td class="mono muted">3h</td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="btn sm" type="button">Resume</button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div class="tree-pad">
+                        <span
+                          class="ico ico-message sm"
+                          aria-hidden="true"
+                        ></span>
+                        <div class="stack">
+                          <span class="name mono">e8d4</span>
+                          <span class="muted">imported from gpu-box</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="mono">laptop</td>
+                    <td>
+                      <span class="badge accent">structured</span>
+                      <span class="muted"> claude</span>
+                    </td>
+                    <td>
+                      <div class="stack">
+                        <span class="mono">anthropic/claude-opus-4.5</span>
+                        <span class="path">/Users/you/src/app</span>
+                      </div>
+                    </td>
+                    <td><span class="badge">exited 0</span></td>
+                    <td class="mono muted">yday</td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div
+      id="settings"
+      class="overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+    >
+      <div class="dialog narrow">
+        <div class="dialog-h">
+          <h1 id="settings-title">Settings</h1>
+          <a class="btn ghost icon-btn" href="#" aria-label="Close"
+            ><span class="ico ico-close"></span
+          ></a>
+        </div>
+        <div class="dialog-b">
+          <div class="field">
+            <span>Theme</span>
+            <div class="seg">
+              <label
+                ><input type="radio" name="theme" checked /><span
+                  >Dark</span
+                ></label
+              >
+              <label
+                ><input type="radio" name="theme" id="theme-light" /><span
+                  >Light</span
+                ></label
+              >
+            </div>
+          </div>
+          <p class="hint">
+            Node book lives on Fleet → Settings. This client is laptop.
+          </p>
+        </div>
+        <div class="dialog-f"><a class="btn" href="#">Done</a></div>
+      </div>
+    </div>
+  </body>
+</html>
