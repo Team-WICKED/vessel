@@ -13,5 +13,10 @@
 //!
 //! - [`sse`]: Server-Sent Events, decoded incrementally from any chunking
 //!   and encoded back.
+//! - [`wire`]: each API's requests, responses, stream events and errors,
+//!   typed.
 
+#[cfg(test)]
+mod fixtures;
 pub mod sse;
+pub mod wire;

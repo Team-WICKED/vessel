@@ -1,24 +1,5 @@
 use super::*;
-
-/// The recorded-format streams under `tests/fixtures/`.
-const FIXTURES: [(&str, &str); 4] = [
-    (
-        "anthropic-thinking-tool-use",
-        include_str!("../../tests/fixtures/anthropic-thinking-tool-use.sse"),
-    ),
-    (
-        "anthropic-error-mid-stream",
-        include_str!("../../tests/fixtures/anthropic-error-mid-stream.sse"),
-    ),
-    (
-        "responses-reasoning-function-call",
-        include_str!("../../tests/fixtures/responses-reasoning-function-call.sse"),
-    ),
-    (
-        "chat-parallel-tool-calls",
-        include_str!("../../tests/fixtures/chat-parallel-tool-calls.sse"),
-    ),
-];
+use crate::fixtures::STREAMS as FIXTURES;
 
 /// Decode `chunks` in order, then finish.
 fn decode<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) -> Result<Vec<SseFrame>, SseError> {

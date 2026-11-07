@@ -78,6 +78,7 @@ vessel-agent = { path = "crates/vessel-agent" }
 vessel-client = { path = "crates/vessel-client" }
 vessel-fleet = { path = "crates/vessel-fleet" }
 vessel-harness = { path = "crates/vessel-harness" }
+vessel-llm = { path = "crates/vessel-llm" }
 vessel-mcp = { path = "crates/vessel-mcp" }
 vessel-node = { path = "crates/vessel-node" }
 vessel-proc = { path = "crates/vessel-proc" }

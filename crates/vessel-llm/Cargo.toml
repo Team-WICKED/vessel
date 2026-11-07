@@ -8,7 +8,11 @@ license-file.workspace = true
 repository.workspace = true
 
 [dependencies]
+vessel-proto.workspace = true
+
 bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]
