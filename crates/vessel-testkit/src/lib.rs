@@ -17,10 +17,15 @@
 //! - `fake-tool`: an installer or service manager that only logs its calls
 //!   and answers "is it enabled" from that log (`vessel init` tests). See
 //!   `src/bin/fake_tool.rs`.
+//! - `fake-provider`: an OpenAI-compatible model provider on loopback for
+//!   the model routing smoke's `--fake` run (milestone 5). See
+//!   `src/bin/fake_provider.rs`.
 //!
 //! Both harness fakes answer `report <path>` by writing their arguments,
 //! environment and (ACP) MCP servers to that file ([`write_report`]), so a
-//! test sees values without them entering the session's log.
+//! test sees values without them entering the session's log, and `model
+//! <text>` by making one model call where a routed session's harness is
+//! pointed ([`model::call`], milestone 5).
 //!
 //! It also locates a freshly built `vesseld` ([`vesseld()`]) for tests
 //! outside `vessel-node` that need the real node binary (installing it on a
@@ -81,6 +86,7 @@ use std::time::Duration;
 
 use tokio::time::error::Elapsed;
 
+pub mod model;
 #[cfg(feature = "relay")]
 pub mod relay;
 mod report;

@@ -24,6 +24,10 @@ path = "src/bin/fake_ssh.rs"
 name = "fake-tool"
 path = "src/bin/fake_tool.rs"
 
+[[bin]]
+name = "fake-provider"
+path = "src/bin/fake_provider.rs"
+
 [features]
 # The misbehaving relay (`relay` module): a websocket proxy, so only tests
 # that need it pay for the websocket stack (the fake binaries do not).

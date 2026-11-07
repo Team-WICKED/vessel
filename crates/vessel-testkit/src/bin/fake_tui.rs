@@ -21,6 +21,9 @@
 //!    program name), `report <path>` writes its arguments and whole
 //!    environment to that file as JSON and prints `reported`
 //!    (`vessel_testkit::write_report`),
+//!    `model <text>` makes one model call through the node's proxy and
+//!    prints `model <reply>` or `model error: <why>`
+//!    (`vessel_testkit::model`),
 //!    `modes on` / `modes off` switch the terminal modes a full-screen TUI
 //!    sets (alternate screen, hidden cursor, bracketed paste, kitty
 //!    keyboard flags, as Codex's TUI does) and print `modes on` / `modes
@@ -118,6 +121,8 @@ fn handle(line: &str) -> Option<ExitCode> {
             Some(value) => say(&format!("env {name}={}", value.to_string_lossy())),
             None => say(&format!("env {name} unset")),
         }
+    } else if let Some(text) = line.strip_prefix("model ") {
+        say(&vessel_testkit::model::call(text));
     } else if line == "modes on" {
         // Alternate screen, hide the cursor, bracketed paste, push kitty
         // keyboard flags (disambiguate escape codes).
