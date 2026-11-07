@@ -452,9 +452,10 @@ vessel ui --no-open  # prints the address instead
 - It listens on loopback only. Each printed address uses a fresh random
   `vessel-<id>.localhost` hostname so an earlier process on that port cannot
   seed this launch's HTML cache or service worker. Use a browser that resolves
-  `*.localhost` locally, such as Chrome, Edge or Firefox; Safari does not
-  support these hostnames. Do not replace the printed hostname with a fixed
-  address: that loses the per-launch browser-origin isolation.
+  `*.localhost` locally: **Chrome, Edge or Firefox is required**. Safari
+  does not resolve these hostnames and is not supported for now. Do not
+  replace the printed hostname with a fixed address: that loses the
+  per-launch browser-origin isolation.
 - The address's `#bootstrap=` fragment is a
   single-use code: treat it like a password until opened. The page removes
   it from the address bar and exchanges proof of it for an independent
@@ -462,6 +463,12 @@ vessel ui --no-open  # prints the address instead
   work; reusing the address in a fresh tab does not. Start `vessel ui` again
   for another independent browser context. Every connection verifies a fresh
   server proof and launch id; an old tab stops when the UI is restarted.
+  A tab whose connection keeps failing stops redialling and says it is
+  disconnected; Retry (or a reload) resumes once `vessel ui` answers again.
+- Links in agent output, in the timeline's Markdown or a terminal's OSC 8
+  hyperlinks, open only when they are http(s): in a new tab that cannot
+  reach the UI's, after a confirmation showing the URL for the terminal.
+  The UI's own tab never navigates away.
 - The Unix browser handoff is a 0600 file in a directory created as 0700,
   under `XDG_RUNTIME_DIR` when set (otherwise the system temporary directory).
   SIGINT, SIGTERM and SIGHUP remove it. Forced kills/crashes cannot guarantee

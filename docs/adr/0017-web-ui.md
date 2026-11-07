@@ -87,8 +87,14 @@ Option 3.
 - `.localhost` is reserved for loopback by [RFC 6761, section 6.3](https://www.rfc-editor.org/rfc/rfc6761.html#section-6.3).
   Chrome/Edge/Firefox handle these names; Safari and some non-browser DNS
   clients do not ([browser compatibility](https://learn.microsoft.com/en-us/aspnet/core/test/localhost-tld#browser-compatibility)).
-  The UI requires a supporting browser on all three OSes; the browser tests
-  exercise Chromium, and raw-socket Rust tests use literal loopback addresses.
+  The UI requires Chrome, Edge or Firefox on all three OSes; the browser
+  tests exercise Chromium, and raw-socket Rust tests use literal loopback
+  addresses. **Safari is not supported, and has no fallback** (decided
+  2026-11-07): a literal-loopback opt-in would give up the defence against
+  a port squatter's cached index or service worker on `127.0.0.1:<port>`,
+  which SRI and ETags cannot cover for the initial HTML. The roadmap keeps
+  a follow-up to revisit it (a signed bootstrap page, or Safari's own
+  `localhost` port isolation).
 - Each launch has independent random 256-bit bootstrap and session secrets,
   and a public random launch id. `LaunchToken` names the bootstrap code.
 - The URL carries only `#bootstrap=`. The page removes it immediately, but
@@ -107,9 +113,16 @@ Option 3.
   `vessel-ui-v1\nserver\n<launch>\n<server nonce>\n<client nonce>\n<version>\n<session or empty>`.
   Only bootstrap welcomes include the independent session key. The browser
   opens no calls or subscriptions until it verifies the welcome, and stops
-  on a bad proof or changed launch. Five consecutive upgrade failures also
-  stop the tab: a restarted server rejects the old random Host before a
-  websocket exists, and browsers hide that HTTP response. Fresh random nonces and role separation
+  on a bad proof, a changed launch or a 4401 close: those are refusals, and
+  only they make the tab forget its session key. Five consecutive failed
+  connections (closes, or a handshake that does not finish in 10 s) stop
+  the redialling too, since a restarted server rejects the old random Host
+  before a websocket exists and browsers hide that HTTP response; but the
+  tab keeps its key and says it is disconnected, with a Retry button, and
+  a reload also resumes. A restarted UI still fails the Host check or the
+  proof, so keeping the key gives a stale tab nothing. (Before this, five
+  transient closes deleted a valid key and no reload could recover it:
+  M7 verification, finding 1.) Fresh random nonces and role separation
   prevent captured hellos/welcomes from authenticating another connection.
   No reusable key is sent by the browser during reconnection.
 - `/api/status` accepts the issued session key as a bearer, never the URL
@@ -173,6 +186,9 @@ Option 3.
 - Markdown with raw HTML disabled. Only absolute `http://` and `https://`
   URLs become anchors, always with `target="_blank"` and
   `rel="noopener noreferrer"`; relative and other-scheme links are text.
+  A terminal's OSC 8 hyperlinks follow the same policy (`data/links.ts`):
+  http(s) only, after a confirm that shows the URL, in a new tab opened
+  with `noopener,noreferrer`; the UI tab never navigates.
 - xterm output never becomes session input. The narrow `terminal-input`
   adapter uses pinned xterm 6.0's internal synchronous `onUserInput` signal
   to distinguish real keys/paste/IME from parser-generated replies, including

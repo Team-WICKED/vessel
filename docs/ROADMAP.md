@@ -111,7 +111,8 @@ Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
 ## Phase 5: clients
 
 - [x] Web UI: `vessel ui` (milestone 7, ADR 0017). Follow-ups: `vesseld
-  --web` (a node serving the page itself), routed models in New session
-  once model routing (M5) lands.
+  --web` (a node serving the page itself); Safari, which does not resolve
+  the per-launch `vessel-<id>.localhost` origins (revisit with a signed
+  bootstrap page or Safari's `localhost` port isolation; ADR 0017).
 - [ ] Zed / VS Code integration.
 - [ ] Native editor (only if the above is not enough).
