@@ -26,8 +26,9 @@ Vessel aims for:
 5. **IDE-grade context.** Symbols, references, diagnostics and call graphs,
    fed to the agent through LSP rather than locked inside one editor.
 
-See [docs/VISION.md](docs/VISION.md) for the long version and
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit.
+See [docs/VISION.md](docs/VISION.md) for the long version,
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit, and
+[CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Status
 
