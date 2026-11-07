@@ -32,7 +32,7 @@ use vessel_proto::{
 use crate::memory::{self, Disconnected, MemoryTransport};
 use crate::{
     CallError, ClientConfig, ConnectError, Connection, Outbound, ServeError, Server, ServerConfig,
-    SubscriptionItem,
+    SubscriptionItem, UnaryCall,
 };
 
 /// Records each subscription streams before ending.

@@ -47,7 +47,9 @@ mod server;
 mod tests;
 mod transport;
 
-pub use client::{ClientConfig, Connection, Subscription, SubscriptionItem, Unary};
+pub use client::{
+    ClientConfig, Connection, NotUnary, Subscription, SubscriptionItem, Unary, UnaryCall,
+};
 pub use error::{CallError, ConnectError, OutboundError, ProtocolViolation, ServeError};
 pub use framed::{Framed, FramedError, MAX_FRAME};
 pub use server::{Outbound, Peer, Server, ServerConfig, SubscriptionClosed, SubscriptionSink};

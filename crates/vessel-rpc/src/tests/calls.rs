@@ -231,3 +231,49 @@ async fn callers_never_wait_on_a_node_that_stopped_reading_and_hung_up() {
     }
     drop(node_end);
 }
+
+/// `call_any`: a call built elsewhere (a browser's, through `vessel ui`)
+/// goes as it is and its reply comes back untouched.
+#[tokio::test]
+async fn an_already_built_call_round_trips_untouched() {
+    let running = start(ClientConfig::default()).await;
+    let client = &running.client;
+    let call = UnaryCall::try_from(
+        GetSession {
+            session: session(1),
+        }
+        .into_call(),
+    )
+    .unwrap();
+    assert_eq!(call.method(), vessel_proto::Method::GetSession);
+    let reply = client.call_any(call).await.unwrap();
+    assert_eq!(
+        reply,
+        vessel_proto::Reply::GetSession(info(session(1), spec()))
+    );
+    // The node's error comes back as for a typed call.
+    let missing = UnaryCall::try_from(
+        GetSession {
+            session: session(404),
+        }
+        .into_call(),
+    )
+    .unwrap();
+    assert!(matches!(
+        client.call_any(missing).await,
+        Err(CallError::Remote(error)) if error.code == ErrorCode::NotFound
+    ));
+}
+
+/// `session.subscribe` opens a stream, so it is not a one-reply call.
+#[test]
+fn a_subscription_is_not_a_one_reply_call() {
+    let subscribe = Subscribe {
+        session: session(1),
+        from: EventSeq::ZERO,
+    };
+    assert_eq!(
+        UnaryCall::try_from(subscribe.into_call()),
+        Err(crate::NotUnary(vessel_proto::Method::Subscribe))
+    );
+}

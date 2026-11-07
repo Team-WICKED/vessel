@@ -8,12 +8,14 @@ use vessel_proto::{
     HarnessKind, ImportMemory, ImportSession, Invitation, InviteDevice, KillSession, ListDevices,
     ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions, MAX_TRANSFER_FILE,
     Manifest, MemoryImported, MoveProfile, NodeId, NodeInfo, ProfileInfo, ProfileName,
-    ProtocolVersion, ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, ReportApplied,
+    ProtocolVersion, ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, Reply, ReportApplied,
     RevokeDevice, Scope, SecretName, SecretValue, SendInput, SessionId, SessionImported,
     SessionInfo, SessionInput, SessionSpec, SetSecret, StopNode, StopWhen, Subscribe, TransferId,
     TransferManifest, WatchFleet,
 };
-use vessel_rpc::{CallError, ClientConfig, Connection, FrameTransport, Subscription, Unary};
+use vessel_rpc::{
+    CallError, ClientConfig, Connection, FrameTransport, Subscription, Unary, UnaryCall,
+};
 
 use crate::chunks::{ChunkSink, FetchError, fetch_chunks};
 use crate::error::ConnectError;
@@ -104,6 +106,19 @@ impl NodeClient {
     /// See [`CallError`].
     pub async fn call<R: Unary>(&self, request: R) -> Result<R::Response, CallError> {
         self.connection.call(request).await
+    }
+
+    /// Send an already-built one-reply call and return its reply as it
+    /// came, for callers that relay calls they did not build: `vessel ui`'s
+    /// bridge, decoding a browser's call into the typed `Call` (ADR 0017).
+    /// The protocol-version gate is the typed calls' own
+    /// ([`CallError::NotInProtocol`]); the node checks scopes as for any
+    /// call.
+    ///
+    /// # Errors
+    /// See [`CallError`].
+    pub async fn call_any(&self, call: UnaryCall) -> Result<Reply, CallError> {
+        self.connection.call_any(call).await
     }
 
     /// Run `request` on fleet node `node` through this node
