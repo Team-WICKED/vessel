@@ -1,0 +1,134 @@
+/* Vessel design tokens (docs/design/web-ui/tokens.css, the contract).
+   Dark is the default. Light is a re-derived theme, not an inversion,
+   selected by `data-theme="light"` on <html> (set before first paint in
+   main.tsx). Pretendard is self-hosted (fonts.css). */
+
+:root {
+  --bg-base: #0a0b0d;
+  --bg-sidebar: #0c0d10;
+  --bg-surface: #101216;
+  --bg-elevated: #16181d;
+  --bg-hover: #1a1d24;
+  --bg-active: #1e2430;
+  --border-subtle: #1e2127;
+  --border-strong: #2a2e37;
+  --text-primary: #e6e8eb;
+  --text-secondary: #9ba1ac;
+  --text-tertiary: #8a919c;
+  --text-disabled: #5c6370;
+  --accent: #82aaff;
+  --accent-muted: #82aaff22;
+  --online: #3ecf8e;
+  --warn: #e0a066;
+  --danger: #f07178;
+  --interrupt: #a8b0c0;
+  --overlay: rgba(0, 0, 0, 0.48);
+  --inset: rgba(255, 255, 255, 0.04);
+  --shadow: none;
+  --btn-primary-bg: #e6e8eb;
+  --btn-primary-fg: #0a0b0d;
+  --syn-keyword: #c792ea;
+  --syn-string: #c3e88d;
+  --syn-func: #82aaff;
+  --syn-number: #f78c6c;
+  --syn-comment: #7a8190;
+  --syn-const: #ffcb6b;
+  --syn-error: #f07178;
+  --diff-add-bg: #3ecf8e18;
+  --diff-del-bg: #f0717818;
+  --term-bg: #0a0b0d;
+  --term-fg: #e6e8eb;
+
+  --font-sans:
+    Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* The design's stack, with the monospace faces macOS and Linux ship
+     (SF Mono, Menlo, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono)
+     before Pretendard: without one, a terminal grid would fall back to a
+     proportional face. Pretendard still comes before \`monospace\`. */
+  --font-mono:
+    Consolas, "SF Mono", Menlo, "JetBrains Mono", "Cascadia Mono",
+    "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", Pretendard,
+    monospace;
+
+  --t-title: 600 16px / 24px var(--font-sans);
+  --t-body: 400 13px / 20px var(--font-sans);
+  --t-label: 500 12px / 16px var(--font-sans);
+  --t-meta: 400 12px / 16px var(--font-sans);
+  --t-mono: 400 12px / 20px var(--font-mono);
+  --t-mono-lg: 400 13px / 22px var(--font-mono);
+  --t-term: 400 13px / 1.6 var(--font-mono);
+  --t-kicker: 500 11px / 16px var(--font-sans);
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-3: 6px;
+  --r-4: 8px;
+  --r-5: 12px;
+  --r-6: 16px;
+
+  --sidebar-w: 240px;
+  --topbar-h: 40px;
+  --inspect-w: 320px;
+  --row-h: 40px;
+  --nav-h: 32px;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --d-1: 120ms;
+  --d-2: 180ms;
+  --d-3: 240ms;
+
+  --focus: 2px solid var(--accent);
+}
+
+:root[data-theme="light"] {
+  --bg-base: #f3f4f6;
+  --bg-sidebar: #eef0f3;
+  --bg-surface: #f7f8fa;
+  --bg-elevated: #fbfbfc;
+  --bg-hover: #ebeef2;
+  --bg-active: #e4eaf8;
+  --border-subtle: #e2e5ea;
+  --border-strong: #c9ced6;
+  --text-primary: #1a1c20;
+  --text-secondary: #4e5560;
+  --text-tertiary: #5e6570;
+  --text-disabled: #8a919c;
+  --accent: #2f62d4;
+  --accent-muted: #2f62d41a;
+  --online: #1f7a4d;
+  --warn: #9a5b12;
+  --danger: #c03948;
+  --interrupt: #5e6570;
+  --overlay: rgba(26, 28, 32, 0.32);
+  --inset: rgba(255, 255, 255, 0.7);
+  --shadow: 0 8px 24px rgba(26, 28, 32, 0.08), 0 0 0 1px var(--border-subtle);
+  --btn-primary-bg: #1a1c20;
+  --btn-primary-fg: #f3f4f6;
+  --syn-keyword: #7a3db3;
+  --syn-string: #3b6d11;
+  --syn-func: #2f62d4;
+  --syn-number: #b5471c;
+  --syn-comment: #5e6570;
+  --syn-const: #8a5a00;
+  --syn-error: #c03948;
+  --diff-add-bg: #1f7a4d14;
+  --diff-del-bg: #c0394814;
+  --term-bg: #0a0b0d;
+  --term-fg: #e6e8eb;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --d-1: 0ms;
+    --d-2: 0ms;
+    --d-3: 0ms;
+  }
+}

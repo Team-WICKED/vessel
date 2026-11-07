@@ -1,0 +1,47 @@
+{
+  "name": "vessel-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Vessel's web UI, served by `vessel ui` (ADR 0017)",
+  "license": "SEE LICENSE IN ../LICENSE.md",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . && prettier --check . && node scripts/check-fonts.mjs",
+    "format": "prettier --write .",
+    "fonts": "node scripts/check-fonts.mjs",
+    "test": "vitest run",
+    "e2e": "playwright test --project=e2e",
+    "screens": "playwright test --project=screens"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "1.170.46",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "pretendard": "1.3.9",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.14.0",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.6",
+    "vitest": "5.1.0"
+  }
+}

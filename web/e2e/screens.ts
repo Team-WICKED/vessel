@@ -1,0 +1,233 @@
+// `npm run screens`: every main screen, captured into artifacts/screens/
+// (untracked) from a real fleet with some work on it, for review. Not a
+// test of behaviour (app.spec.ts is); each step only waits for what the
+// picture needs.
+
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { expect, type Page, test } from "@playwright/test";
+
+import { type FleetEnv, loadEnv } from "./fleet";
+
+const OUT = join(import.meta.dirname, "..", "artifacts", "screens");
+
+async function shot(page: Page, name: string): Promise<void> {
+  mkdirSync(OUT, { recursive: true });
+  // Let fonts and the last frames settle.
+  await page.evaluate(async () => document.fonts.ready);
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(OUT, `${name}.png`) });
+}
+
+/** Run `vessel` as the user of this fleet would; `data` is the local data
+ * directory (a node's own, for the commands that act on this machine's
+ * node, such as `fleet init` and `fleet join`). */
+function cli(
+  env: FleetEnv,
+  args: string[],
+  input = "",
+  data = join(env.root, "ui-data"),
+): string {
+  return execFileSync(env.vessel, args, {
+    input,
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      HOME: env.root,
+      USERPROFILE: env.root,
+      VESSEL_CONFIG_DIR: join(env.root, "config"),
+      VESSEL_DATA_DIR: data,
+    },
+  });
+}
+
+/** Make laptop the fleet's home, with gpu-box and build-server joined. */
+async function fleetHome(env: FleetEnv): Promise<void> {
+  const sources = join(env.root, "sources");
+  mkdirSync(join(sources, "skills", "release-notes"), { recursive: true });
+  writeFileSync(
+    join(sources, "AGENTS.md"),
+    "# House rules\n\nSmall commits. Tests first.\n",
+  );
+  writeFileSync(
+    join(sources, "skills", "release-notes", "SKILL.md"),
+    "---\nname: release-notes\n---\nWrite them.\n",
+  );
+  const laptop = env.nodes.laptop;
+  if (laptop === undefined) {
+    return;
+  }
+  cli(
+    env,
+    [
+      "fleet",
+      "init",
+      "--node",
+      "laptop",
+      "--instructions",
+      join(sources, "AGENTS.md"),
+      "--skills",
+      join(sources, "skills"),
+    ],
+    "",
+    laptop.data,
+  );
+  // The home publishes its first generation within a few seconds.
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  for (const member of ["gpu-box", "build-server"]) {
+    const node = env.nodes[member];
+    if (node === undefined) {
+      continue;
+    }
+    const invite = cli(
+      env,
+      ["fleet", "invite", "--node", "laptop"],
+      "",
+      laptop.data,
+    );
+    const link = /vessel:\/\/pair#\S+/.exec(invite)?.[0];
+    if (link !== undefined) {
+      cli(
+        env,
+        ["fleet", "join", "--node", member, "--yes"],
+        `${link}\n`,
+        node.data,
+      );
+    }
+  }
+}
+
+async function newSession(
+  page: Page,
+  node: string,
+  mode: "Structured" | "Terminal",
+  cwd: string,
+): Promise<void> {
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New session" });
+  await dialog.getByLabel("Node").selectOption({ label: `${node} · serving` });
+  await dialog.getByLabel("Harness").selectOption("claude-code");
+  await dialog.getByLabel("Working directory").fill(cwd);
+  // The radio sits inside its segment's label, which is what a person clicks.
+  await dialog.locator(".seg label").filter({ hasText: mode }).click();
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await expect(dialog).toBeHidden();
+}
+
+test("every main screen", async ({ page }) => {
+  test.setTimeout(240_000);
+  const env = loadEnv();
+  const origin = new URL(env.url).origin;
+  try {
+    await fleetHome(env);
+  } catch (error) {
+    console.warn(`fleet sync could not be set up: ${String(error)}`);
+  }
+  await page.goto(env.url);
+  await expect(page.getByRole("navigation", { name: "Fleet" })).toBeVisible();
+
+  // Some work on the fleet: a structured session with a pending permission
+  // on laptop, terminals on gpu-box and build-server.
+  const project = join(env.root, "laptop-home");
+  await newSession(page, "gpu-box", "Terminal", join(env.root, "gpu-box-home"));
+  await page.getByLabel("Session terminal").click();
+  await page.keyboard.type("cwd\r");
+  await page.keyboard.type("args\r");
+  await newSession(
+    page,
+    "build-server",
+    "Terminal",
+    join(env.root, "build-server-home"),
+  );
+  await newSession(page, "laptop", "Structured", project);
+  const prompt = page.getByRole("textbox", { name: "Prompt" });
+  await expect(page.getByText(/Ready · harness session/)).toBeVisible();
+  await prompt.fill(
+    "The fleet overview draws stale generation numbers. Check how members report what they applied, then fix the display.",
+  );
+  await prompt.press("Control+Enter");
+  await expect(page.locator(".perm-sticky")).toBeVisible();
+  await shot(page, "03-session-structured");
+  const structured = page.url();
+
+  await page.goto(`${origin}/fleet/laptop`);
+  await expect(
+    page.getByRole("complementary", { name: "laptop" }),
+  ).toBeVisible();
+  await shot(page, "01-fleet");
+
+  await page.goto(`${origin}/sessions`);
+  await expect(page.getByRole("table", { name: "Sessions" })).toBeVisible();
+  await shot(page, "02-sessions");
+
+  await page
+    .getByRole("table", { name: "Sessions" })
+    .getByRole("row")
+    .filter({ hasText: "gpu-box" })
+    .first()
+    .click();
+  await expect(page.getByLabel("Session terminal")).toContainText("args [");
+  await shot(page, "04-session-terminal");
+
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "New session" })).toBeVisible();
+  await shot(page, "05-new-session");
+  await page.keyboard.press("Escape");
+
+  await page.goto(`${origin}/sync?node=laptop`);
+  // Members report what they applied once they have pulled it.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await page.waitForTimeout(1000);
+    if ((await page.getByText("current").count()) >= 2) {
+      break;
+    }
+    await page.reload();
+  }
+  await shot(page, "06-sync");
+
+  await page.goto(`${origin}/devices?node=laptop`);
+  await page.getByLabel("Label").fill("phone");
+  await page.getByRole("button", { name: "New link" }).click();
+  await expect(
+    page.getByRole("img", { name: "Pairing link as a QR code" }),
+  ).toBeVisible();
+  const link = (await page.locator(".link-box .link-text").textContent()) ?? "";
+  try {
+    const phone = join(env.root, "phone");
+    execFileSync(env.vessel, ["nodes", "add", "laptop", "--pair", "--yes"], {
+      input: `${link}\n`,
+      env: {
+        PATH: process.env.PATH,
+        HOME: phone,
+        USERPROFILE: phone,
+        VESSEL_CONFIG_DIR: join(phone, "config"),
+      },
+    });
+  } catch (error) {
+    console.warn(`a device could not pair: ${String(error)}`);
+  }
+  await page.getByLabel("Label").fill("tablet");
+  await page.getByRole("button", { name: "New link" }).click();
+  await page.waitForTimeout(800);
+  await shot(page, "07-devices");
+
+  await page.goto(`${origin}/settings`);
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await shot(page, "08-settings");
+
+  // The light theme, re-derived (DESIGN.md §4.2).
+  await page.locator(".seg label").filter({ hasText: "Light" }).click();
+  await page.goto(`${origin}/fleet/laptop`);
+  await expect(
+    page.getByRole("complementary", { name: "laptop" }),
+  ).toBeVisible();
+  await shot(page, "09-fleet-light");
+  await page.goto(structured);
+  await expect(page.locator(".perm-sticky")).toBeVisible();
+  await shot(page, "10-session-structured-light");
+  await page.goto(`${origin}/sessions`);
+  await expect(page.getByRole("table", { name: "Sessions" })).toBeVisible();
+  await shot(page, "11-sessions-light");
+});

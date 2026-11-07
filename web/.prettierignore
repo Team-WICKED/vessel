@@ -1,0 +1,8 @@
+dist/
+artifacts/
+test-results/
+playwright-report/
+package-lock.json
+# Generated from the Rust types.
+src/wire/proto.ts
+src/wire/bridge.ts

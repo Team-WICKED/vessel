@@ -1,0 +1,6 @@
+node_modules/
+dist/
+# Playwright's output and the screenshots `npm run screens` takes.
+artifacts/
+test-results/
+playwright-report/
