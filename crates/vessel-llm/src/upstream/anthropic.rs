@@ -18,6 +18,7 @@
 
 use crate::error::TranslateError;
 use crate::ir;
+use crate::ir::envelope;
 use crate::sse::SseEvent;
 use crate::wire::anthropic::{
     self as wire, CacheControl, CacheKind, ContentBlock, CustomTool, Delta, DocumentBlock,
@@ -321,7 +322,9 @@ fn assistant(message: &ir::Message, options: &Options, thinking_on: bool) -> Vec
 
 /// A thinking block Anthropic made: natively signed (from no envelope) or
 /// sealed by Vessel from this provider. Everything else, envelopes of
-/// other providers included, never reaches Anthropic.
+/// other providers included, never reaches Anthropic; nor does an opaque
+/// field holding `vsl1:` anywhere (the last check before Anthropic, so no
+/// path through an unwrapped envelope can send one).
 fn own_thinking(thinking: &ir::Thinking, options: &Options) -> Option<ContentBlock> {
     let ours = thinking
         .source
@@ -331,18 +334,21 @@ fn own_thinking(thinking: &ir::Thinking, options: &Options) -> Option<ContentBlo
         return None;
     }
     match &thinking.replay {
-        ir::Replay::AnthropicSignature(signature) if !signature.is_empty() => {
+        ir::Replay::AnthropicSignature(signature)
+            if !signature.is_empty() && !envelope::mentions(signature) =>
+        {
             Some(ContentBlock::Thinking(ThinkingBlock {
                 thinking: thinking.text.clone(),
                 signature: signature.clone(),
             }))
         }
-        ir::Replay::AnthropicRedacted(data) => {
+        ir::Replay::AnthropicRedacted(data) if !data.is_empty() && !envelope::mentions(data) => {
             Some(ContentBlock::RedactedThinking(RedactedThinkingBlock {
                 data: data.clone(),
             }))
         }
         ir::Replay::AnthropicSignature(_)
+        | ir::Replay::AnthropicRedacted(_)
         | ir::Replay::Text
         | ir::Replay::ResponsesEncrypted(_) => None,
     }

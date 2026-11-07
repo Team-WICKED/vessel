@@ -128,6 +128,19 @@ fn only_anthropic_s_own_thinking_reaches_it() {
                     Some("openai"),
                 ),
                 thinking(ir::Replay::AnthropicSignature(String::new()), None),
+                // The last check before Anthropic (the security review's
+                // finding 7): `vsl1:` inside an opaque field, however it
+                // got into the neutral form, is never sent.
+                thinking(
+                    ir::Replay::AnthropicSignature("vsl1:other:text:".into()),
+                    Some("anthropic"),
+                ),
+                thinking(ir::Replay::AnthropicSignature("EqQBvsl1:x".into()), None),
+                thinking(
+                    ir::Replay::AnthropicRedacted("vsl1:other:anthropic-redacted:x".into()),
+                    Some("anthropic"),
+                ),
+                thinking(ir::Replay::AnthropicRedacted(String::new()), None),
                 ir::Part::Text("ok".into()),
             ],
         },

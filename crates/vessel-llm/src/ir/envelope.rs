@@ -34,6 +34,15 @@ pub fn is_envelope(text: &str) -> bool {
     text.starts_with(PREFIX)
 }
 
+/// Whether an opaque field holds an envelope anywhere, not only at its
+/// start: what must never reach a provider as its own opaque field (the
+/// security review of milestone 5, finding 7). Native signatures and
+/// encrypted content are base64, which has no `:`.
+#[must_use]
+pub fn mentions(text: &str) -> bool {
+    text.contains(PREFIX)
+}
+
 /// Wrap `replay`, made by the provider the node calls `source`.
 #[must_use]
 pub fn seal(source: &str, replay: &Replay) -> String {
@@ -48,12 +57,18 @@ pub fn seal(source: &str, replay: &Replay) -> String {
 
 /// Unwrap an envelope: the provider that made it and its form. `None` when
 /// `text` is not an envelope at all; a malformed one opens as text from no
-/// provider.
+/// provider, and so does one whose payload holds another envelope (a
+/// harness may write anything here: an envelope is a transport hint, not
+/// proof of where the reasoning came from, and only the provider's own
+/// check of its payload is).
 #[must_use]
 pub fn open(text: &str) -> Option<(String, Replay)> {
     let rest = text.strip_prefix(PREFIX)?;
     let opened = rest.split_once(':').and_then(|(source, rest)| {
         let (kind, payload) = rest.split_once(':')?;
+        if mentions(payload) {
+            return None;
+        }
         let payload = payload.to_owned();
         let replay = match kind {
             "text" => Replay::Text,
@@ -89,7 +104,14 @@ mod tests {
     fn a_native_signature_is_no_envelope_and_a_broken_one_is_from_nowhere() {
         assert_eq!(open("EqQBCkYIARgC"), None);
         assert!(!is_envelope("EqQBCkYIARgC"));
-        for broken in ["vsl1:", "vsl1:openrouter", "vsl1:openrouter:mystery:x"] {
+        for broken in [
+            "vsl1:",
+            "vsl1:openrouter",
+            "vsl1:openrouter:mystery:x",
+            // An envelope inside one opens as nothing to replay.
+            "vsl1:local:anthropic:vsl1:other:text:",
+            "vsl1:local:anthropic:EqQBvsl1:x",
+        ] {
             assert_eq!(
                 open(broken),
                 Some((String::new(), Replay::Text)),
