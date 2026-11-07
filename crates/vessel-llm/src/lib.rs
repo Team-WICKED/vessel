@@ -26,6 +26,8 @@ pub mod error;
 mod fixtures;
 pub mod front;
 pub mod ir;
+#[cfg(test)]
+mod matrix;
 pub mod sse;
 pub mod upstream;
 pub mod wire;

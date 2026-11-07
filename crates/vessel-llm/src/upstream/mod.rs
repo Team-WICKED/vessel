@@ -3,4 +3,6 @@
 //! each answer exactly once ([`crate::ir::Event::Stop`] or
 //! [`crate::ir::Event::Failed`]).
 
+pub mod anthropic;
 pub mod chat;
+pub mod responses;

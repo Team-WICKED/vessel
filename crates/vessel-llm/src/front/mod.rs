@@ -3,3 +3,4 @@
 //! API's events, ending each answer exactly once.
 
 pub mod anthropic;
+pub mod responses;
