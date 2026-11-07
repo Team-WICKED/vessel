@@ -235,6 +235,15 @@ pub(crate) struct CopyTo {
 pub(crate) enum NodeCommand {
     /// Start a node and serve until Ctrl-C.
     Start {
+        /// Operator-owned LSP roots and executable overrides (JSON).
+        #[arg(long)]
+        lsp_config: Option<PathBuf>,
+        /// Saved-source root allowed to Read callers, including the fleet (repeatable).
+        #[arg(long = "lsp-root")]
+        lsp_roots: Vec<PathBuf>,
+        /// Trusted root where LSP may run build scripts/proc macros (repeatable).
+        #[arg(long = "lsp-full-analysis-root")]
+        lsp_full_roots: Vec<PathBuf>,
         /// Address to listen on.
         #[arg(long, env = "VESSEL_BIND", default_value = "127.0.0.1:7077")]
         bind: SocketAddr,

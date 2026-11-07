@@ -310,7 +310,7 @@ fn admit(models: &Models, parts: &Parts, front: Front) -> Result<Admitted, Box<R
     };
     // A harness's connection: never closed to make room (`listen`).
     if let Some(proof) = parts.extensions.get::<super::listen::Proof>() {
-        proof.prove();
+        proof.prove(holder.session.id());
     }
     if !own_host(models, parts) {
         tracing::info!("refused a model call naming another host");
@@ -925,12 +925,17 @@ async fn pass(
     let redactor = answer.redactor();
     if !passed.stream {
         return match answer.body().await {
-            Ok(body) => {
-                record.finish(&whole_outcome(front, &body));
+            Ok(body) => match redact_whole(&redactor, body) {
                 // A 200 may carry a failed response, quoting the key.
-                let body = redact_whole(&redactor, body);
-                ([(header::CONTENT_TYPE, "application/json")], body).into_response()
-            }
+                Ok(body) => {
+                    record.finish(&whole_outcome(front, &body));
+                    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+                }
+                Err(withheld) => {
+                    record.finish(&Outcome::failed(withheld.class));
+                    failure_response(front, &withheld)
+                }
+            },
             Err(failure) => {
                 record.finish(&Outcome::failed(failure.class));
                 failure_response(front, &redactor.failure(failure))
@@ -950,12 +955,14 @@ async fn pass(
 
 /// A whole answer with the key removed from its JSON strings and member
 /// names (or from its text, if it is not JSON); the provider's bytes when
-/// it holds none.
-fn redact_whole(redactor: &Redactor, body: Bytes) -> Bytes {
+/// it holds none. One that still holds it, escaped in JSON `serde_json`
+/// cannot decode, is withheld: the failure to answer instead.
+fn redact_whole(redactor: &Redactor, body: Bytes) -> Result<Bytes, ir::Failure> {
     let text = String::from_utf8_lossy(&body);
     match redactor.json(&text) {
-        std::borrow::Cow::Borrowed(_) => body,
-        std::borrow::Cow::Owned(redacted) => Bytes::from(redacted),
+        Some(std::borrow::Cow::Borrowed(_)) => Ok(body),
+        Some(std::borrow::Cow::Owned(redacted)) => Ok(Bytes::from(redacted)),
+        None => Err(quoted()),
     }
 }
 
@@ -975,10 +982,13 @@ fn withheld(redactor: &Redactor, own: Option<ir::Failure>) -> ir::Failure {
     own.map_or_else(quoted, |failure| redactor.failure(failure))
 }
 
-/// The failure in place of an answer's event that quoted the call's key.
+/// The failure in place of an answer that quoted the call's key. Not a
+/// transient class: the same request would most likely be answered the
+/// same way, and a harness retries a transient failure as a new, billed
+/// call (Claude Code backs off on `overloaded_error`).
 fn quoted() -> ir::Failure {
     ir::Failure::new(
-        ir::FailureClass::UpstreamError,
+        ir::FailureClass::RefusedRequest,
         "the provider's answer quoted the call's key; the proxy withheld it and ended the call",
     )
 }

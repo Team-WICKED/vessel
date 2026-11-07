@@ -358,6 +358,16 @@ const fn forwardable(method: Method) -> bool {
         | Method::ListSecrets
         | Method::DeleteSecret
         | Method::CopySecret
+        | Method::LspWorkspaceSymbols
+        | Method::LspDocumentSymbols
+        | Method::LspDefinition
+        | Method::LspReferences
+        | Method::LspHover
+        | Method::LspImplementations
+        | Method::LspTypeDefinition
+        | Method::LspIncomingCalls
+        | Method::LspOutgoingCalls
+        | Method::LspDiagnostics
         | Method::ListModels => true,
         Method::Subscribe
         | Method::Unsubscribe

@@ -1,7 +1,9 @@
 # Backend milestone 5: model routing
 
-Status: accepted (2026-11-07, coordinator's decisions below), Track M5;
-ADR 0015. ROADMAP Phase 3,
+Status: done, 2026-11-07, after three security review rounds (the
+"Security" section's "After the review", "After the verification round"
+and "After the third round"); accepted the same day with the
+coordinator's decisions below. Track M5; ADR 0015. ROADMAP Phase 3,
 VISION section 4: "every harness can use every model, through a routing
 proxy the node runs locally". Protocol 7 is shared by milestones 5 to 7;
 this plan's rows are appended at the end of the table with `since 7`.
@@ -539,6 +541,43 @@ two lint fixes and one loop adjusted (below), beside tests of our own:
   renewed each refused connection with a second 401. Refusals now close,
   so it checks that each held socket reads its end; the sockets stay
   open, and the extra connection must still get 200.
+
+### After the third round (2026-11-07)
+
+The final look (9077ead) found no P1 or P2 and voted to merge; it found
+three P3s and a nit, each with a test (`crates/*/tests/m5_round3*.rs`,
+ported with two adjustments, below):
+
+- **A plain key is ordinary text** (F1). With `EMPTY`, what local
+  servers are often given, a model writing "the queue is EMPTY" had its
+  answer ended, and Claude Code retried it as `overloaded_error`, each
+  retry a billed call. A key is used only if it is distinctive (at
+  least 20 bytes, of at least ten different ones,
+  `ApiKey::distinctive`): any other refuses the call with 403 where the
+  key is read, before anything goes up, and the message says to give a
+  local server no key or a long random one. That is where the value is
+  known; a secret may be set after `models.toml` is loaded. An answer
+  withheld for quoting the key is an invalid request, which no harness
+  retries.
+- **Redaction fails closed** (F2). JSON `serde_json` refuses but a
+  harness's parser takes (a lone surrogate, nesting past 128) was read
+  as holding no key. Text with a backslash that does not decode is
+  unescaped leniently and matched as text; a whole answer still holding
+  the key is withheld. A key cut by the line break between two `data:`
+  lines of one event is still not looked for: inside a JSON string the
+  break makes the text invalid JSON to the harness too.
+- **A share per session** (F3). A session's token, readable by every
+  command it runs, could prove all 256 connections. A session proves at
+  most 32; past that its connections are served but may be closed to
+  make room.
+- **Pipelined heads** (F4, a limit). The 408 follows bytes, not heads:
+  a head pipelined behind an answered request and cut off by the
+  deadline gets a bare close. Neither harness pipelines;
+  `r3_pipelined_partial_head_is_answered_408` is ignored with that
+  reason.
+- **Adjusted test.** `r3_a_short_key_matching_model_text_ends_valid_answers`
+  now checks that `EMPTY` is refused with 403 and nothing goes up, then
+  that a keyless route passes the same answers untouched.
 
 ## Done criteria
 

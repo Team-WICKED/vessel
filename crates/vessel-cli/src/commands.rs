@@ -25,8 +25,15 @@ pub(crate) async fn run(cli: Cli) -> Result<(), CliError> {
     let target = &cli.target;
     match cli.command {
         Command::Node {
-            command: NodeCommand::Start { bind, name },
-        } => node_start(target, bind, name).await,
+            command:
+                NodeCommand::Start {
+                    bind,
+                    name,
+                    lsp_config,
+                    lsp_roots,
+                    lsp_full_roots,
+                },
+        } => node_start(target, bind, name, lsp_config, lsp_roots, lsp_full_roots).await,
         Command::Node {
             command: NodeCommand::Install(install),
         } => remote::install(target, install).await,
@@ -159,6 +166,9 @@ async fn node_start(
     target: &Target,
     bind: SocketAddr,
     name: Option<String>,
+    lsp_config: Option<PathBuf>,
+    lsp_roots: Vec<PathBuf>,
+    lsp_full_roots: Vec<PathBuf>,
 ) -> Result<(), CliError> {
     // The binary, so the account it runs as comes from its own environment
     // (`HarnessEnv`; the library never reads it).
@@ -168,6 +178,23 @@ async fn node_start(
     let mut config = Config::new(data_dir(target)?, env);
     config.bind = Some(bind);
     config.name = name;
+    config.lsp.registry.search_path = std::env::var_os("PATH").unwrap_or_default();
+    config.lsp.registry.system_root = std::env::var_os("SystemRoot");
+    if let Some(path) = lsp_config {
+        vessel_node::load_lsp_config(&mut config, &path).await?;
+    }
+    config.lsp_roots.extend(
+        lsp_roots
+            .into_iter()
+            .map(|path| vessel_node::LspRoot {
+                path,
+                full_analysis: false,
+            })
+            .chain(lsp_full_roots.into_iter().map(|path| vessel_node::LspRoot {
+                path,
+                full_analysis: true,
+            })),
+    );
     // Sessions' agents reach this node through this executable's `mcp`
     // command (ADR 0013).
     config.vessel_mcp = std::env::current_exe().ok().map(VesselMcp::vessel);

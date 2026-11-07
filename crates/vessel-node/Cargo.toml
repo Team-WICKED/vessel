@@ -21,6 +21,7 @@ vessel-harness.workspace = true
 # The model routing proxy's APIs and upstream client (ADR 0015).
 vessel-llm.workspace = true
 vessel-proto.workspace = true
+vessel-lsp.workspace = true
 vessel-relay.workspace = true
 vessel-rpc.workspace = true
 vessel-secure.workspace = true

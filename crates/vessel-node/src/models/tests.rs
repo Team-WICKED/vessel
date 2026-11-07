@@ -910,6 +910,8 @@ async fn an_event_quoting_the_key_ends_the_call() {
             assert!(got.body.contains("event: message_start"), "{got:?}");
             assert!(got.body.contains("event: error"), "{got:?}");
             assert!(got.body.contains("quoted the call's key"), "{got:?}");
+            // Not a class a harness retries as a new, billed call.
+            assert!(got.body.contains("invalid_request_error"), "{got:?}");
             assert!(!got.body.contains("u002d"), "{got:?}");
             assert!(!got.body.contains(KEY), "{got:?}");
         }
@@ -918,7 +920,7 @@ async fn an_event_quoting_the_key_ends_the_call() {
         assert!(
             calls
                 .iter()
-                .all(|call| call.failure == Some(ModelFailure::UpstreamError)),
+                .all(|call| call.failure == Some(ModelFailure::RefusedRequest)),
             "{calls:?}"
         );
 
@@ -942,7 +944,7 @@ async fn an_event_quoting_the_key_ends_the_call() {
         assert!(got.body.contains("quoted the call's key"), "{got:?}");
         assert!(!got.body.contains(KEY), "{got:?}");
         let calls = model_calls(&qwen, records).await;
-        assert_eq!(calls[0].failure, Some(ModelFailure::UpstreamError));
+        assert_eq!(calls[0].failure, Some(ModelFailure::RefusedRequest));
         fixture.stop().await;
     })
     .await;
@@ -1005,9 +1007,11 @@ async fn models_on(stream: &mut TcpStream, proxy: SocketAddr, token: Option<&str
 }
 
 /// Every place held: the oldest connection that never showed a token is
-/// closed to make room, a refused request closes its own connection, and
-/// only when every connection is a harness's is a new one answered 503
-/// (the verification round: tokenless keep-alives starved the harness).
+/// closed to make room, a refused request closes its own connection, a
+/// session proves at most `PROVEN_PER_SESSION` connections, and only when
+/// every connection is proven is a new one answered 503 (the verification
+/// round: tokenless keep-alives starved the harness; the third: one
+/// session's proven connections did).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_full_proxy_makes_room_by_closing_tokenless_connections() {
     within(async {
@@ -1032,6 +1036,8 @@ async fn a_full_proxy_makes_room_by_closing_tokenless_connections() {
         assert_eq!(refused.read_to_end(&mut rest).await.unwrap(), 0);
         drop(tokenless);
 
+        // One session alone cannot hold every place: past its share its
+        // connections stay among those closed for room.
         let mut harnesses = vec![harness];
         while harnesses.len() < limit {
             let mut stream = TcpStream::connect(fixture.proxy).await.unwrap();
@@ -1040,6 +1046,31 @@ async fn a_full_proxy_makes_room_by_closing_tokenless_connections() {
                 200
             );
             harnesses.push(stream);
+        }
+        let (_other, other_token, _other_records) = fixture.session("sonnet").await;
+        let mut other = TcpStream::connect(fixture.proxy).await.unwrap();
+        assert_eq!(
+            models_on(&mut other, fixture.proxy, Some(&other_token)).await,
+            200
+        );
+        drop(other);
+        drop(harnesses);
+
+        // Every place proven, a share per session: the next is refused.
+        let share = super::listen::PROVEN_PER_SESSION;
+        let mut harnesses = Vec::new();
+        let mut sessions = Vec::new();
+        while harnesses.len() < limit {
+            let (handle, token, records) = fixture.session("sonnet").await;
+            for _ in 0..share {
+                let mut stream = TcpStream::connect(fixture.proxy).await.unwrap();
+                assert_eq!(
+                    models_on(&mut stream, fixture.proxy, Some(&token)).await,
+                    200
+                );
+                harnesses.push(stream);
+            }
+            sessions.push((handle, token, records));
         }
         let mut extra = TcpStream::connect(fixture.proxy).await.unwrap();
         let mut answer = Vec::new();
@@ -1050,11 +1081,13 @@ async fn a_full_proxy_makes_room_by_closing_tokenless_connections() {
             String::from_utf8_lossy(&answer)
         );
         let mut first = harnesses.swap_remove(0);
+        let first_token = &sessions.first().unwrap().1;
         assert_eq!(
-            models_on(&mut first, fixture.proxy, Some(&token)).await,
+            models_on(&mut first, fixture.proxy, Some(first_token)).await,
             200
         );
         drop(harnesses);
+        drop(sessions);
         fixture.stop().await;
     })
     .await;

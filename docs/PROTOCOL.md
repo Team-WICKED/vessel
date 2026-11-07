@@ -6,10 +6,36 @@ an entry here. Additive, optional fields do not need a bump.
 
 ## Version 7 (2026-11-07)
 
-Nodes speak 2..=7; version 7 only adds.
+Nodes speak 2..=7; version 7 only adds: the LSP contract (milestone 6)
+and model routing (milestone 5), each appending its rows to the RPC
+table with `since 7`.
 
-Model routing (milestone 5, `docs/plans/backend-m5.md`, ADR 0015), being
-built:
+### LSP contract (milestone 6)
+
+The M6 LSP rows append to the RPC table with `since 7`:
+`lsp.workspace_symbols`, `lsp.document_symbols`, `lsp.definition`,
+`lsp.references`, `lsp.hover`, `lsp.implementations`, `lsp.type_definition`,
+`lsp.incoming_calls`, `lsp.outgoing_calls`, `lsp.diagnostics`. All need Read
+and are forwardable under the existing scope intersection. The runtime serves the implemented capability subset and returns
+`unsupported` when the selected server does not advertise a feature.
+
+Each request selects `workspace: {root, language}`. Languages are `rust`,
+`type_script`, `python`, `go`, `cpp`. Files are relative paths without
+traversal. Positions use 1-based lines and Unicode scalar columns; ranges
+have exclusive ends. Page requests default to offset 0, limit 50; the node
+caps limits at 200. Pages are sorted but may shift when files change.
+
+Responses carry context: covered files, optional observation time (the oldest contributing cached report), freshness
+(`saved`, `cached`, `unknown`), indexing (`unknown`, `busy`, `observed_idle`)
+and explicit workspace completeness. An empty diagnostics cache is unknown,
+not clean. Hover is bounded untrusted plaintext/Markdown; clients disable
+raw HTML. Server JSON never appears in this contract. ADR 0016 and the M6
+plan define confinement and the operator-only full-analysis opt-in.
+
+### Model routing (milestone 5)
+
+`docs/plans/backend-m5.md`, ADR 0015. `model.list` follows the LSP rows
+in the RPC table.
 
 - Types: `ModelRouteName` and `ProviderName` (a route's and a provider's
   name in a node's `models.toml`: 1-64 letters, digits, `.`, `_` or `-`);

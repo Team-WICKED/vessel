@@ -57,6 +57,27 @@ message: string, } | { "event": "harness_log",
 line: string, };
 
 /**
+ * Shared fields for a query at a saved source position.
+ */
+export type AtPosition = { 
+/**
+ * Authorized server selection.
+ */
+workspace: Workspace, 
+/**
+ * Relative saved file.
+ */
+file: FilePath, 
+/**
+ * One-based Unicode scalar position.
+ */
+position: Position, 
+/**
+ * Sorted result page (unused by hover).
+ */
+page: PageRequest, };
+
+/**
  * Reply to `fleet.blob`.
  */
 export type BlobChunk = { 
@@ -104,7 +125,7 @@ export type BundlePath = string;
 /**
  * A request of any method, as sent on the wire.
  */
-export type Call = { "method": "node.info", "params": GetNode } | { "method": "harness.list", "params": ListHarnesses } | { "method": "session.list", "params": ListSessions } | { "method": "session.get", "params": GetSession } | { "method": "session.create", "params": CreateSession } | { "method": "session.send", "params": SendInput } | { "method": "session.kill", "params": KillSession } | { "method": "session.read", "params": ReadEvents } | { "method": "session.subscribe", "params": Subscribe } | { "method": "session.unsubscribe", "params": Unsubscribe } | { "method": "node.stop", "params": StopNode } | { "method": "device.invite", "params": InviteDevice } | { "method": "device.list", "params": ListDevices } | { "method": "device.revoke", "params": RevokeDevice } | { "method": "profile.list", "params": ListProfiles } | { "method": "profile.reload", "params": ReloadProfiles } | { "method": "session.move_profile", "params": MoveProfile } | { "method": "fleet.manifest", "params": GetManifest } | { "method": "fleet.blob", "params": ReadBlob } | { "method": "fleet.watch", "params": WatchFleet } | { "method": "fleet.report", "params": ReportApplied } | { "method": "fleet.members", "params": ListMembers } | { "method": "fleet.forward", "params": Forward } | { "method": "fleet.relay", "params": RelayCall } | { "method": "fleet.deliver", "params": Deliver } | { "method": "fleet.grant", "params": GrantHome } | { "method": "fleet.callback", "params": GetCallback } | { "method": "fleet.peers", "params": ListPeers } | { "method": "fleet.nodes", "params": ListNodes } | { "method": "fleet.forget", "params": ForgetNode } | { "method": "session.export", "params": ExportSession } | { "method": "session.import", "params": ImportSession } | { "method": "memory.export", "params": ExportMemory } | { "method": "memory.import", "params": ImportMemory } | { "method": "transfer.read", "params": ReadTransfer } | { "method": "transfer.close", "params": CloseTransfer } | { "method": "secret.set", "params": SetSecret } | { "method": "secret.list", "params": ListSecrets } | { "method": "secret.delete", "params": DeleteSecret } | { "method": "secret.copy", "params": CopySecret } | { "method": "model.list", "params": ListModels };
+export type Call = { "method": "node.info", "params": GetNode } | { "method": "harness.list", "params": ListHarnesses } | { "method": "session.list", "params": ListSessions } | { "method": "session.get", "params": GetSession } | { "method": "session.create", "params": CreateSession } | { "method": "session.send", "params": SendInput } | { "method": "session.kill", "params": KillSession } | { "method": "session.read", "params": ReadEvents } | { "method": "session.subscribe", "params": Subscribe } | { "method": "session.unsubscribe", "params": Unsubscribe } | { "method": "node.stop", "params": StopNode } | { "method": "device.invite", "params": InviteDevice } | { "method": "device.list", "params": ListDevices } | { "method": "device.revoke", "params": RevokeDevice } | { "method": "profile.list", "params": ListProfiles } | { "method": "profile.reload", "params": ReloadProfiles } | { "method": "session.move_profile", "params": MoveProfile } | { "method": "fleet.manifest", "params": GetManifest } | { "method": "fleet.blob", "params": ReadBlob } | { "method": "fleet.watch", "params": WatchFleet } | { "method": "fleet.report", "params": ReportApplied } | { "method": "fleet.members", "params": ListMembers } | { "method": "fleet.forward", "params": Forward } | { "method": "fleet.relay", "params": RelayCall } | { "method": "fleet.deliver", "params": Deliver } | { "method": "fleet.grant", "params": GrantHome } | { "method": "fleet.callback", "params": GetCallback } | { "method": "fleet.peers", "params": ListPeers } | { "method": "fleet.nodes", "params": ListNodes } | { "method": "fleet.forget", "params": ForgetNode } | { "method": "session.export", "params": ExportSession } | { "method": "session.import", "params": ImportSession } | { "method": "memory.export", "params": ExportMemory } | { "method": "memory.import", "params": ImportMemory } | { "method": "transfer.read", "params": ReadTransfer } | { "method": "transfer.close", "params": CloseTransfer } | { "method": "secret.set", "params": SetSecret } | { "method": "secret.list", "params": ListSecrets } | { "method": "secret.delete", "params": DeleteSecret } | { "method": "secret.copy", "params": CopySecret } | { "method": "lsp.workspace_symbols", "params": WorkspaceSymbols } | { "method": "lsp.document_symbols", "params": DocumentSymbols } | { "method": "lsp.definition", "params": Definition } | { "method": "lsp.references", "params": References } | { "method": "lsp.hover", "params": GetHover } | { "method": "lsp.implementations", "params": Implementations } | { "method": "lsp.type_definition", "params": TypeDefinition } | { "method": "lsp.incoming_calls", "params": IncomingCalls } | { "method": "lsp.outgoing_calls", "params": OutgoingCalls } | { "method": "lsp.diagnostics", "params": Diagnostics } | { "method": "model.list", "params": ListModels };
 
 /**
  * What `fleet.callback` answers.
@@ -160,6 +181,32 @@ name: string, } | { "type": "opaque",
 raw: RawJson, };
 
 /**
+ * Scope and age of every answer, including empty answers.
+ */
+export type Context = { 
+/**
+ * Files represented by this result/cache, never a promise of all files.
+ */
+files: Array<FilePath>, 
+/**
+ * Query observation time, or the oldest contributing cached report;
+ * absent when nothing was reported.
+ */
+observed_at: string | null, 
+/**
+ * Progress actually observed on this server generation.
+ */
+indexing: Indexing, 
+/**
+ * Saved query, cached report, or unknown.
+ */
+freshness: Freshness, 
+/**
+ * True only for a server report explicitly covering the whole workspace.
+ */
+workspace_complete: boolean, };
+
+/**
  * `secret.copy` (protocol 6): send this node's value for `name` to fleet
  * node `to`, which stores it under the same name. Needs `admin` here, and
  * the delivering grant on `to` must hold `admin` too.
@@ -200,6 +247,11 @@ node: NodeId,
  * The agent's session.
  */
 session: SessionId, };
+
+/**
+ * Definitions at a saved source position.
+ */
+export type Definition = AtPosition;
 
 /**
  * `secret.delete` (protocol 6): remove a secret. Needs `admin`.
@@ -261,6 +313,61 @@ scopes: Array<Scope>,
  * When it was revoked, if it was.
  */
 revoked_at?: string | null, };
+
+/**
+ * A bounded diagnostic with only authorized source locations.
+ */
+export type Diagnostic = { 
+/**
+ * Diagnostic location.
+ */
+location: Location, 
+/**
+ * Server severity.
+ */
+severity: Severity, 
+/**
+ * Bounded explanatory text.
+ */
+message: string, 
+/**
+ * Optional bounded server/source label.
+ */
+source: string | null, };
+
+/**
+ * File diagnostics, or the known workspace diagnostic cache.
+ */
+export type Diagnostics = { 
+/**
+ * Authorized server selection.
+ */
+workspace: Workspace, 
+/**
+ * One file, or all files the server has reported.
+ */
+file: FilePath | null, 
+/**
+ * Sorted result page.
+ */
+page: PageRequest, };
+
+/**
+ * Symbols in one saved file.
+ */
+export type DocumentSymbols = { 
+/**
+ * Authorized server selection.
+ */
+workspace: Workspace, 
+/**
+ * Relative saved file.
+ */
+file: FilePath, 
+/**
+ * Sorted result page.
+ */
+page: PageRequest, };
 
 /**
  * A duration in whole milliseconds.
@@ -352,6 +459,11 @@ session: SessionId,
 force?: boolean, };
 
 /**
+ * A file under the authorized workspace, never an absolute path or URI.
+ */
+export type FilePath = string;
+
+/**
  * A member as its home reports it.
  */
 export type FleetMember = { 
@@ -440,6 +552,11 @@ export type Forwarded = {
 reply: Reply, };
 
 /**
+ * How saved contents relate to the response.
+ */
+export type Freshness = "saved" | "cached" | "unknown";
+
+/**
  * A bundle generation. The home increases it by one each time it
  * publishes; members compare it to what they last applied.
  */
@@ -463,6 +580,11 @@ node: NodeId,
  * Its key, which the ticket names.
  */
 key: NodePublicKey, };
+
+/**
+ * Hover at a saved source position.
+ */
+export type GetHover = AtPosition;
 
 /**
  * `fleet.manifest` (protocol 5): the home's current bundle. Needs `Sync`.
@@ -540,6 +662,31 @@ export type HarnessSessionId = string;
 export type HeaderName = string;
 
 /**
+ * Hover text is untrusted content; clients must not render raw HTML.
+ */
+export type Hover = { 
+/**
+ * Plain text or Markdown as indicated by `format`.
+ */
+text: string, 
+/**
+ * The text's representation.
+ */
+format: Markup, 
+/**
+ * Optional range in the requested file.
+ */
+range: Range | null, 
+/**
+ * Whether text was shortened to fit its budget.
+ */
+truncated: boolean, 
+/**
+ * Scope and freshness, even when text is empty.
+ */
+context: Context, };
+
+/**
  * An `http://` or `https://` URL with a host and no credentials in it.
  *
  * A URL is public: it travels in manifests and, for some harnesses, on a
@@ -550,6 +697,11 @@ export type HeaderName = string;
  * enforced: keep secrets out of URLs.
  */
 export type HttpUrl = string;
+
+/**
+ * Implementations at a saved source position.
+ */
+export type Implementations = AtPosition;
 
 /**
  * `memory.import` (protocol 6): the same pull for memory. A file that
@@ -598,6 +750,16 @@ cwd?: string | null,
 start?: boolean, };
 
 /**
+ * Calls to the symbol at a saved source position.
+ */
+export type IncomingCalls = AtPosition;
+
+/**
+ * What progress the server actually reported, never inferred from silence.
+ */
+export type Indexing = "unknown" | "busy" | "observed_idle";
+
+/**
  * Reply to `device.invite`.
  */
 export type Invitation = { 
@@ -642,6 +804,11 @@ export type KillSession = {
  * Which session.
  */
 session: SessionId, };
+
+/**
+ * A supported server family; JavaScript uses the TypeScript server.
+ */
+export type Language = "rust" | "type_script" | "python" | "go" | "cpp";
 
 /**
  * `device.list` (protocol 4): every device, revoked ones included.
@@ -700,6 +867,32 @@ export type ListSecrets = null;
 export type ListSessions = null;
 
 /**
+ * A location relative to the authorized workspace.
+ */
+export type Location = { 
+/**
+ * Saved source file.
+ */
+file: FilePath, 
+/**
+ * Scalar range.
+ */
+range: Range, };
+
+/**
+ * A call edge anchored at its caller's source sites.
+ */
+export type LspCall = { 
+/**
+ * Caller for incoming calls, callee for outgoing calls.
+ */
+symbol: Symbol, 
+/**
+ * Authorized call sites, bounded along with all other locations.
+ */
+sites: Array<Location>, };
+
+/**
  * What a home publishes: every file by its path, and the MCP servers with
  * secret references unresolved.
  */
@@ -716,6 +909,11 @@ files: { [key in BundlePath]: BundleFile },
  * The MCP servers.
  */
 mcp: { [key in McpServerName]: McpTransport<ConfigValue> }, };
+
+/**
+ * How a bounded hover text is represented.
+ */
+export type Markup = "plain_text" | "markdown";
 
 /**
  * An MCP server's name, unique within a fleet's definitions.
@@ -786,7 +984,7 @@ project?: string | null, };
 /**
  * Every RPC method.
  */
-export type Method = "node.info" | "harness.list" | "session.list" | "session.get" | "session.create" | "session.send" | "session.kill" | "session.read" | "session.subscribe" | "session.unsubscribe" | "node.stop" | "device.invite" | "device.list" | "device.revoke" | "profile.list" | "profile.reload" | "session.move_profile" | "fleet.manifest" | "fleet.blob" | "fleet.watch" | "fleet.report" | "fleet.members" | "fleet.forward" | "fleet.relay" | "fleet.deliver" | "fleet.grant" | "fleet.callback" | "fleet.peers" | "fleet.nodes" | "fleet.forget" | "session.export" | "session.import" | "memory.export" | "memory.import" | "transfer.read" | "transfer.close" | "secret.set" | "secret.list" | "secret.delete" | "secret.copy" | "model.list";
+export type Method = "node.info" | "harness.list" | "session.list" | "session.get" | "session.create" | "session.send" | "session.kill" | "session.read" | "session.subscribe" | "session.unsubscribe" | "node.stop" | "device.invite" | "device.list" | "device.revoke" | "profile.list" | "profile.reload" | "session.move_profile" | "fleet.manifest" | "fleet.blob" | "fleet.watch" | "fleet.report" | "fleet.members" | "fleet.forward" | "fleet.relay" | "fleet.deliver" | "fleet.grant" | "fleet.callback" | "fleet.peers" | "fleet.nodes" | "fleet.forget" | "session.export" | "session.import" | "memory.export" | "memory.import" | "transfer.read" | "transfer.close" | "secret.set" | "secret.list" | "secret.delete" | "secret.copy" | "lsp.workspace_symbols" | "lsp.document_symbols" | "lsp.definition" | "lsp.references" | "lsp.hover" | "lsp.implementations" | "lsp.type_definition" | "lsp.incoming_calls" | "lsp.outgoing_calls" | "lsp.diagnostics" | "model.list";
 
 /**
  * An API a provider or a harness speaks.
@@ -985,6 +1183,11 @@ export type NodeState = "serving" | "draining";
 export type OfferVersion = 1;
 
 /**
+ * A best-effort offset into sorted results; edits may shift later pages.
+ */
+export type Offset = number;
+
+/**
  * Who a forwarded call speaks for, as the node it started on vouches.
  */
 export type Origin = { 
@@ -1019,6 +1222,45 @@ session: SessionId,
  * are 0), so the target can refuse a session past the depth limit.
  */
 depth: number, };
+
+/**
+ * Calls from the symbol at a saved source position.
+ */
+export type OutgoingCalls = AtPosition;
+
+/**
+ * A bounded page, deterministically sorted before offset selection.
+ */
+export type Page<T> = { 
+/**
+ * At most the requested number of items, capped by the node.
+ */
+items: Array<T>, 
+/**
+ * Next offset within the collected result, if more remain.
+ */
+next: Offset | null, 
+/**
+ * True if item/byte budgets cut off some server data.
+ */
+truncated: boolean, 
+/**
+ * Coverage, freshness and observed indexing progress.
+ */
+context: Context, };
+
+/**
+ * The requested page. Limits are capped at 200 by the node.
+ */
+export type PageRequest = { 
+/**
+ * Zero-based result offset.
+ */
+offset: Offset, 
+/**
+ * Items requested (default 50, capped at 200).
+ */
+limit: number, };
 
 /**
  * A pairing link: `vessel://pair#` followed by the base64url JSON of a
@@ -1153,6 +1395,19 @@ export type PlanPriority = "high" | "medium" | "low";
 export type PlanStatus = "pending" | "in_progress" | "completed";
 
 /**
+ * A 1-based Unicode scalar position; the line's exclusive end is valid.
+ */
+export type Position = { 
+/**
+ * One-based line.
+ */
+line: number, 
+/**
+ * One-based Unicode scalar column, not a byte or UTF-16 offset.
+ */
+column: number, };
+
+/**
  * A profile as a node reports it. Names of the variables it sets are
  * listed; their values never leave the node (they may be secrets or paths
  * to credentials).
@@ -1219,6 +1474,19 @@ export type ProtocolVersion = number;
  * A model provider's name in a node's `models.toml` (protocol 7).
  */
 export type ProviderName = string;
+
+/**
+ * An exclusive-end source range.
+ */
+export type Range = { 
+/**
+ * Inclusive start.
+ */
+start: Position, 
+/**
+ * Exclusive end.
+ */
+end: Position, };
 
 /**
  * A JSON value carried as text and never inspected.
@@ -1288,6 +1556,31 @@ hash: BlobHash,
 offset: number, };
 
 /**
+ * References at a source position.
+ */
+export type References = { 
+/**
+ * Whether declaration locations should also be included.
+ */
+include_declaration: boolean, 
+/**
+ * Authorized server selection.
+ */
+workspace: Workspace, 
+/**
+ * Relative saved file.
+ */
+file: FilePath, 
+/**
+ * One-based Unicode scalar position.
+ */
+position: Position, 
+/**
+ * Sorted result page (unused by hover).
+ */
+page: PageRequest, };
+
+/**
  * `fleet.relay` (protocol 6): a member asks its home to pass a call on.
  * The home refuses an `origin.node` other than the member's own (a member
  * speaks only for its own principals). Needs `relay`, which a member gets
@@ -1350,7 +1643,7 @@ id: DeviceId, };
 /**
  * A successful response of any method, as sent on the wire.
  */
-export type Reply = { "method": "node.info", "result": NodeInfo } | { "method": "harness.list", "result": Array<Harness> } | { "method": "session.list", "result": Array<SessionInfo> } | { "method": "session.get", "result": SessionInfo } | { "method": "session.create", "result": SessionInfo } | { "method": "session.send", "result": Ack } | { "method": "session.kill", "result": Ack } | { "method": "session.read", "result": EventPage } | { "method": "session.subscribe", "result": Subscribed } | { "method": "session.unsubscribe", "result": Ack } | { "method": "node.stop", "result": Ack } | { "method": "device.invite", "result": Invitation } | { "method": "device.list", "result": Array<DeviceInfo> } | { "method": "device.revoke", "result": Ack } | { "method": "profile.list", "result": Array<ProfileInfo> } | { "method": "profile.reload", "result": Array<ProfileInfo> } | { "method": "session.move_profile", "result": SessionInfo } | { "method": "fleet.manifest", "result": Manifest } | { "method": "fleet.blob", "result": BlobChunk } | { "method": "fleet.watch", "result": Generation } | { "method": "fleet.report", "result": Ack } | { "method": "fleet.members", "result": Array<FleetMember> } | { "method": "fleet.forward", "result": Forwarded } | { "method": "fleet.relay", "result": Forwarded } | { "method": "fleet.deliver", "result": Forwarded } | { "method": "fleet.grant", "result": Ack } | { "method": "fleet.callback", "result": Callback } | { "method": "fleet.peers", "result": Array<FleetNode> } | { "method": "fleet.nodes", "result": Array<FleetNode> } | { "method": "fleet.forget", "result": NodeForgotten } | { "method": "session.export", "result": TransferManifest } | { "method": "session.import", "result": SessionImported } | { "method": "memory.export", "result": TransferManifest } | { "method": "memory.import", "result": MemoryImported } | { "method": "transfer.read", "result": BlobChunk } | { "method": "transfer.close", "result": Ack } | { "method": "secret.set", "result": Ack } | { "method": "secret.list", "result": Array<SecretName> } | { "method": "secret.delete", "result": Ack } | { "method": "secret.copy", "result": Ack } | { "method": "model.list", "result": Array<ModelRoute> };
+export type Reply = { "method": "node.info", "result": NodeInfo } | { "method": "harness.list", "result": Array<Harness> } | { "method": "session.list", "result": Array<SessionInfo> } | { "method": "session.get", "result": SessionInfo } | { "method": "session.create", "result": SessionInfo } | { "method": "session.send", "result": Ack } | { "method": "session.kill", "result": Ack } | { "method": "session.read", "result": EventPage } | { "method": "session.subscribe", "result": Subscribed } | { "method": "session.unsubscribe", "result": Ack } | { "method": "node.stop", "result": Ack } | { "method": "device.invite", "result": Invitation } | { "method": "device.list", "result": Array<DeviceInfo> } | { "method": "device.revoke", "result": Ack } | { "method": "profile.list", "result": Array<ProfileInfo> } | { "method": "profile.reload", "result": Array<ProfileInfo> } | { "method": "session.move_profile", "result": SessionInfo } | { "method": "fleet.manifest", "result": Manifest } | { "method": "fleet.blob", "result": BlobChunk } | { "method": "fleet.watch", "result": Generation } | { "method": "fleet.report", "result": Ack } | { "method": "fleet.members", "result": Array<FleetMember> } | { "method": "fleet.forward", "result": Forwarded } | { "method": "fleet.relay", "result": Forwarded } | { "method": "fleet.deliver", "result": Forwarded } | { "method": "fleet.grant", "result": Ack } | { "method": "fleet.callback", "result": Callback } | { "method": "fleet.peers", "result": Array<FleetNode> } | { "method": "fleet.nodes", "result": Array<FleetNode> } | { "method": "fleet.forget", "result": NodeForgotten } | { "method": "session.export", "result": TransferManifest } | { "method": "session.import", "result": SessionImported } | { "method": "memory.export", "result": TransferManifest } | { "method": "memory.import", "result": MemoryImported } | { "method": "transfer.read", "result": BlobChunk } | { "method": "transfer.close", "result": Ack } | { "method": "secret.set", "result": Ack } | { "method": "secret.list", "result": Array<SecretName> } | { "method": "secret.delete", "result": Ack } | { "method": "secret.copy", "result": Ack } | { "method": "lsp.workspace_symbols", "result": Page<Symbol> } | { "method": "lsp.document_symbols", "result": Page<Symbol> } | { "method": "lsp.definition", "result": Page<Location> } | { "method": "lsp.references", "result": Page<Location> } | { "method": "lsp.hover", "result": Hover } | { "method": "lsp.implementations", "result": Page<Location> } | { "method": "lsp.type_definition", "result": Page<Location> } | { "method": "lsp.incoming_calls", "result": Page<LspCall> } | { "method": "lsp.outgoing_calls", "result": Page<LspCall> } | { "method": "lsp.diagnostics", "result": Page<Diagnostic> } | { "method": "model.list", "result": Array<ModelRoute> };
 
 /**
  * `fleet.report` (protocol 5): a member says what it applied and which
@@ -1670,6 +1963,11 @@ name: SecretName,
 value: SecretValue, };
 
 /**
+ * Diagnostic severity; absence is distinct from an error.
+ */
+export type Severity = "error" | "warning" | "information" | "hint" | "unknown";
+
+/**
  * `node.stop` (protocol 3): stop the node, now or once idle. Used by
  * remote update; a client that negotiated protocol 2 never sends it.
  */
@@ -1737,6 +2035,32 @@ resume_from: EventSeq, };
  * Node-assigned id of one event subscription; unique per connection.
  */
 export type SubscriptionId = number;
+
+/**
+ * A symbol in saved source. Nested document symbols are flattened.
+ */
+export type Symbol = { 
+/**
+ * Bounded display name.
+ */
+name: string, 
+/**
+ * Its semantic kind.
+ */
+kind: SymbolKind, 
+/**
+ * Name/selection location.
+ */
+location: Location, 
+/**
+ * Optional enclosing symbol name.
+ */
+container: string | null, };
+
+/**
+ * LSP symbol kinds, including a typed unknown for future protocol values.
+ */
+export type SymbolKind = "file" | "module" | "namespace" | "package" | "class" | "method" | "property" | "field" | "constructor" | "enum" | "interface" | "function" | "variable" | "constant" | "string" | "number" | "boolean" | "array" | "object" | "key" | "null" | "enum_member" | "struct" | "event" | "operator" | "type_parameter" | "unknown";
 
 /**
  * Raw bytes to or from a PTY.
@@ -2002,6 +2326,11 @@ files: { [key in BundlePath]: BundleFile },
 detail: TransferDetail, };
 
 /**
+ * Type definitions at a saved source position.
+ */
+export type TypeDefinition = AtPosition;
+
+/**
  * `session.unsubscribe`: stop a subscription on this connection.
  */
 export type Unsubscribe = { 
@@ -2035,3 +2364,33 @@ code: ErrorCode,
  * Human-readable explanation. Never contains secrets.
  */
 message: string, };
+
+/**
+ * The server identity a query selects. This is not a filesystem grant.
+ */
+export type Workspace = { 
+/**
+ * Absolute root on the destination node; the node checks authority.
+ */
+root: string, 
+/**
+ * One server family per canonical workspace root.
+ */
+language: Language, };
+
+/**
+ * Workspace symbol search.
+ */
+export type WorkspaceSymbols = { 
+/**
+ * Authorized server selection.
+ */
+workspace: Workspace, 
+/**
+ * Search text; bounded by the node.
+ */
+query: string, 
+/**
+ * Sorted result page.
+ */
+page: PageRequest, };

@@ -82,8 +82,9 @@ and 6).
 
 ## Next
 
-Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
-4 left these follow-ups, none scheduled:
+Not planned yet. In roadmap order the next milestone is Phase 5 (Phase 3,
+model routing, and Phase 4, IDE context, are done). Milestone 4 left these
+follow-ups, none scheduled:
 
 - Agent limits per fleet: today they are per node, so an agent may own 8
   live sessions on each node it reaches (ADR 0013, "Known limits").
@@ -101,8 +102,12 @@ Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
 
 ## Phase 3: model routing
 
-- [ ] Local routing proxy so every harness can use every model (milestone
-      5, `docs/plans/backend-m5.md`, ADR 0015).
+- [x] Local routing proxy so every harness can use every model (milestone
+      5, `docs/plans/backend-m5.md`, ADR 0015): Claude Code and Codex, in
+      terminal and structured mode, on Anthropic Messages, OpenAI
+      Responses or any OpenAI-compatible Chat Completions provider, with a
+      `model_call` record per call. Closed after three security review
+      rounds (the plan's "Security").
 - Follow-up, not scheduled: switching a live session's model route. A
   session keeps the route it was launched with, since Codex files its
   threads under the model provider; Claude Code does not, so it could
@@ -114,8 +119,8 @@ Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
 
 ## Phase 4: IDE context
 
-- [ ] LSP client inside the node.
-- [ ] Expose symbols, references, diagnostics as MCP tools.
+- [x] LSP client inside the node (milestone 6).
+- [x] Expose symbols, references, diagnostics as MCP tools (milestone 6).
 
 ## Phase 5: clients
 

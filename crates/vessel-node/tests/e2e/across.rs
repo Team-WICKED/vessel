@@ -82,12 +82,24 @@ pub(crate) async fn member_granting(
     scopes: Vec<Scope>,
     grant: Vec<Scope>,
 ) -> Member {
+    member_custom(relay, home, label, scopes, grant, |_| {}).await
+}
+
+pub(crate) async fn member_custom(
+    relay: &Relay,
+    home: &Member,
+    label: &str,
+    scopes: Vec<Scope>,
+    grant: Vec<Scope>,
+    adjust: impl FnOnce(&mut vessel_node::Config),
+) -> Member {
     let fixture = Fixture::new();
     let applied = fixture.cwd().join("member-codex");
     let node = relayed_with(&fixture, &[&relay.url], |config| {
         config.name = Some(label.to_owned());
         config.fleet = fleet_config(HarnessKind::Codex, applied);
         config.vessel_mcp = Some(vessel_mcp(&fixture));
+        adjust(config);
     })
     .await;
     let offer = home

@@ -17,6 +17,9 @@
 //!   event log and errors), with 64-bit integers as `number`. A test
 //!   compares the file with what the types declare now and fails on any
 //!   difference; `VESSEL_WRITE_TS=1` rewrites it.
+//! - Generic types (protocol 7's `lsp::Page<T>`) are declared once, with
+//!   their parameter; two Rust types with one TypeScript name clash only
+//!   when their declarations differ.
 //! - Cost: `u64` values above 2^53 lose precision in a browser. Counters
 //!   (`EventSeq`, request ids) and byte counts stay far below it. A type
 //!   with a hand-written serde impl, or a field with `serde(with)`, needs a
@@ -179,6 +182,31 @@ impl Declarations {
     }
 }
 
+/// `code` with its double-quoted string literals emptied.
+fn outside_strings(code: &str) -> String {
+    let mut kept = String::with_capacity(code.len());
+    let mut quoted = false;
+    let mut escaped = false;
+    for character in code.chars() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+                kept.push(character);
+            }
+        } else {
+            if character == '"' {
+                quoted = true;
+            }
+            kept.push(character);
+        }
+    }
+    kept
+}
+
 /// Whether `text` uses the identifier `name` (not as part of a longer one).
 fn mentions(text: &str, name: &str) -> bool {
     text.match_indices(name).any(|(at, _found)| {
@@ -210,15 +238,20 @@ impl TypeVisitor for Visit<'_> {
         }
         let name = T::ident(&self.declarations.config);
         let id = TypeId::of::<T>();
-        if let Some(declared) = self.declarations.types.get(&name) {
-            if declared.id != id {
-                self.clash = Some(NameClash { name });
-            }
-            return;
-        }
         let mut text = T::docs().unwrap_or_default();
         text.push_str("export ");
         text.push_str(&T::decl(&self.declarations.config));
+        if let Some(declared) = self.declarations.types.get(&name) {
+            // Instantiations of one generic type (`Page<Symbol>`,
+            // `Page<Location>`) are different Rust types with one
+            // declaration, `Page<T>`; only their arguments are new.
+            if declared.id != id && declared.text != text {
+                self.clash = Some(NameClash { name });
+            } else if declared.id != id {
+                T::visit_generics(self);
+            }
+            return;
+        }
         let _first = self.declarations.types.insert(name, Declared { id, text });
         T::visit_dependencies(self);
         T::visit_generics(self);
@@ -249,7 +282,8 @@ pub fn check_file(path: &std::path::Path, generated: &str) -> Result<(), String>
 }
 
 /// What the declarations must not contain: `any` anywhere, or `unknown`
-/// outside `RawJson` (ADR 0017). Comments are not checked.
+/// outside `RawJson` (ADR 0017). Comments and string literal types (a
+/// `"unknown"` freshness is a value, not the type) are not checked.
 ///
 /// # Errors
 /// The first offending line.
@@ -268,6 +302,7 @@ pub fn check_strict(generated: &str) -> Result<(), String> {
         if code.starts_with("//") {
             continue;
         }
+        let code = &outside_strings(code);
         if mentions(code, "any") || mentions(code, "bigint") {
             return Err(format!("`any` or `bigint` in a declaration: {line}"));
         }
@@ -303,5 +338,9 @@ mod tests {
         assert!(check_strict("export type B = { b: unknown };").is_err());
         assert!(check_strict("/** any node */\nexport type C = string;").is_ok());
         assert!(check_strict("export type RawJson = unknown;").is_ok());
+        // A string literal type is a value, not `any` or `unknown`.
+        assert!(check_strict(r#"export type F = "saved" | "unknown";"#).is_ok());
+        assert!(check_strict(r#"export type G = { "any": string };"#).is_ok());
+        assert!(check_strict(r#"export type H = { a: "x\"" | any };"#).is_err());
     }
 }

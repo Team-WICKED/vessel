@@ -108,7 +108,7 @@ else
     IFS= read -r key || true
 fi
 [ -n "$key" ] || die "no provider key on standard input"
-[ ${#key} -ge 8 ] || die "the key is too short to search for safely"
+[ ${#key} -ge 20 ] || die "the key is too short to search for safely (the node refuses keys under 20 characters)"
 
 root=$(mktemp -d "${TMPDIR:-/tmp}/vessel-model-smoke.XXXXXX")
 chmod 700 "$root"

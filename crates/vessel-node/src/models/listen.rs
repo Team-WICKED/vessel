@@ -54,8 +54,25 @@
 //!   new connection before its first request is read (it takes a burst of
 //!   every place in that moment); the harness reconnects, and its proven
 //!   connections stay.
+//!
+//! [Decision Log] (the third review round)
+//! - Problem: a session's token is readable by every command the session
+//!   runs (ADR 0015), and proven connections were never closed for room:
+//!   one session could prove all 256 and shut every other session out.
+//! - Choice: at most [`PROVEN_PER_SESSION`] proven connections per
+//!   session. Past that a connection of the session is served but stays
+//!   unproven, so it is among those closed to make room. Claude Code and
+//!   Codex keep a few connections each; the session's call limit (4 at
+//!   once) is far below the cap.
+//! - Alternative: close the session's oldest idle proven connection.
+//!   That needs to know which are idle, which only hyper does.
+//! - Limit, kept: the 408 follows the bytes, not the heads. A request
+//!   pipelined behind another and cut off by the deadline gets a bare
+//!   close, since the first answer's bytes mark what was read as
+//!   answered; this layer cannot see where one head ends. Neither harness
+//!   pipelines.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,6 +92,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt as _;
+use vessel_proto::SessionId;
 
 /// Connections the proxy holds at once. Each routed harness keeps a few
 /// (a pool of idle ones, the calls in flight); the call limits
@@ -103,25 +121,61 @@ const REFUSED: &[u8] =
 pub(crate) const TIMED_OUT: &[u8] =
     b"HTTP/1.1 408 Request Timeout\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
 
-/// The connections that have not yet shown a session's token, oldest
-/// first: the ones closed to make room.
+/// How many of one session's connections are proven at most.
+pub(crate) const PROVEN_PER_SESSION: usize = 32;
+
+/// Which connections may be closed to make room: those that have not yet
+/// shown a session's token, oldest first, and those of a session past
+/// [`PROVEN_PER_SESSION`].
 #[derive(Default)]
 struct Unproven {
-    queue: Mutex<VecDeque<(u64, CancellationToken)>>,
+    standing: Mutex<Standing>,
+}
+
+#[derive(Default)]
+struct Standing {
+    /// Oldest first.
+    queue: VecDeque<(u64, CancellationToken)>,
+    /// Each session's proven connections.
+    proven: HashMap<SessionId, Vec<u64>>,
 }
 
 impl Unproven {
-    fn lock(&self) -> MutexGuard<'_, VecDeque<(u64, CancellationToken)>> {
-        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, Standing> {
+        self.standing.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn add(&self, id: u64, close: CancellationToken) {
+        self.lock().queue.push_back((id, close));
     }
 
     fn forget(&self, id: u64) {
-        self.lock().retain(|(entry, _close)| *entry != id);
+        let mut standing = self.lock();
+        standing.queue.retain(|(entry, _close)| *entry != id);
+        standing.proven.retain(|_session, ids| {
+            ids.retain(|entry| *entry != id);
+            !ids.is_empty()
+        });
+    }
+
+    /// Connection `id` showed `session`'s token: no longer closed for room,
+    /// unless the session has its fill of proven connections already.
+    fn prove(&self, id: u64, session: SessionId) {
+        let mut standing = self.lock();
+        let Standing { queue, proven } = &mut *standing;
+        let ids = proven.entry(session).or_default();
+        if ids.len() >= PROVEN_PER_SESSION {
+            return;
+        }
+        if let Some(at) = queue.iter().position(|(entry, _close)| *entry == id) {
+            drop(queue.remove(at));
+            ids.push(id);
+        }
     }
 
     /// Close the oldest unproven connection; whether there was one.
     fn evict(&self) -> bool {
-        let oldest = self.lock().pop_front();
+        let oldest = self.lock().queue.pop_front();
         oldest.is_some_and(|(_id, close)| {
             close.cancel();
             true
@@ -138,9 +192,10 @@ pub(crate) struct Proof {
 }
 
 impl Proof {
-    /// The connection is a harness's: it is never closed to make room.
-    pub(crate) fn prove(&self) {
-        self.unproven.forget(self.id);
+    /// The connection is `session`'s harness's: it is not closed to make
+    /// room, within [`PROVEN_PER_SESSION`].
+    pub(crate) fn prove(&self, session: SessionId) {
+        self.unproven.prove(self.id, session);
     }
 }
 
@@ -193,7 +248,7 @@ pub(crate) async fn run(listener: TcpListener, app: Router, stop: CancellationTo
         next = next.wrapping_add(1);
         // Closes this connection alone (to make room), or with the node.
         let close = stop.child_token();
-        unproven.lock().push_back((id, close.clone()));
+        unproven.add(id, close.clone());
         let progress = Arc::new(Progress::default());
         let io = Held {
             socket: Some(Socket {

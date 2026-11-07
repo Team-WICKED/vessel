@@ -120,7 +120,7 @@ credentials the CLI uses.
 
 ## Contract changes
 
-None to the protocol: the UI speaks protocol 6 through the bridge, and no
+None to the protocol: the UI speaks protocol 6 (7 since the M5 merge) through the bridge, and no
 node changes. Two changes to shared crates, both approved (decisions 2 and
 5), each in commits of its own so they merge cleanly against M5 and M6,
 which add protocol rows of their own:
@@ -633,6 +633,15 @@ Decided while building:
   routes point at `fake-provider` on loopback and `model <text>` prompts
   make real calls through the node's proxy. The screenshots show the
   routed profile and two calls.
+- Then M5's final tip (`dbdfd43`, which carries `main` with M6): the
+  `lsp.*` methods are forwarded like any read (the page does not use
+  them yet), their types derive TypeScript (`lsp::Call` as `LspCall`,
+  `Page<T>` declared once), and the strict check of the generated file
+  ignores string literal types (`Freshness` has a `"unknown"` value).
+- A terminal's keys now go out one send at a time, in order
+  (`web/src/data/terminal-sender.ts`): CI's first run of `links.spec`
+  caught a pasted line reaching the PTY after its Enter, since the
+  bridge and the node run calls concurrently.
 
 Not done in this milestone: the session hierarchy shows agent-created
 sessions nested as the protocol records them, but the e2e fleet has no

@@ -157,6 +157,16 @@ fn the_forwardable_set_is_pinned() {
             "transfer.close",
             "secret.set",
             "secret.list",
+            "lsp.workspace_symbols",
+            "lsp.document_symbols",
+            "lsp.definition",
+            "lsp.references",
+            "lsp.hover",
+            "lsp.implementations",
+            "lsp.type_definition",
+            "lsp.incoming_calls",
+            "lsp.outgoing_calls",
+            "lsp.diagnostics",
             "model.list"
         ]
     );

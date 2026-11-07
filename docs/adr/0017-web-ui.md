@@ -234,6 +234,11 @@ Option 3.
   difference.
 - It holds no `any`. Exceptions mapped to `unknown` are listed under
   "Consequences".
+- One file holds every wire type, so names must not clash: M6's
+  `lsp::Call` is `LspCall` there (a TypeScript-only rename), and a
+  generic type (`lsp::Page<T>`) is declared once for all its uses.
+- The bridge forwards M6's `lsp.*` calls like any read; the page does
+  not use them yet.
 
 **The bundle.**
 - `vessel-web`'s `build.rs` embeds `web/dist` when it exists, and a

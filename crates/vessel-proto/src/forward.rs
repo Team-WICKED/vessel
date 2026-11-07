@@ -266,6 +266,16 @@ impl Method {
             | Self::ReadTransfer
             | Self::CloseTransfer
             | Self::SetSecret
+            | Self::LspWorkspaceSymbols
+            | Self::LspDocumentSymbols
+            | Self::LspDefinition
+            | Self::LspReferences
+            | Self::LspHover
+            | Self::LspImplementations
+            | Self::LspTypeDefinition
+            | Self::LspIncomingCalls
+            | Self::LspOutgoingCalls
+            | Self::LspDiagnostics
             | Self::ListSecrets
             | Self::ListModels => true,
             Self::StopNode

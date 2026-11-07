@@ -323,6 +323,26 @@ rpc_methods! {
     DeleteSecret / delete_secret / "secret.delete" [Admin, 6]: DeleteSecret => Ack;
     /// Copy a secret to a node of the fleet (protocol 6).
     CopySecret / copy_secret / "secret.copy" [Admin, 6]: CopySecret => Ack;
+    /// Saved-file workspace symbols (protocol 7).
+    LspWorkspaceSymbols / lsp_workspace_symbols / "lsp.workspace_symbols" [Read, 7]: crate::lsp::WorkspaceSymbols => crate::lsp::Page<crate::lsp::Symbol>;
+    /// Saved-file document symbols (protocol 7).
+    LspDocumentSymbols / lsp_document_symbols / "lsp.document_symbols" [Read, 7]: crate::lsp::DocumentSymbols => crate::lsp::Page<crate::lsp::Symbol>;
+    /// Saved-file definition (protocol 7).
+    LspDefinition / lsp_definition / "lsp.definition" [Read, 7]: crate::lsp::Definition => crate::lsp::Page<crate::lsp::Location>;
+    /// Saved-file references (protocol 7).
+    LspReferences / lsp_references / "lsp.references" [Read, 7]: crate::lsp::References => crate::lsp::Page<crate::lsp::Location>;
+    /// Saved-file hover (protocol 7).
+    LspHover / lsp_hover / "lsp.hover" [Read, 7]: crate::lsp::GetHover => crate::lsp::Hover;
+    /// Saved-file implementations (protocol 7).
+    LspImplementations / lsp_implementations / "lsp.implementations" [Read, 7]: crate::lsp::Implementations => crate::lsp::Page<crate::lsp::Location>;
+    /// Saved-file type definition (protocol 7).
+    LspTypeDefinition / lsp_type_definition / "lsp.type_definition" [Read, 7]: crate::lsp::TypeDefinition => crate::lsp::Page<crate::lsp::Location>;
+    /// Saved-file incoming calls (protocol 7).
+    LspIncomingCalls / lsp_incoming_calls / "lsp.incoming_calls" [Read, 7]: crate::lsp::IncomingCalls => crate::lsp::Page<crate::lsp::Call>;
+    /// Saved-file outgoing calls (protocol 7).
+    LspOutgoingCalls / lsp_outgoing_calls / "lsp.outgoing_calls" [Read, 7]: crate::lsp::OutgoingCalls => crate::lsp::Page<crate::lsp::Call>;
+    /// Saved-file diagnostics (protocol 7).
+    LspDiagnostics / lsp_diagnostics / "lsp.diagnostics" [Read, 7]: crate::lsp::Diagnostics => crate::lsp::Page<crate::lsp::Diagnostic>;
     /// The model routes this node offers (protocol 7).
     ListModels / list_models / "model.list" [Read, 7]: ListModels => Vec<ModelRoute>;
 }
@@ -385,6 +405,16 @@ impl Call {
             | Self::SetSecret(_)
             | Self::ListSecrets(_)
             | Self::DeleteSecret(_)
+            | Self::LspWorkspaceSymbols(_)
+            | Self::LspDocumentSymbols(_)
+            | Self::LspDefinition(_)
+            | Self::LspReferences(_)
+            | Self::LspHover(_)
+            | Self::LspImplementations(_)
+            | Self::LspTypeDefinition(_)
+            | Self::LspIncomingCalls(_)
+            | Self::LspOutgoingCalls(_)
+            | Self::LspDiagnostics(_)
             | Self::CopySecret(_)
             | Self::ListModels(_) => None,
         };

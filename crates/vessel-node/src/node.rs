@@ -313,6 +313,19 @@ impl SessionSetup {
     }
 }
 
+/// The LSP manager's configuration with the operator's roots filled in:
+/// executables and toolchains inside any configured root are not trusted
+/// for conservative analysis, so the registry needs the full list.
+fn lsp_config(config: &Config) -> vessel_lsp::Config {
+    let mut lsp = config.lsp.clone();
+    lsp.registry.configured_roots = config
+        .lsp_roots
+        .iter()
+        .map(|root| root.path.clone())
+        .collect();
+    lsp
+}
+
 /// Build the session runtime, the lifecycle, the devices and the service.
 fn core(
     config: &Config,
@@ -393,7 +406,14 @@ fn core(
         transfers::IDLE,
     ));
     transfers.sweep(&tasks, &stop);
+    let lsp = vessel_lsp::Manager::start(lsp_config(config), stop.child_token());
+    let lsp_shutdown = lsp.clone();
+    drop(tasks.spawn(async move {
+        lsp_shutdown.stopped().await;
+    }));
     let service = Arc::new(Guarded(NodeService::new(Parts {
+        lsp,
+        lsp_roots: config.lsp_roots.clone(),
         lifecycle: lifecycle.clone(),
         lookup: config.harness_lookup.clone(),
         sessions,

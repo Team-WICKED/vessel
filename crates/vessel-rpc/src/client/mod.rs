@@ -105,6 +105,16 @@ impl Unary for SetSecret {}
 impl Unary for ListSecrets {}
 impl Unary for DeleteSecret {}
 impl Unary for CopySecret {}
+impl Unary for vessel_proto::lsp::WorkspaceSymbols {}
+impl Unary for vessel_proto::lsp::DocumentSymbols {}
+impl Unary for vessel_proto::lsp::Definition {}
+impl Unary for vessel_proto::lsp::References {}
+impl Unary for vessel_proto::lsp::GetHover {}
+impl Unary for vessel_proto::lsp::Implementations {}
+impl Unary for vessel_proto::lsp::TypeDefinition {}
+impl Unary for vessel_proto::lsp::IncomingCalls {}
+impl Unary for vessel_proto::lsp::OutgoingCalls {}
+impl Unary for vessel_proto::lsp::Diagnostics {}
 
 /// A call answered by exactly one reply, built already: every method but
 /// `session.subscribe` (whose answer opens a stream, [`Connection::subscribe`]).
@@ -184,6 +194,16 @@ const fn is_unary(method: Method) -> bool {
         | Method::ListSecrets
         | Method::DeleteSecret
         | Method::CopySecret
+        | Method::LspWorkspaceSymbols
+        | Method::LspDocumentSymbols
+        | Method::LspDefinition
+        | Method::LspReferences
+        | Method::LspHover
+        | Method::LspImplementations
+        | Method::LspTypeDefinition
+        | Method::LspIncomingCalls
+        | Method::LspOutgoingCalls
+        | Method::LspDiagnostics
         | Method::ListModels => true,
     }
 }

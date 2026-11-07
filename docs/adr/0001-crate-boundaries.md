@@ -33,10 +33,12 @@ vessel-proc     (process spawning, process groups, kill tree)
 vessel-harness  -> proto, proc
 vessel-pty      -> proc
 vessel-agent    -> proto, proc
+vessel-lsp      -> proto, proc            (milestone 6)
 vessel-session  -> proto, harness, pty, agent
 vessel-store    -> proto
 vessel-node     -> proto, rpc, harness, session, store, secure, relay,
-                   fleet, client               (milestone 4), llm (milestone 5)
+                   fleet, client (milestone 4), lsp (milestone 6),
+                   llm (milestone 5)
 vessel-client   -> proto, rpc, secure, relay
 vessel-remote   -> proto, rpc, client      (milestone 2)
 vessel-secure   -> proto                   (milestone 3)
@@ -133,3 +135,17 @@ contract.
 - A new edge needs an update to this ADR and `docs/ARCHITECTURE.md`.
 - Shared helpers have no grab-bag home; they go to the lowest crate whose job
   they are.
+
+## Milestone 6 addition (2026-11-07)
+
+`vessel-lsp -> proc` owns the language-server transport, saved-document
+positions and later its process lifecycle (ADR 0016). Authentication stays
+in the node. Agent-facing types and the node integration add their edges
+when those steps land; the initial framing/position foundation needs no
+wire dependency.
+
+M6 runtime adds `vessel-lsp -> proto` for read-only context requests and
+results, and `vessel-node -> lsp` for lifecycle assembly. The node owns grants
+and configured roots; the LSP crate owns mechanisms. Test-only `vessel-mcp
+-> lsp` sets an explicit fake registry; production MCP still uses only proto
+and the client, never the server runtime.

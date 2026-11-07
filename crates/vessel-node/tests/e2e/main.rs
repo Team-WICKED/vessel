@@ -25,6 +25,8 @@ mod isolation;
 #[cfg(test)]
 mod local;
 #[cfg(test)]
+mod lsp;
+#[cfg(test)]
 mod moving;
 #[cfg(test)]
 mod profiles;

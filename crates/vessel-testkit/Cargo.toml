@@ -28,6 +28,10 @@ path = "src/bin/fake_tool.rs"
 name = "fake-provider"
 path = "src/bin/fake_provider.rs"
 
+[[bin]]
+name = "fake-lsp"
+path = "src/bin/fake_lsp.rs"
+
 [features]
 # The misbehaving relay (`relay` module): a websocket proxy, so only tests
 # that need it pay for the websocket stack (the fake binaries do not).
@@ -41,6 +45,7 @@ agent-client-protocol.workspace = true
 axum = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true, features = ["sink"] }
 serde_json.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std", "rt"] }
 tokio-tungstenite = { workspace = true, optional = true }

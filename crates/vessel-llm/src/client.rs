@@ -62,6 +62,23 @@
 //!   JSON string) are not looked for; a provider set on sending its own
 //!   key back cannot be stopped by matching, and none of those is how an
 //!   error quotes a credential by accident.
+//!
+//! [Decision Log] (the third review round)
+//! - Problem: text `serde_json` refuses but a harness's parser takes (a
+//!   lone surrogate such as `\ud800`, nesting past 128 levels) was read as
+//!   holding no key, so an escaped key beside it went through. And a
+//!   short or plain key (`EMPTY`, `sk-1234`, what local servers are often
+//!   given) is ordinary text: a model writing "the queue is EMPTY" had
+//!   its answer ended.
+//! - Choice: fail closed. Text with a backslash that does not decode is
+//!   unescaped leniently, as text ([`unescape`]), and matched there; a
+//!   whole answer holding the key that cannot be rewritten is withheld
+//!   ([`Redactor::json`] gives `None`). A key is used only if it is
+//!   [`ApiKey::distinctive`]: the node refuses a route's call with a key
+//!   that is not, and a local server is given no key at all.
+//! - Not done: a key cut by the line break between two `data:` lines of
+//!   one event. Inside a JSON string the break makes the text invalid
+//!   JSON to the harness as well.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -130,11 +147,32 @@ impl Api {
 #[derive(Clone)]
 pub struct ApiKey(String);
 
+/// The shortest key [`ApiKey::distinctive`] allows.
+pub const MIN_KEY_BYTES: usize = 20;
+
+/// How many different bytes a key [`ApiKey::distinctive`] allows has.
+const MIN_KEY_SYMBOLS: usize = 10;
+
 impl ApiKey {
     /// Wrap a key.
     #[must_use]
     pub const fn new(key: String) -> Self {
         Self(key)
+    }
+
+    /// Whether the key can be looked for in a model's answers without
+    /// finding ordinary text: at least [`MIN_KEY_BYTES`] bytes, of at
+    /// least ten different ones. `EMPTY` or `sk-1234` is something a
+    /// model may write, and every answer that did would be withheld.
+    #[must_use]
+    pub fn distinctive(&self) -> bool {
+        self.0.len() >= MIN_KEY_BYTES
+            && self
+                .0
+                .bytes()
+                .collect::<std::collections::HashSet<u8>>()
+                .len()
+                >= MIN_KEY_SYMBOLS
     }
 }
 
@@ -213,9 +251,15 @@ impl Redactor {
         }
         // Without a backslash, decoding changes no string: what was not
         // found as written is not there.
-        text.contains('\\')
-            && serde_json::from_str::<serde_json::Value>(text)
-                .is_ok_and(|value| self.held_in(&value))
+        if !text.contains('\\') {
+            return false;
+        }
+        match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(value) => self.held_in(&value),
+            // What `serde_json` refuses a harness's parser may take (a
+            // lone surrogate, nesting past 128): fail closed.
+            Err(_unreadable) => self.finds(&unescape(text)),
+        }
     }
 
     fn held_in(&self, value: &serde_json::Value) -> bool {
@@ -234,22 +278,22 @@ impl Redactor {
     /// JSON text with the key replaced in every string and member name,
     /// found after decoding (so however the provider escaped it), and in
     /// the text itself when it is not JSON. Unchanged text comes back
-    /// borrowed.
+    /// borrowed. `None` when the text still [holds](Self::holds) the key
+    /// after that (escaped, in text `serde_json` cannot decode): the
+    /// caller withholds it whole.
     #[must_use]
-    pub fn json<'a>(&self, text: &'a str) -> Cow<'a, str> {
+    pub fn json<'a>(&self, text: &'a str) -> Option<Cow<'a, str>> {
         if self.forms.is_empty() {
-            return Cow::Borrowed(text);
+            return Some(Cow::Borrowed(text));
         }
         let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
-            return self.text(text);
+            let replaced = self.text(text);
+            return (!self.holds(&replaced)).then_some(replaced);
         };
         if !self.scrub(&mut value) {
-            return self.text(text);
+            return Some(self.text(text));
         }
-        serde_json::to_string(&value).map_or_else(
-            |_never| Cow::Owned(self.text(text).into_owned()),
-            Cow::Owned,
-        )
+        serde_json::to_string(&value).ok().map(Cow::Owned)
     }
 
     /// Replace the key in every string and member name of `value`;
@@ -286,6 +330,56 @@ impl Redactor {
             }
         }
     }
+}
+
+/// `text` with JSON's escapes undone, however malformed the text around
+/// them: `\uXXXX` as its character (two surrogates as one, a lone one as
+/// U+FFFD), `\n` and the like as theirs, any other `\X` as `X`. Only for
+/// matching: the result is not JSON.
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    // UTF-16 units of consecutive `\u` escapes, decoded together.
+    let mut units: Vec<u16> = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('\\') {
+        let (before, escape) = rest.split_at(at);
+        if !before.is_empty() {
+            decode_units(&mut units, &mut out);
+            out.push_str(before);
+        }
+        let mut after = escape.chars();
+        let _backslash = after.next();
+        let escaped = after.next();
+        rest = after.as_str();
+        if escaped == Some('u')
+            && let Some(unit) = rest
+                .get(..4)
+                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+        {
+            units.push(unit);
+            rest = rest.get(4..).unwrap_or_default();
+            continue;
+        }
+        decode_units(&mut units, &mut out);
+        out.extend(escaped.map(|escaped| match escaped {
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            'b' => '\u{8}',
+            'f' => '\u{c}',
+            other => other,
+        }));
+    }
+    decode_units(&mut units, &mut out);
+    out.push_str(rest);
+    out
+}
+
+fn decode_units(units: &mut Vec<u16>, out: &mut String) {
+    out.extend(
+        char::decode_utf16(units.drain(..))
+            .map(|decoded| decoded.unwrap_or(char::REPLACEMENT_CHARACTER)),
+    );
 }
 
 impl std::fmt::Debug for Redactor {
@@ -563,7 +657,8 @@ fn status_failure(endpoint: &Endpoint, status: u16, body: &[u8]) -> Failure {
             std::str::from_utf8(body)
                 .ok()
                 .filter(|text| serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok())
-                .map(|text| redactor.json(text).into_owned())
+                .and_then(|text| redactor.json(text))
+                .map(Cow::into_owned)
                 .unwrap_or_default()
         },
         |message| redactor.text(&message).into_owned(),
@@ -816,23 +911,44 @@ mod tests {
         );
         assert!(matches!(redactor.text("nothing"), Cow::Borrowed("nothing")));
         let escaped = r#"{"error":{"message":"bad \u0073k-a\/b-key","code":7}}"#;
-        let json = redactor.json(escaped);
+        let json = redactor.json(escaped).unwrap();
         assert!(!json.contains("u0073k"), "{json}");
         assert!(json.contains("[redacted]"), "{json}");
         assert!(json.contains(r#""code":7"#), "{json}");
-        assert!(matches!(redactor.json(r#"{"ok":true}"#), Cow::Borrowed(_)));
+        assert!(matches!(
+            redactor.json(r#"{"ok":true}"#),
+            Some(Cow::Borrowed(_))
+        ));
         let named = r#"{"metadata":{"\u0073k-a\/b-key":"echoed"}}"#;
         assert!(redactor.holds(named));
         assert_eq!(
-            redactor.json(named),
+            redactor.json(named).unwrap(),
             r#"{"metadata":{"[redacted]":"echoed"}}"#
         );
         assert!(redactor.holds(escaped));
         assert!(redactor.holds("event-sk-a/b-key"));
         assert!(!redactor.holds(r#"{"text":"\u0073k-a"}"#));
-        assert!(!redactor.holds(r"not json \u0073k-a\/b-key"));
+        assert!(redactor.holds(r"not json \u0073k-a\/b-key"));
         assert!(!Redactor::new(None).holds("sk-a/b-key"));
-        assert_eq!(redactor.json("not json sk-a/b-key"), "not json [redacted]");
+        assert_eq!(
+            redactor.json("not json sk-a/b-key").unwrap(),
+            "not json [redacted]"
+        );
+        // Fail closed: JSON `serde_json` refuses (a lone surrogate) with an
+        // escaped key is found by unescaping it as text, and cannot be
+        // rewritten.
+        let refused = r#"{"text":"\u0073k-a\/b-key","pad":"\ud800"}"#;
+        assert!(redactor.holds(refused));
+        assert_eq!(redactor.json(refused), None);
+        assert!(!redactor.holds(r#"{"text":"\u0073k-a","pad":"\ud800"}"#));
+        assert_eq!(
+            unescape(r"a\u0073\ud83d\ude00\ud800\n\q\u12"),
+            "as\u{1f600}\u{fffd}\nqu12"
+        );
+        assert!(ApiKey::new("sk-a1b2c3d4e5f6g7h8i9".into()).distinctive());
+        for weak in ["EMPTY", "sk-1234", "ollama", "aaaaaaaaaaaaaaaaaaaaaaaaaaaa"] {
+            assert!(!ApiKey::new(weak.into()).distinctive(), "{weak}");
+        }
         let failure = redactor.failure(Failure::new(FailureClass::UpstreamError, "sk-a/b-key"));
         assert_eq!(failure.message, "[redacted]");
         assert_eq!(format!("{redactor:?}"), "Redactor(..)");
