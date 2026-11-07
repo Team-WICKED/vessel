@@ -18,8 +18,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-CI runs exactly these on Linux, Windows and macOS for every push to
-`backend/**` (the repository is public, so hosted runners cost nothing).
+CI runs exactly these on Linux, Windows and macOS for every push to `main`
+and `backend/**` and every pull request (the repository is public, so
+hosted runners cost nothing).
 CI does not replace the local gate: run it before pushing, and report both.
 Code that only builds on Linux must be behind `cfg(unix)` with a working (or
 explicitly erroring) Windows path.
@@ -187,6 +188,14 @@ ADR 0001 records why; `docs/plans/backend-m1.md` says who owns which crate.
   instead of editing it; the proto contract is shared.
 - Work in your own git worktree and branch. Commit in small, reviewable steps
   with messages that say why. Do not push, do not rewrite shared history.
+- Branches: tracks push to their own `backend/<milestone>-<track>` branch;
+  the coordinator merges them into the milestone's `backend/m<N>` after the
+  local gate. A milestone reaches `main` only by a pull request from its
+  branch, once its gate is green, CI is green on all three platforms and
+  its plan's manual smokes have passed; it is merged with a merge commit,
+  never squashed, so each track's commits and review fixes stay in the
+  history. Nobody pushes to `main` directly. Tags `v*` start a release
+  (`.github/workflows/release.yml`): only for a release.
 - Report: what you built, the three-command gate result, what you deferred
   and why, and any contract change you need.
 - The repository is public (ADR 0014): every commit, doc, test fixture and

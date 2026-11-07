@@ -31,9 +31,9 @@ See [docs/VISION.md](docs/VISION.md) for the long version and
 
 ## Status
 
-Milestones 1 to 4 are built and green on Linux, macOS and Windows (branch
-`backend/m4`; [docs/ROADMAP.md](docs/ROADMAP.md) has the details and
-what is next):
+Milestones 1 to 4 are done, on `main`, and green on Linux, macOS and
+Windows ([docs/ROADMAP.md](docs/ROADMAP.md) has the details and what is
+next):
 
 1. **One node, done properly.** Terminal sessions in a PTY and structured
    sessions over ACP, a durable log every client can follow and resume,
