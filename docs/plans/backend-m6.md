@@ -1,0 +1,240 @@
+# Milestone 6: IDE context through LSP
+
+Status: Phase A accepted by the coordinator, 2026-11-07 (ADR 0016). Track M6 owns `vessel-lsp`, its
+`vessel-testkit` fake, and the LSP integration in proto, node and MCP. M5 and
+M7 share protocol 7; LSP rows append to the RPC table in separate commits.
+Read `AGENTS.md`, VISION section 5, ORIGIN.ko, ARCHITECTURE and PROTOCOL first.
+
+## Goal
+
+An agent asks the node for symbols, locations, hover, call hierarchy and
+diagnostics without an editor attached. The node runs a language server on
+demand for a permitted workspace, serves saved disk contents, and exposes
+bounded, typed, read-only results locally and through the fleet envelope.
+
+## Out of scope
+
+Editing, rename, code actions, execute-command, debugger support, installing
+servers, downloading SDKs, editor unsaved buffers, a new search index, and
+sandboxing a language server. No automatic trust in project executable
+configuration. Model routing and UI belong to the other tracks.
+
+## What exists to build on
+
+- `vessel-proc::CommandSpec`, `spawn`, `Child`: process groups / Windows jobs,
+  kill-on-drop, piped I/O and complete process-tree cleanup.
+- `vessel-proto::Request`, the exhaustive RPC table, scope column and `since`;
+  protocol negotiation already refuses newer methods on older connections.
+- M4's `Principal`, session cwd, delegated origin and scope intersection.
+  `fleet.forward`/`relay`/`deliver` already provide routing and revocation.
+- `vessel-mcp` uses rmcp and maps tools onto typed client requests.
+- `vessel-testkit::within` builds deterministic fakes before starting deadlines.
+- Existing serde, tokio, thiserror and which in the dependency
+  tree. Reuse these; ACP's newline framing cannot carry LSP Content-Length.
+
+## Contract changes
+
+Protocol 7, additive. All methods use Read, and are forwardable under M4's
+intersection rule. The receiving node authorizes roots itself; a source
+node's session cwd is not authority over a target's disk.
+
+| Method / MCP tool | Input beyond workspace and page | Result |
+| --- | --- | --- |
+| `lsp.workspace_symbols` / `vessel_lsp_workspace_symbols` | language, query | symbol page |
+| `lsp.document_symbols` / `vessel_lsp_document_symbols` | file | symbol page |
+| `lsp.definition` / `vessel_lsp_definition` | file, position | location page |
+| `lsp.references` / `vessel_lsp_references` | file, position, include_declaration | location page |
+| `lsp.hover` / `vessel_lsp_hover` | file, position | bounded text and optional range |
+| `lsp.implementations` / `vessel_lsp_implementations` | file, position | location page |
+| `lsp.type_definition` / `vessel_lsp_type_definition` | file, position | location page |
+| `lsp.incoming_calls` / `vessel_lsp_incoming_calls` | file, position | call page |
+| `lsp.outgoing_calls` / `vessel_lsp_outgoing_calls` | file, position | call page |
+| `lsp.diagnostics` / `vessel_lsp_diagnostics` | optional file, language | diagnostic page |
+
+Wire types live in `vessel-proto::lsp`, never expose server JSON. Language,
+severity, symbol kind, freshness and markup format are enums. Workspace and
+file paths are validated types. Position has nonzero line and column (Unicode
+scalar values, not bytes, grapheme clusters or UTF-16 units); ranges have an
+exclusive end. The boundary converts both directions against the saved
+snapshot, rejecting invalid positions and split surrogate pairs.
+
+A page has items, next offset, truncation and freshness. Limit defaults to
+50, at most 200; collect at most 2,000 items and 1 MiB per response. Stable
+sorting precedes paging. Offset pagination is explicitly best effort across
+edits, not a promise of a persistent snapshot. A page reports incomplete
+server data separately from our own truncation. Unsupported capability is
+`unsupported`, missing server `unavailable`, bad path/position
+`invalid_request`, unauthorized root `forbidden`. Empty is not an error.
+
+## Crates / seams
+
+- New `vessel-lsp -> vessel-proto, vessel-proc`: `registry` (inert executable
+  selection), `framing` (bounded Content-Length transport), `protocol`
+  (typed LSP edge), `process` (correlation and lifecycle), `documents`
+  (saved snapshots, sync, positions), `manager` (bounded workspace/language
+  actors), `query` (typed conversion and page limits), `error`.
+- `vessel-node -> vessel-lsp`: resolve principal roots before dispatch;
+  config owns explicit roots, executable overrides and lifecycle limits.
+  No wire request can choose a command or initialization options.
+- `vessel-mcp`: typed arguments and schema; optional target node uses the
+  existing forwarding path. `vessel-client` remains a generic typed caller.
+- `vessel-testkit`: `fake-lsp`, with independent typed fixture messages.
+  No production dependency on testkit. Document the new edges in ADR 0001.
+
+Dependencies proposed: `notify` for native file events (instead of periodic
+filesystem polling), `url` for correct platform file URI conversion, and a deliberately small serde LSP subset rather than
+`lsp-types` wholesale: its initialization options, diagnostic data and call
+hierarchy data use Value. Opaque call-hierarchy data is `RawJson` and is only
+round-tripped back to the server. No field inspection of opaque data.
+Reconsider using Value-free leaf types if that measurably reduces code.
+
+## Data flow
+
+1. MCP caller authenticates as its session. Read scope and target authority
+   are checked, locally or at the final fleet destination.
+2. Canonicalize the requested root and file under permitted roots, reject
+   non-file URIs, escaping symlinks and non-regular files. A local agent may
+   use its session cwd; a remote agent may use only destination-configured
+   roots (or an explicitly authorized destination session in a later API).
+3. Manager chooses `(canonical root, language)` and a trusted server command:
+   rust-analyzer, typescript-language-server --stdio, basedpyright-langserver
+   --stdio (fallback pyright-langserver), gopls, clangd. PATH is supplied by
+   the binary, not read implicitly by library tests. Overrides are node-only.
+4. Lazy spawn, initialize minimal capabilities with UTF-16, initialized.
+   One server actor owns its process, pending replies, documents and progress.
+   Queues are bounded; saturation returns unavailable, never an unbounded
+   pending map. Drain stderr without publishing arbitrary server text.
+5. Open a bounded UTF-8 saved document on demand. Watch native file events;
+   reread before each query as a correctness backstop for lost events. Send
+   didOpen / didChange (respecting full or incremental sync) / didClose.
+6. Wait for known progress tokens within a deadline, then query. Standard LSP
+   has no universal 'indexing complete': reply with unknown/busy/ready status
+   from observed progress, never infer complete workspace coverage from
+   silence. Push diagnostics are a cache with explicit coverage/freshness;
+   pull diagnostics are used only when advertised.
+7. Normalize and filter every server location to authorized roots, bound
+   strings and result counts, convert positions against saved text, sort,
+   page and return. Never open a server-selected path before checking it.
+8. Idle actors send shutdown then exit, with a kill-and-reap deadline.
+   Crashes fail pending requests and invalidate cached state; next demand
+   restarts after exponential backoff. Cancellation flows from node shutdown.
+
+## Steps
+
+1. Plan and grounding; three-command baseline gate; commit and push.
+2. Independent foundations: strict framing and Unicode position conversion,
+   inert registry, deterministic fake and transport tests.
+3. Separate contract commit: typed LSP requests/results, append-only RPC
+   rows, protocol 7 and exhaustive dispatch stubs / roundtrip tests.
+4. Process actor: initialize, server requests, notifications, correlation,
+   cancellation, malformed/oversized frame handling and process cleanup.
+5. Document snapshots, native watcher, progress/diagnostic cache, idle/crash
+   lifecycle and node-owned registry limits. Default maximum 4 servers,
+   5-minute idle, 30-second request deadline, 1..30-second restart backoff;
+   initialization may need a separate longer deadline for large projects.
+6. Queries and limits, node root authorization, local/fleet RPC integration.
+7. MCP tool surface and end-to-end fake tests; manual real-server smoke;
+   docs, full local gate and three-platform CI before coordinator merge.
+
+Every push runs fmt check, workspace clippy with warnings denied, and the
+workspace tests. Commits explain the constraint or failure they address.
+Build artifacts use the worktree's preconfigured external target directory.
+
+## Security
+
+Read-only describes RPC capabilities, not an OS sandbox: installed LSP servers
+may read imports outside the root, load plugins, spawn tools or write caches.
+Use only operator-trusted executables/workspaces; do not claim confinement of
+the child process. Disable build scripts/proc macros/check-on-save in the Rust
+preset where supported; do not send edit/execute commands or applyEdit.
+Request-scoped output filtering is still mandatory for shared server caches.
+Reject server workspace/applyEdit; answer configuration/workspace-folder and
+progress requests with typed responses; unsupported requests receive a typed
+JSON-RPC error. Do not advertise dynamic features we cannot honor.
+
+All file reads, watcher events, diagnostic related locations, symbol locations
+and call hierarchy results cross the same confinement boundary. No arbitrary
+URI scheme, UNC network access or relative traversal. Bound header size,
+payload size, files, documents, progress tokens, pending calls, diagnostic
+cache and string sizes. Timeouts must not leave pending IDs or process trees.
+Tests use temporary homes and fake executables, never real accounts/harnesses.
+No credentials, private paths or host details in docs/fixtures/logs.
+
+## Done criteria
+
+- Fake-driven tests cover initialize/initialized, concurrent out-of-order
+  replies, server requests, UTF-16 emoji/combining/CRLF conversion, sync and
+  deletion, diagnostics/progress, cancellation, EOF, malformed/oversized
+  headers/bodies, crash/backoff, idle and process-tree cleanup.
+- Each RPC roundtrips; older protocols refuse before dispatch. Read-only
+  principals succeed only within permitted roots, denied calls never spawn
+  or read. Test symlink escape, outside-root results, remote agent origins,
+  absent root grants, revoked grants and paging/truncation.
+- MCP test actually calls the tools against a fake-driven node; all tools
+  return typed bounded content with useful unsupported/missing-server errors.
+- Local three-command gate passes; Linux/macOS/Windows CI passes.
+- `docs/smoke/m6-lsp.py` starts an isolated node and MCP connection, then asks
+  rust-analyzer about this repository: workspace/document symbols,
+  definition/reference/hover, implementations/type definition, call hierarchy
+  and diagnostics. Modify only a temporary copied fixture to check resync.
+  Record tool outputs and incomplete/unsupported results honestly. Script
+  fails with an actionable prerequisite message if rust-analyzer is absent.
+- Optional real-server integration probes detect PATH availability and state
+  a skip reason if absent; they are not evidence for every server preset.
+
+## Open decisions (accepted by the coordinator, 2026-11-07)
+
+All seven recommendations below are accepted. The coordinator additionally
+requires an operator-only full-analysis opt-in per configured root, never
+on the wire. A local cwd gains this opt-in only by matching that configured
+root. Conservative Rust defaults prevent a remotely forwarded Read call from
+executing build scripts or proc macros; the accuracy cost is unresolved
+unexpanded derives. Every answer must identify covered files, observation
+time and whether indexing completion was actually observed.
+
+
+1. **LSP types.** Recommend a minimal typed serde edge: lsp-types exposes
+   Value in key structures, incompatible with our wire/domain rule. Alternative:
+   use its safe leaf types plus wrappers, at the cost of dual representations.
+2. **Position columns.** Recommend 1-based Unicode scalar columns and strict
+   UTF-16 conversion; alternatives are 1-based UTF-16 (surprising for agents)
+   or bytes (language/tool dependent). State the convention in every schema.
+3. **Remote roots.** Recommend explicit destination-configured roots for
+   remote agents, with local session cwd as the local implicit root. Never
+   trust an origin-provided cwd. Alternative: require an owned destination
+   session ID, which complicates simple repository lookups.
+4. **Diagnostics completeness.** Recommend cached push + advertised pull,
+   and explicit freshness/coverage. Alternative: recursively open every file,
+   costly and still no universal indexing guarantee. Never claim that an
+   empty cache is a clean workspace.
+5. **Saved disk / editor overlays.** Recommend saved files only for M6;
+   alternative: an editor-buffer ownership protocol now, which couples M7.
+6. **Trust and defaults.** Recommend no server installs, operator-owned
+   presets, bounded native watchers and conservative Rust execution settings.
+   Alternative: full editor defaults including build scripts/proc macros,
+   giving better semantic coverage but executing more repository code.
+7. **Paging.** Recommend bounded deterministic offset pages with freshness;
+   alternative: principal-bound expiring snapshot cursors, stronger consistency
+   but another cache and lifecycle to secure. Revisit if consumers need it.
+
+## Grounding
+
+Read 2026-11-07, ideas only; no GPL code copied or linked into Vessel.
+Zed source inspected at commit `654efae441bc8eb117d0042bb28cd7cf3570bdc9`:
+
+- `crates/lsp/src/lsp.rs`: LanguageServer owns correlation IDs, handlers,
+  capabilities and I/O; initialize records capabilities before initialized;
+  shutdown sends shutdown/exit and drains with deadlines. Adopt the lifecycle
+  separation, implement with Vessel actors, bounded queues and vessel-proc.
+- `crates/project/src/lsp_store.rs`: server seeds include worktree, binary
+  settings and toolchain; start is lazy and worktree trust precedes launch.
+  Documents retain versioned snapshots for diagnostics and UTF-16 locations;
+  work-done progress and server-specific diagnostics readiness are distinct.
+  Adopt explicit root identity and snapshots; do not assume silence is ready.
+- Zed's editor entities, dynamic handlers, shared locks and extension adapters
+  are inappropriate dependencies for a headless node. Keep the transport
+  separate from registry, saved-document state and node authorization.
+
+Primary references: [LSP 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/),
+[lsp-types InitializeParams](https://docs.rs/lsp-types/0.97.0/lsp_types/struct.InitializeParams.html),
+[Zed source](https://github.com/zed-industries/zed/tree/654efae441bc8eb117d0042bb28cd7cf3570bdc9/crates/lsp).
