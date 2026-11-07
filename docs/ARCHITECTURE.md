@@ -7,8 +7,9 @@ and the reasons are in `docs/adr/`.
 ## Pieces
 
 ```
-  vessel CLI      agents (`vessel mcp`)      editors, web UI (later)   (clients)
-        \                 |                        /
+  vessel CLI      agents (`vessel mcp`)      `vessel ui` (bridge)      (clients)
+        \                 |                        /    \
+        |                 |                       /   browser (web/, loopback)
    protocol 2..=6: typed frames over one connection, which is one of
    a websocket with the token, the local socket, SSH stdio (`vesseld
    attach`), or a Noise channel to the node's key, direct or relayed
@@ -52,7 +53,7 @@ and 0013).
 | `vessel-relay` | The relay (milestone 3, ADR 0009): `serve` (its own accept loop; registration with token or ticket and possession proof, splicing, limits counted per IPv4 address and per IPv6 `/64`, `/56` and `/48` (`address`, public: the node's direct route counts the same way, and reads a trusted proxy's header with the same `ClientAddress`), a share of sockets kept for those that authenticated, the client-address header believed only from trusted proxies, close codes), registration tickets (`ticket`: HMAC-SHA256 under the token, minted by a fleet's home for a member's key, protocol 6), which addresses a link may dial (`reach`: `Reach::Public` resolves the relay's host at dial time and connects only to public addresses, for relays a member's home named), the node's `NodeLink` (with the token, or tickets it renews), the client's `dial`/`connect`, websocket carriers (`WsCarrier`, `AxumCarrier`) and the node's `respond` (closing with `4401`), TLS for `wss://` (rustls with `ring`). | proto, secure |
 | `vessel-fleet` | Fleet bundles (milestone 4, ADR 0012): the home's sources into a manifest and a content-addressed blob store; plan and apply into harness homes with recorded hashes (`managed.json`), local edits kept with the incoming version beside them, symlinks never followed, targets linked to the sources left alone; skills named by `SKILL.md`; MCP secret references resolved at launch; transfers as file sets (`snapshot` into a staging store within protocol 6's limits, `place` into a home never overwriting: a session whole or not at all, memory beside what differs). | proto, harness |
 | `vessel-mcp` | `vessel mcp` (milestone 4, ADR 0013): the MCP server (stdio, on `rmcp`) a node attaches to every session as `vessel`; each tool is one call through the session's agent principal. | proto, client |
-| `vessel-web` | `vessel ui`'s server (milestone 7, ADR 0017): loopback only, a token per launch, `Host`/`Origin` checks and security headers, the single-page app embedded at build time (`web/dist`, or a placeholder page), the browser's websocket, and the bridge to the book's nodes. | proto, client |
+| `vessel-web` | `vessel ui`'s server (milestone 7, ADR 0017): loopback only, a token per launch, `Host`/`Origin` checks and security headers, the single-page app embedded at build time (`web/dist`, or a placeholder page), the browser's websocket, and the bridge to the book's nodes: one shared connection per node with its state pushed to every tab, calls forwarded as typed `Call`s, session streams that resume, and the bridge's own ops (the book's nodes, pairing, QR codes). The CLI gives it the nodes through `NodeSource`. | proto, client |
 | `vessel-cli` | `vessel` binary: commands, interactive attach, `vessel mcp`, `vessel init` (first-run setup, milestone 4), `vessel ui` (milestone 7). | proto, client, node, remote, mcp, harness, web |
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`) and `fake-ssh` for tests; with the `relay` feature, a relay that misbehaves on command. The fakes report the environment, arguments, MCP servers, loaded session id and working directory they got (milestone 4). | - |
 
@@ -170,6 +171,31 @@ they started.
   findings, fixes and accepted residuals are recorded in the plan. Both
   manual smokes passed on 2026-11-07 (three real accounts; a fresh machine
   joining), recorded under the plan's done criteria.
+- **Milestone 7** (the web UI; `docs/plans/backend-m7.md`, ADR 0017,
+  design under `docs/design/web-ui/`): built on `backend/m7-web`.
+  `vessel ui` (crate `vessel-web`) serves the page embedded from `web/`
+  on loopback and bridges it to the book's nodes; the page is React with
+  TypeScript types generated from the wire (`web/src/wire/`). Checked in
+  CI by Playwright against real nodes with the fake harnesses, which also
+  captures every main screen.
+
+### The web UI (`web/`)
+
+```
+web/src/wire/     generated from the Rust types (proto.ts, bridge.ts) and typed call helpers
+web/src/bridge/   the websocket to `vessel ui`: hello, typed calls, follows that resume, node states
+web/src/data/     stores (useSyncExternalStore), the timeline reducer, formatting, the terminal adapter
+web/src/routes/   the screens: fleet, sessions, session (structured / terminal), new session,
+                  sync, devices, settings
+web/src/ui/       the shell, components, and the design's tokens and component CSS
+web/e2e/          Playwright: a fleet of real `vesseld` nodes with the fake harnesses, the tests,
+                  and `screens`
+```
+
+The page talks only to `vessel ui`'s `/api/ws`: `call` frames carry the
+protocol's own `Call` to a node, `follow` frames stream a session's
+records, `op` frames ask the bridge itself, and `node` frames push each
+node's connection state (`vessel_web::wire`).
 
 ### By crate
 

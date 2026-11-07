@@ -47,7 +47,8 @@ next):
    memory moved on request, first-run setup, and agents that start and
    drive sessions on any node of the fleet (below).
 
-Not yet: model routing, the LSP bridge, a web UI.
+Being built: a web UI, `vessel ui` (milestone 7, on `backend/m7`; "Web UI"
+below). Not yet: model routing, the LSP bridge.
 
 ## Try it
 
@@ -431,6 +432,48 @@ start a session on another machine and read its answer.
 - Sessions record who started them. This is attribution under one OS
   user, not a sandbox (ADR 0013).
 
+## Web UI
+
+`vessel ui` serves Vessel's web UI on this machine and opens it in the
+browser: the fleet, every node's sessions (a session an agent started
+sits under the one that started it), a session as a terminal or as a
+structured timeline with its prompt box and permission answers, new
+sessions, fleet sync, devices and pairing with a QR code, and settings.
+
+```bash
+vessel ui            # serves on 127.0.0.1:7079 (any free port if taken), opens the browser
+vessel ui --no-open  # prints the address instead
+```
+
+- The page reaches the nodes of your node book (and this machine's node)
+  through `vessel ui`, which connects to them as `vessel` does: tokens,
+  SSH, paired credentials and pinned ids stay in this process. The browser
+  holds none of them and never speaks to a node itself.
+- It listens on loopback only. Each launch makes a new key, in the
+  address's fragment (`#token=`), which browsers never send to a server;
+  the page keeps it for that address and removes it from the address bar.
+  Treat the address like a password while the UI runs.
+- One connection per node is shared by every tab. A session's stream
+  survives the node's connection dropping and resumes where it was.
+- Release builds of `vessel` embed the page. A build from source embeds it
+  when `web/dist` exists (`npm ci && npm run build` in `web/`), and shows a
+  page saying how to build it otherwise.
+
+The page's own development (Node.js 22 or later):
+
+```bash
+cd web
+npm ci
+npm run lint && npm run typecheck && npm test   # ESLint, Prettier, the font rule; tsc; vitest
+npm run build                                   # web/dist, embedded by the next cargo build
+npm run e2e                                     # Playwright against real nodes with the fake harnesses
+npm run screens                                 # every main screen into web/artifacts/screens/
+```
+
+`e2e` and `screens` need the Rust binaries first (`cargo build -p
+vessel-cli -p vessel-node --bin vesseld` and `cargo build -p
+vessel-testkit --bins`).
+
 ## Environment
 
 | Variable | Means | Default |
@@ -466,7 +509,8 @@ cargo test --workspace
 
 CI runs exactly those three on Linux, Windows and macOS. Lints are strict
 (no `unwrap`, no panics, no indexing, no raw arithmetic); see the workspace
-`Cargo.toml`.
+`Cargo.toml`. Changes to `web/` also need its checks ("Web UI" above),
+which CI runs on Linux.
 
 ## License
 

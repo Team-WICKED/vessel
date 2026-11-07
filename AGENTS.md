@@ -21,6 +21,13 @@ cargo test --workspace
 CI runs exactly these on Linux, Windows and macOS for every push to `main`
 and `backend/**` and every pull request (the repository is public, so
 hosted runners cost nothing).
+
+Changes under `web/` (the web UI, ADR 0017) add its checks, which CI runs
+on Linux: in `web/`, `npm run lint`, `npm run typecheck`, `npm test`,
+`npm run build`, then `npm run e2e` against the Rust binaries. Changes to
+wire types also regenerate the TypeScript declarations: `VESSEL_WRITE_TS=1
+cargo test -p vessel-proto -p vessel-web --features ts --lib typescript`,
+and commit `web/src/wire/`.
 CI does not replace the local gate: run it before pushing, and report both.
 Code that only builds on Linux must be behind `cfg(unix)` with a working (or
 explicitly erroring) Windows path.

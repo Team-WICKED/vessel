@@ -28,3 +28,18 @@ mockups may not yet show:
 
 Screenshots of the mockups are not kept in the repository; the app's own
 screens are captured by Playwright (`web/`, `npm run screens`).
+
+## In the app (milestone 7)
+
+- `web/src/ui/tokens.css` is this `tokens.css` with the mockup-only
+  theme checkbox removed, and `--font-mono` extended with the monospace
+  faces macOS and Linux ship (`SF Mono`, `Menlo`, `DejaVu Sans Mono`,
+  `Liberation Mono`, `Noto Sans Mono`) between `Cascadia Mono` and
+  Pretendard. Without one of them, Linux has none of the stack's real
+  monospace faces, and the terminal grid fell back to Pretendard, which
+  is proportional. The rule still holds: real monospace faces, then
+  Pretendard, then `monospace`.
+- `web/src/ui/app.css` takes this `app.css`'s component rules and class
+  names, without the no-JavaScript parts, with the five corrections above,
+  and with a section of app additions at its end (the search palette,
+  segmented buttons, form errors, the session's notice row).

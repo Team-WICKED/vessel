@@ -350,8 +350,11 @@ can drive the fleet. So:
      make an authenticated request at all.
 5. **Headers on every response:**
    - `Content-Security-Policy: default-src 'self'; connect-src 'self';
-     img-src 'self' data:; style-src 'self'; object-src 'none';
-     base-uri 'none'; frame-ancestors 'none'`;
+     img-src 'self' data:; style-src 'self' 'unsafe-inline';
+     font-src 'self'; object-src 'none'; base-uri 'none';
+     form-action 'none'; frame-ancestors 'none'`. Inline styles are
+     allowed because xterm.js writes its theme into `<style>` elements and
+     takes no nonce; scripts stay `'self'` only;
    - `X-Content-Type-Options: nosniff`;
    - `Referrer-Policy: no-referrer`;
    - `Cache-Control: no-store` on `index.html`.
@@ -535,6 +538,64 @@ The options as weighed:
     - **pnpm**: faster, but one more tool on every runner and machine.
 11. **`vesseld --web`.** Recommendation: a ROADMAP follow-up, not this
     milestone (Out of scope).
+
+## Progress (2026-11-07)
+
+Steps B1 to B8 are built on `backend/m7-web`:
+
+- B1–B2: the plan, ADR 0017, `vessel-web`'s server and `vessel ui`.
+- B4: `vessel-proto`'s `ts` feature and `web/src/wire/proto.ts`;
+  `vessel-web`'s frames in `web/src/wire/bridge.ts`; CI fails while
+  either differs from the Rust types. `NodeClient::call_any` (contract
+  change 5) takes a `UnaryCall`.
+- B5: the bridge (`registry`, `bridge`, `NodeSource`; `BookSource` in
+  the CLI), tested against real nodes in-process, including a stream that
+  resumes across a cut connection and a structured turn whose records are
+  the page's reducer fixture.
+- B3, B6–B8: `web/` with the screens built from the design draft, unit
+  tests, Playwright end to end against real `vesseld` nodes with the fake
+  harnesses, and `npm run screens`. CI's `web` job runs all of it on Linux
+  and keeps the screenshots as an artifact; release builds ship `vessel`
+  with the page embedded (decision 3b).
+
+Decided while building:
+
+- **Inline styles in the CSP.** xterm.js writes its theme and cell sizes
+  into `<style>` elements and takes no nonce, so the policy has
+  `style-src 'self' 'unsafe-inline'`. Scripts stay `'self'` only; markup
+  from sessions is never inserted (React text, Markdown with raw HTML
+  off), so inline styles could only matter after an injection that the
+  page does not allow.
+- **What `vessel ui` lists.** The book's nodes by name and this machine's
+  node (as `_here`, which no book name can be), nothing else: a page
+  cannot make the UI dial an address or start `ssh` to a host the user did
+  not put in the book. `--node` and `--token` are ignored, so a token
+  given for one node is never sent to another.
+- **One connection per node.** A supervisor per node redials with the
+  CLI's backoff and pushes its state; calls fail at once while a node is
+  down; streams resume through a connector that waits for the
+  supervisor's next connection (ADR 0017's addition).
+- **Fonts.** Pretendard is the variable face, one 2 MB file bundled from
+  the `pretendard` package (the OFL text is served beside it). The code
+  stack is the design's with the monospace faces macOS and Linux ship
+  added before Pretendard (on Linux the design's stack has no real
+  monospace face, and a terminal grid in a proportional face is
+  unreadable). xterm.js's own stylesheet names a bare `monospace`; the
+  build rewrites it, and the font check reads the built CSS too.
+- **Routing.** TanStack Router with code-based routes. Its loose
+  (`strict: false`) params come out as `any` when the route components
+  are typed through the same router, which the lint forbids, so pages
+  read the path and `?node=` from the router's location (`useWhere`).
+- **Playwright 1.63.** Pinned to the release whose Chromium build the
+  development host already has; CI installs its own.
+- **Models in New session** show "harness default" only, until model
+  routing (M5) gives `model.list`.
+
+Not done in this milestone: the session hierarchy shows agent-created
+sessions nested as the protocol records them, but the e2e fleet has no
+agent creating sessions (the fakes do not call `vessel mcp`), so the tree
+is covered by the unit-level `tree` helper only; `vesseld --web`
+(decision 11) stays a follow-up.
 
 ## Grounding
 
