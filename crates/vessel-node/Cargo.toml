@@ -56,6 +56,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Moving a device's pairing time back in a home's database (e2e
+# `callback`), so a window is tested without waiting it out.
+rusqlite.workspace = true
 tempfile.workspace = true
 vessel-harness = { workspace = true, features = ["fakes"] }
 # An agent's `vessel` tools driven across a fleet (e2e `across`). Not a
