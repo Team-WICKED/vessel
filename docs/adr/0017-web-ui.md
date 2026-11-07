@@ -196,6 +196,12 @@ Option 3.
   would miss future escape sequences; disabling all input during async
   replay would lose real typing. This private API dependency must pass the
   real-terminal browser regression before xterm upgrades.
+- A terminal's keys and sizes go out one `session.send` at a time, in
+  order, keys typed meanwhile joined into one send (`terminal-sender`,
+  the CLI attach's sender): the bridge and the node both run calls
+  concurrently, so two sends in flight could reach the PTY in either
+  order (CI caught a pasted line arriving after its Enter). At most 1 MiB
+  of keys waits; past that keys are dropped with a notice.
 - Pairing links/QR are absent from the DOM until explicitly shown. Copying,
   blur/visibility change and a 30 s deadline hide them. CI uploads only
   deliberate screenshots of the hidden state; no traces, videos, HTML

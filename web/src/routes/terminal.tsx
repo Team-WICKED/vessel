@@ -3,7 +3,8 @@
 // The view replays the session's terminal records from the start, as
 // `vessel attach` does, then follows live. Keys go to the session as
 // input. The size is sent only by a tab that has focus and has typed, so
-// a tab that only watches never resizes the harness (Paseo's rule).
+// a tab that only watches never resizes the harness (Paseo's rule). Keys
+// and sizes go out one send at a time, in order (data/terminal-sender.ts).
 // A routed session's model calls (protocol 7) are summed into the frame's
 // chrome; the records hold metadata only.
 
@@ -17,8 +18,10 @@ import { useFleet } from "../context";
 import { userInput } from "../data/terminal-input";
 import { openExternal } from "../data/links";
 import { addCall, type Usage, usageLine } from "../data/models";
-import { decodeBytes, encodeText } from "../data/terminal";
+import { decodeBytes } from "../data/terminal";
+import { TerminalSender } from "../data/terminal-sender";
 import { Banner } from "../ui/parts";
+import { toast } from "../ui/toasts";
 import type { StreamState } from "../wire/bridge";
 import type { SessionInfo } from "../wire/proto";
 
@@ -88,21 +91,23 @@ export function TerminalView({
     terminal.open(element);
     fit.fit();
     setSize({ cols: terminal.cols, rows: terminal.rows });
+    // One send in flight, in typing order (data/terminal-sender.ts).
+    const sender = new TerminalSender(
+      (terminalInput) =>
+        fleet.bridge.call(node, "session.send", {
+          session: session.id,
+          input: { type: "terminal", input: terminalInput },
+        }),
+      () => {
+        toast("Keys dropped: the session is not reading its input", "error");
+      },
+    );
     let typed = false;
     const sendSize = () => {
       if (!typed || !element.contains(document.activeElement)) {
         return;
       }
-      void fleet.bridge.call(node, "session.send", {
-        session: session.id,
-        input: {
-          type: "terminal",
-          input: {
-            kind: "resize",
-            size: { cols: terminal.cols, rows: terminal.rows },
-          },
-        },
-      });
+      sender.resize(terminal.cols, terminal.rows);
     };
     const input = userInput(terminal, (data) => {
       const first = !typed;
@@ -110,18 +115,7 @@ export function TerminalView({
       if (first) {
         sendSize();
       }
-      void fleet.bridge
-        .call(node, "session.send", {
-          session: session.id,
-          input: {
-            type: "terminal",
-            input: { kind: "data", data: encodeText(data) },
-          },
-        })
-        .catch(() => {
-          // The stream's state says why (the node is down, the session
-          // ended); the key is not sent twice.
-        });
+      sender.keys(data);
     });
     const observer = new ResizeObserver(() => {
       fit.fit();
@@ -154,6 +148,7 @@ export function TerminalView({
       stop();
       observer.disconnect();
       input.dispose();
+      sender.close();
       terminal.dispose();
     };
   }, [fleet, node, session.id]);

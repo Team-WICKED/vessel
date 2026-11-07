@@ -59,6 +59,44 @@ test("a terminal session runs and echoes keys", async ({ page }) => {
   await expect(terminal).toContainText("echo: hello vessel");
 });
 
+test("terminal input reaches the session in the order it was typed", async ({
+  page,
+}) => {
+  // The page's websocket passes through here, and the first frame carrying
+  // keys is held back half a second. A page that sends the next key before
+  // the first is answered (the bridge and the node run calls concurrently)
+  // would put the Enter ahead of its line; this one sends one at a time
+  // (data/terminal-sender.ts).
+  let held = false;
+  await page.routeWebSocket(/\/api\/ws$/, (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((message) => {
+      const text = typeof message === "string" ? message : "";
+      if (!held && text.includes('"kind":"data"')) {
+        held = true;
+        setTimeout(() => {
+          server.send(message);
+        }, 500);
+        return;
+      }
+      server.send(message);
+    });
+  });
+  await open(page);
+  await create(page, "gpu-box", "Terminal");
+  const terminal = page.getByLabel("Session terminal");
+  await expect(terminal).toContainText("ready");
+  await terminal.click();
+  for (let line = 0; line < 6; line += 1) {
+    await page.keyboard.insertText(`ordered-${String(line)}-end`);
+    await page.keyboard.press("Enter");
+  }
+  for (let line = 0; line < 6; line += 1) {
+    await expect(terminal).toContainText(`echo: ordered-${String(line)}-end`);
+  }
+  expect(held).toBe(true);
+});
+
 test("a structured session runs a turn and answers its permission", async ({
   page,
 }) => {
