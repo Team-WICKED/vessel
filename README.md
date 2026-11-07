@@ -192,8 +192,11 @@ head -c 32 /dev/urandom | base64 > relay.token && chmod 600 relay.token
   between.
 - Deadlines, not configurable: a request's headers within 10 s; a
   registering node's first message, and a client's first record once its
-  node answered, within 2 s; and a stopping relay drops what is still open
-  5 s after it was asked to stop. Registering nodes take the open places
+  node answered, within 2 s; a stopping relay drops what is still open
+  5 s after it was asked to stop; and a closed connection is read for at
+  most 1 s more, until the other side closes too, so its close code is not
+  lost to a reset (it keeps its place, and counts against the limits,
+  meanwhile). Registering nodes take the open places
   first; the `--reserved-registering` places are taken only when no open
   place is left, by a connection whose first message names a node
   registered here before (since the relay started). Until it speaks such

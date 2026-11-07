@@ -327,6 +327,13 @@ pairing) implements it; until then nodes answer `device.*` with
 - Node close code on a secure-channel websocket: `4401` the handshake failed
   (most likely the client pinned another key). Relays forward a node's close
   code to the client unchanged. Clients treat `4401` as final: re-pair.
+- Closing (2026-11-07): a relay or a node that closes a websocket with a
+  code then reads and discards what the peer still sends, until the
+  peer's own close or end, for at most 1 s, so the close is not lost to a
+  reset (a socket dropped with unread bytes is reset, and on Windows the
+  reset throws away a close frame still in flight). A peer should answer
+  a close and stop sending; one that keeps sending is dropped after that
+  second.
 
 ## Version 3 (2026-11-06)
 
