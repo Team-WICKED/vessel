@@ -1,0 +1,15 @@
+[package]
+name = "vessel-llm"
+description = "Model APIs for Vessel's routing proxy: wire types, Server-Sent Events, translation, upstream calls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,6 +1,7 @@
 # Backend milestone 5: model routing
 
-Status: draft for the coordinator (2026-11-07), Track M5. ROADMAP Phase 3,
+Status: accepted (2026-11-07, coordinator's decisions below), Track M5;
+ADR 0015. ROADMAP Phase 3,
 VISION section 4: "every harness can use every model, through a routing
 proxy the node runs locally". Protocol 7 is shared by milestones 5 to 7;
 this plan's rows are appended at the end of the table with `since 7`.
@@ -101,10 +102,14 @@ Shared with M6 and M7: rows go at the end of the method table with
   (additive and optional, so no version gate; older clients ignore it).
 - `SessionInfo.model: Option<SessionModel { route, model }>`: the route a
   session was launched with and its upstream model id (additive, optional).
-- `SessionEvent::ModelCall(ModelCall { route, model, usage, stop,
-  failure: Option<String>, latency_ms })`, `since 7`, one per upstream
-  call. Older clients get a `HarnessLog` stand-in line at the same
-  position ("vessel: model call to <model>: <in> in, <out> out"), as
+- `SessionEvent::ModelCall(ModelCall { route, model, api, usage, stop,
+  failure: Option<ModelFailure>, duration_ms })`, `since 7`, one per
+  upstream call: metadata only, never prompt or completion content, tool
+  arguments or keys. `ModelFailure` is a closed set of error classes
+  (`rate_limited`, `overloaded`, `upstream_error`, `refused_request`,
+  `timeout`, `truncated`, `unauthorized`), not the upstream's message.
+  Older clients get a `HarnessLog` stand-in line at the same position
+  ("vessel: model call to <model>: <in> in, <out> out"), as
   `ProfileChanged` does.
 - Method `model.list` (read) → `Vec<ModelRoute { name, provider:
   ProviderLabel, api: ModelApi, model, small_model? }>`: the routes this
@@ -421,7 +426,39 @@ commits.
 - **S2** (optional, with an Anthropic key): Codex through an Anthropic
   route, one turn with a tool call.
 
-## Open decisions
+## Decisions (coordinator, 2026-11-07)
+
+All twelve recommendations below are accepted; ADR 0015 records them, and
+the crate `vessel-llm` with the edge `vessel-node -> llm` (ADR 0001).
+Conditions added:
+
+- Routes (5): `models.toml` is owner-only, and so is anything derived
+  from it.
+- Model names (6): pin every model slot Claude Code reads (the main
+  model, the default opus, sonnet and haiku models, the small and fast
+  model), so subagents and background calls land on the route's `model`
+  or `small_model`; a refusal names the model asked for and those the
+  route allows.
+- Token (7): dies with the session, compared in constant time, stored
+  only as a hash; a request with no token or a wrong one gets 401 and
+  logs no request content.
+- Thinking (9): a `vsl1:`-signed thinking block never reaches Anthropic,
+  also after the session moves to an Anthropic route or a profile on one:
+  every thinking block whose signature is not Anthropic's is removed
+  before any Anthropic upstream call. Tested for the move and for mixed
+  history.
+- HTTP client (10): connect, first-byte and between-chunks timeouts, and a
+  bound on non-streaming response bodies.
+- Usage (11): the event carries route, upstream model, API, token counts,
+  stop reason, duration and an error class; nothing else.
+- The proxy holds provider keys: once Phase B is feature-complete it gets
+  the independent security review (token handling, SSRF, key exposure,
+  smuggling between sessions, resource limits, log contents).
+- Protocol rows `since 7` in their own commits at the table's end; M6 adds
+  `lsp.*` and M7 a `ts` feature in `vessel-proto` and
+  `NodeClient::call_any`, to merge against.
+
+## Open decisions (as drafted, kept for the record)
 
 1. **Where the proxy runs.**
    (a) In the node, one listener for all routed sessions; (b) a separate

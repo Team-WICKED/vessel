@@ -1,0 +1,24 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"reasoning_content":"Two files."},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"content":"Writing both."},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"Write","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"file_path\":\"a.txt\""}}]},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","type":"function","function":{"name":"Write","arguments":"{\"file_path\":"}}]},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"content\":\"a\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"b.txt\",\"content\":\"b\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"gen-1","object":"chat.completion.chunk","created":1762500000,"model":"qwen/qwen3-coder","choices":[],"usage":{"prompt_tokens":200,"completion_tokens":50,"total_tokens":250,"prompt_tokens_details":{"cached_tokens":128},"completion_tokens_details":{"reasoning_tokens":10}}}
+
+data: [DONE]
+
