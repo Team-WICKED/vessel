@@ -66,28 +66,37 @@ impl NodeService {
                 "LSP workspace is not an allowed root on this node",
             ));
         }
-        let root = vessel_lsp::documents::canonical_root(requested)
+        let workspace = vessel_lsp::documents::canonical_root(requested)
             .await
             .map_err(|error| wire_error(&error))?;
-        let mut permitted = false;
+        // The server is keyed by the innermost allowed root containing the
+        // workspace, so many subdirectories of one root share one server.
+        // Full analysis follows any containing entry: an operator's
+        // full-analysis parent makes every root under it full.
+        let mut scope_root: Option<PathBuf> = None;
         let mut full = false;
         for entry in allowed {
             let Ok(canonical) = vessel_lsp::documents::canonical_root(&entry.path).await else {
                 continue;
             };
-            if root.starts_with(canonical) {
-                permitted = true;
+            if workspace.starts_with(&canonical) {
                 full |= entry.full_analysis;
+                if scope_root
+                    .as_ref()
+                    .is_none_or(|current| canonical.starts_with(current))
+                {
+                    scope_root = Some(canonical);
+                }
             }
         }
-        if !permitted {
-            // The same answer as a missing path: a symlink inside an allowed
-            // root must not reveal whether its outside target exists.
-            return Err(wire_error(&Error::Path));
-        }
+        // The same answer as a missing path: a symlink inside an allowed
+        // root must not reveal whether its outside target exists.
+        let root = scope_root.ok_or_else(|| wire_error(&Error::Path))?;
+        let scope =
+            vessel_lsp::Scope::new(root, workspace, full).map_err(|error| wire_error(&error))?;
         let reply = self
             .lsp
-            .query(root, full, query)
+            .query(scope, query)
             .await
             .map_err(|error| wire_error(&error))?;
         R::response_from(reply)

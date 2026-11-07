@@ -7,7 +7,7 @@
 //! while routing another server. Idle and backoff timers are deadlines, not
 //! filesystem/readiness polling.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -53,6 +53,38 @@ impl Default for Config {
     }
 }
 
+/// Where one query runs, as authorized by the node.
+///
+/// A server analyses `workspace`, the canonical directory the caller asked
+/// for. `root` is the allowed root the node granted for it (a configured
+/// root or a local session's cwd): server slots are shared fairly between
+/// allowed roots, so many subdirectories of one root cannot lock another
+/// root out.
+#[derive(Debug, Clone)]
+pub struct Scope {
+    root: PathBuf,
+    workspace: PathBuf,
+    full_analysis: bool,
+}
+
+impl Scope {
+    /// Both paths canonical; `workspace` at or below `root`.
+    /// `full_analysis` is the operator's choice for `root`, never a caller's.
+    ///
+    /// # Errors
+    /// [`Error::Path`] when `workspace` is outside `root`.
+    pub fn new(root: PathBuf, workspace: PathBuf, full_analysis: bool) -> Result<Self, Error> {
+        if !workspace.starts_with(&root) {
+            return Err(Error::Path);
+        }
+        Ok(Self {
+            root,
+            workspace,
+            full_analysis,
+        })
+    }
+}
+
 /// A server's identity: what it analyses, never who asked.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Key {
@@ -68,6 +100,8 @@ struct Work {
 #[derive(Debug)]
 struct Admission {
     key: Key,
+    /// The allowed root this admission's slot is accounted to.
+    root: PathBuf,
     work: Work,
 }
 
@@ -89,7 +123,7 @@ impl Manager {
         let (sender, receiver) = mpsc::channel(32);
         let (done, finished) = tokio::sync::watch::channel(false);
         drop(tokio::spawn(async move {
-            run(config, shutdown, receiver).await;
+            Pool::new(config, shutdown).run(receiver).await;
             let _old = done.send_replace(true);
         }));
         Self { sender, finished }
@@ -105,28 +139,24 @@ impl Manager {
         }
     }
 
-    /// Query an already-authorized canonical root with operator-selected trust.
+    /// Query within an already-authorized scope.
     ///
     /// # Errors
     /// Refuses overload, shutdown, unavailable servers and invalid source data.
-    pub async fn query(
-        &self,
-        root: PathBuf,
-        full_analysis: bool,
-        query: Query,
-    ) -> Result<Reply, Error> {
+    pub async fn query(&self, scope: Scope, query: Query) -> Result<Reply, Error> {
         if let Some(file) = query.file() {
-            let _canonical = crate::documents::resolve(&root, file).await?;
+            let _canonical = crate::documents::resolve(&scope.workspace, file).await?;
         }
         let (reply, response) = oneshot::channel();
         let key = Key {
-            workspace: root,
+            workspace: scope.workspace,
             language: query.workspace().language,
-            full: full_analysis,
+            full: scope.full_analysis,
         };
         self.sender
             .try_send(Admission {
                 key,
+                root: scope.root,
                 work: Work { query, reply },
             })
             .map_err(|_full_or_closed| Error::Unavailable)?;
@@ -134,34 +164,177 @@ impl Manager {
     }
 }
 
-async fn run(config: Config, shutdown: CancellationToken, mut inbox: mpsc::Receiver<Admission>) {
-    let mut servers: BTreeMap<Key, mpsc::Sender<Work>> = BTreeMap::new();
-    let mut tasks = JoinSet::new();
-    let tools = Tools::default();
-    loop {
-        tokio::select! {
-            () = shutdown.cancelled() => break,
-            _ended = tasks.join_next(), if !tasks.is_empty() => { servers.retain(|_, sender| !sender.is_closed()); }
-            admission = inbox.recv() => {
-                let Some(Admission { key, work }) = admission else { break; };
-                servers.retain(|_, sender| !sender.is_closed());
-                if !servers.contains_key(&key) {
-                    if servers.len() >= config.max_servers.get() {
-                        drop(work.reply.send(Err(Error::Unavailable))); continue;
-                    }
-                    let (sender, receiver) = mpsc::channel(8);
-                    drop(servers.insert(key.clone(), sender));
-                    drop(tasks.spawn(server(key.clone(), config.clone(), shutdown.child_token(), receiver, Arc::clone(&tools))));
+/// Admissions waiting for a slot a retiring server is about to free.
+const MAX_PARKED: usize = 8;
+
+#[derive(Debug)]
+struct Slot {
+    sender: mpsc::Sender<Work>,
+    /// The allowed root this server is accounted to (its first requester's).
+    root: PathBuf,
+    /// Asks the server to stop between queries, keeping any in-flight one.
+    retire: CancellationToken,
+    retiring: bool,
+    /// Admission order of the last query, for least-recently-used choice.
+    used: u64,
+}
+
+/// [Decision Log]
+/// - Purpose: a bounded number of servers, shared fairly between roots.
+/// - Before: four subdirectories of one allowed root took every slot and
+///   every other root was refused until they idled out (review finding).
+/// - Alternatives: one server per allowed root, rooted there (a session cwd
+///   such as a home directory would make pyright/gopls index the whole tree
+///   and put user-installed tools "inside the root"); a fixed per-root quota
+///   (wastes slots while one root is alone); refusing and asking callers to
+///   retry (callers would have to poll for a slot).
+/// - Chosen: servers keep the requested workspace as their analysis root
+///   and are accounted to the allowed root. When all slots are taken, the
+///   busiest root that holds more servers than the requesting root loses its
+///   least recently used server; otherwise the requesting root recycles its
+///   own. The admission waits (parked, bounded) for that slot.
+/// - Trade-off: retirement waits for an in-flight query; queries already
+///   queued on the retired server are answered `Unavailable`.
+struct Pool {
+    config: Config,
+    shutdown: CancellationToken,
+    servers: BTreeMap<Key, Slot>,
+    parked: VecDeque<Admission>,
+    tasks: JoinSet<()>,
+    tools: Tools,
+    clock: u64,
+}
+
+impl Pool {
+    fn new(config: Config, shutdown: CancellationToken) -> Self {
+        Self {
+            config,
+            shutdown,
+            servers: BTreeMap::new(),
+            parked: VecDeque::new(),
+            tasks: JoinSet::new(),
+            tools: Tools::default(),
+            clock: 0,
+        }
+    }
+
+    async fn run(mut self, mut inbox: mpsc::Receiver<Admission>) {
+        loop {
+            tokio::select! {
+                () = self.shutdown.cancelled() => break,
+                _ended = self.tasks.join_next(), if !self.tasks.is_empty() => self.unpark(),
+                admission = inbox.recv() => {
+                    let Some(admission) = admission else { break; };
+                    self.admit(admission);
                 }
-                if let Some(sender) = servers.get(&key) {
-                    if let Err(error) = sender.try_send(work) { drop(error.into_inner().reply.send(Err(Error::Unavailable))); }
-                } else { drop(work.reply.send(Err(Error::Unavailable))); }
+            }
+        }
+        self.shutdown.cancel();
+        drop(self.servers);
+        drop(self.parked);
+        while self.tasks.join_next().await.is_some() {}
+    }
+
+    /// A server ended: retry parked admissions once, in arrival order.
+    fn unpark(&mut self) {
+        for admission in std::mem::take(&mut self.parked) {
+            if !admission.work.reply.is_closed() {
+                self.admit(admission);
             }
         }
     }
-    shutdown.cancel();
-    drop(servers);
-    while tasks.join_next().await.is_some() {}
+
+    fn admit(&mut self, admission: Admission) {
+        self.servers.retain(|_, slot| !slot.sender.is_closed());
+        self.clock = self.clock.saturating_add(1);
+        let Admission { key, root, work } = admission;
+        if let Some(slot) = self.servers.get_mut(&key) {
+            if slot.retiring {
+                self.park(Admission { key, root, work });
+            } else {
+                slot.used = self.clock;
+                if let Err(error) = slot.sender.try_send(work) {
+                    drop(error.into_inner().reply.send(Err(Error::Unavailable)));
+                }
+            }
+            return;
+        }
+        if self.servers.len() < self.config.max_servers.get() {
+            self.spawn(key, root, work);
+            return;
+        }
+        if let Some(victim) = self.victim(&root) {
+            if let Some(slot) = self.servers.get_mut(&victim) {
+                slot.retiring = true;
+                slot.retire.cancel();
+            }
+            self.park(Admission { key, root, work });
+        } else if self.servers.values().any(|slot| slot.retiring) {
+            self.park(Admission { key, root, work });
+        } else {
+            drop(work.reply.send(Err(Error::Unavailable)));
+        }
+    }
+
+    fn park(&mut self, admission: Admission) {
+        if self.parked.len() >= MAX_PARKED {
+            drop(admission.work.reply.send(Err(Error::Unavailable)));
+        } else {
+            self.parked.push_back(admission);
+        }
+    }
+
+    /// The server to retire so `root` gets a slot: the least recently used
+    /// one of the busiest root holding more servers than `root`, else the
+    /// least recently used of `root`'s own. Retiring servers do not count.
+    fn victim(&self, root: &Path) -> Option<Key> {
+        let live = || self.servers.iter().filter(|(_, slot)| !slot.retiring);
+        let mut held: BTreeMap<&Path, usize> = BTreeMap::new();
+        for (_, slot) in live() {
+            let count = held.entry(slot.root.as_path()).or_default();
+            *count = count.saturating_add(1);
+        }
+        let mine = held.get(root).copied().unwrap_or(0);
+        let most = held.values().copied().max().unwrap_or(0);
+        let from = |chosen: &dyn Fn(&Slot) -> bool| {
+            live()
+                .filter(|(_, slot)| chosen(slot))
+                .min_by_key(|(_, slot)| slot.used)
+                .map(|(key, _)| key.clone())
+        };
+        if most > mine {
+            from(&|slot| held.get(slot.root.as_path()) == Some(&most))
+        } else {
+            from(&|slot| slot.root == root)
+        }
+    }
+
+    fn spawn(&mut self, key: Key, root: PathBuf, work: Work) {
+        let (sender, receiver) = mpsc::channel(8);
+        let retire = CancellationToken::new();
+        let task = server(
+            key.clone(),
+            self.config.clone(),
+            self.shutdown.child_token(),
+            retire.clone(),
+            receiver,
+            Arc::clone(&self.tools),
+        );
+        drop(self.tasks.spawn(task));
+        if let Err(error) = sender.try_send(work) {
+            drop(error.into_inner().reply.send(Err(Error::Unavailable)));
+        }
+        drop(self.servers.insert(
+            key,
+            Slot {
+                sender,
+                root,
+                retire,
+                retiring: false,
+                used: self.clock,
+            },
+        ));
+    }
 }
 
 /// The project set and configuration identity a server generation uses.
@@ -185,6 +358,7 @@ async fn server(
     key: Key,
     config: Config,
     shutdown: CancellationToken,
+    retire: CancellationToken,
     mut inbox: mpsc::Receiver<Work>,
     tools: Tools,
 ) {
@@ -201,6 +375,7 @@ async fn server(
     loop {
         tokio::select! {
             () = shutdown.cancelled() => break,
+            () = retire.cancelled() => break,
             () = tokio::time::sleep_until(idle_at) => break,
             event = changes.changed(), if process.is_some() => {
                 if event.is_err() { break; }

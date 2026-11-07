@@ -8,7 +8,7 @@ mod tests {
 
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
-    use vessel_lsp::{Config, LspError, Manager, Query, registry::Override};
+    use vessel_lsp::{Config, LspError, Manager, Query, Scope, registry::Override};
     use vessel_proto::{Reply, lsp};
     use vessel_testkit::{Fake, within};
 
@@ -78,7 +78,15 @@ mod tests {
         }
         async fn query(&self, query: Query) -> Result<Reply, LspError> {
             self.manager
-                .query(self.workspace.root.clone(), false, query)
+                .query(
+                    Scope::new(
+                        self.workspace.root.clone(),
+                        self.workspace.root.clone(),
+                        false,
+                    )
+                    .unwrap(),
+                    query,
+                )
                 .await
         }
         async fn stop(self) {

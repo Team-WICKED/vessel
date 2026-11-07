@@ -5,9 +5,13 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
-    use vessel_lsp::{Config, LspError, Manager, Query, registry::Override};
+    use vessel_lsp::{Config, LspError, Manager, Query, Scope, registry::Override};
     use vessel_proto::lsp;
     use vessel_testkit::{Fake, within};
+
+    fn whole(root: &std::path::Path) -> Scope {
+        Scope::new(root.to_owned(), root.to_owned(), false).unwrap()
+    }
 
     /// Test configuration with a node-owned state directory.
     fn config(state: &tempfile::TempDir) -> Config {
@@ -105,7 +109,7 @@ mod tests {
                 assert!(
                     matches!(
                         manager
-                            .query(canonical.clone(), false, request(canonical, language))
+                            .query(whole(&canonical), request(canonical, language))
                             .await,
                         Err(LspError::ProjectConfiguration)
                     ),
@@ -163,7 +167,7 @@ mod tests {
                     file: lsp::FilePath::try_from(PathBuf::from("sub/fixture.rs")).unwrap(),
                     page: lsp::PageRequest::default(),
                 });
-                let outcome = manager.query(canonical.clone(), false, query).await;
+                let outcome = manager.query(whole(&canonical), query).await;
                 assert!(
                     matches!(outcome, Err(LspError::ProjectConfiguration)),
                     "{name}: {outcome:?}"
@@ -199,7 +203,7 @@ mod tests {
                 config.registry.search_path = std::env::join_paths([PathBuf::from("."), bin]).unwrap();
                 let _previous = config.registry.overrides.insert(language, Override { program: Fake::Lsp.path().unwrap(), args: vec![mode.into()] });
                 let stop = CancellationToken::new(); let manager = Manager::start(config, stop.child_token());
-                assert!(manager.query(canonical.clone(), false, request(canonical, language)).await.is_ok());
+                assert!(manager.query(whole(&canonical), request(canonical, language)).await.is_ok());
                 assert!(!root.path().join("trap-was-run").exists());
                 stop.cancel(); manager.stopped().await;
             }
@@ -215,7 +219,7 @@ mod launch {
     use std::time::Duration;
 
     use tokio_util::sync::CancellationToken;
-    use vessel_lsp::{Config, LspError, Manager, Query, registry::Override};
+    use vessel_lsp::{Config, LspError, Manager, Query, Scope, registry::Override};
     use vessel_proto::{Reply, lsp};
     use vessel_testkit::{Fake, within};
 
@@ -256,7 +260,8 @@ mod launch {
             file: lsp::FilePath::try_from(PathBuf::from(file)).unwrap(),
             page: lsp::PageRequest::default(),
         });
-        let outcome = manager.query(root.to_owned(), false, query).await;
+        let scope = Scope::new(root.to_owned(), root.to_owned(), false).unwrap();
+        let outcome = manager.query(scope, query).await;
         stop.cancel();
         manager.stopped().await;
         let record = std::fs::read_to_string(record)

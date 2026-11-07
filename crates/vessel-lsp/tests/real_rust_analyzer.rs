@@ -15,7 +15,7 @@ mod tests {
     use std::time::Duration;
 
     use tokio_util::sync::CancellationToken;
-    use vessel_lsp::{Config, LspError, Manager, Query, registry::Override};
+    use vessel_lsp::{Config, LspError, Manager, Query, Scope, registry::Override};
     use vessel_proto::{Reply, lsp};
 
     fn write(path: &Path, text: &str) {
@@ -92,7 +92,8 @@ mod tests {
         let manager = Manager::start(config, stop.child_token());
         // The server answers only after its initial load reached quiescence,
         // so every toolchain probe of that load has finished by now.
-        let outcome = manager.query(root.to_owned(), false, query).await;
+        let scope = Scope::new(root.to_owned(), root.to_owned(), false).unwrap();
+        let outcome = manager.query(scope, query).await;
         stop.cancel();
         manager.stopped().await;
         outcome

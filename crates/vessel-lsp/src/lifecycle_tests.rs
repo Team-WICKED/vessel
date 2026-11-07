@@ -9,9 +9,14 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{Reply, lsp};
 use vessel_testkit::{Fake, within};
 
-use super::{Config, Key, Manager, Work, server};
+use super::{Config, Key, Manager, Scope, Work, server};
 use crate::registry::Override;
 use crate::{LspError, Query};
+
+/// The whole root, as a node grants a configured root.
+fn scope(root: &std::path::Path) -> Scope {
+    Scope::new(root.to_owned(), root.to_owned(), false).unwrap()
+}
 
 fn query(root: PathBuf) -> Query {
     Query::DocumentSymbols(lsp::DocumentSymbols {
@@ -78,6 +83,7 @@ async fn an_idle_server_shuts_down_and_closes_its_mailbox() {
             },
             config,
             CancellationToken::new(),
+            CancellationToken::new(),
             receiver,
             super::Tools::default(),
         ));
@@ -114,25 +120,18 @@ async fn a_crashed_server_restarts_only_after_backoff() {
         };
         assert!(
             manager
-                .query(root.clone(), false, Query::Hover(lsp::GetHover(at)))
+                .query(scope(&root), Query::Hover(lsp::GetHover(at)))
                 .await
                 .is_err()
         );
         assert!(matches!(
-            manager
-                .query(root.clone(), false, query(root.clone()))
-                .await,
+            manager.query(scope(&root), query(root.clone())).await,
             Err(LspError::Unavailable)
         ));
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(2)).await;
         tokio::time::resume();
-        assert!(
-            manager
-                .query(root.clone(), false, query(root))
-                .await
-                .is_ok()
-        );
+        assert!(manager.query(scope(&root), query(root)).await.is_ok());
         stop.cancel();
         manager.stopped().await;
     })
@@ -140,35 +139,49 @@ async fn a_crashed_server_restarts_only_after_backoff() {
     .unwrap();
 }
 
+/// With every slot its own, a root recycles its least recently used server
+/// instead of exceeding the bound or being refused.
 #[tokio::test]
 async fn the_global_server_bound_is_enforced() {
     within(Duration::from_secs(45), async {
         let state = tempfile::tempdir().unwrap();
         let first = root();
-        let second = root();
         let first = first.path().canonicalize().unwrap();
-        let second = second.path().canonicalize().unwrap();
-        let config = Config {
+        let mut config = Config {
             max_servers: NonZeroUsize::MIN,
             ..config("normal", &state)
         };
+        let _previous = config.registry.overrides.insert(
+            lsp::Language::Go,
+            Override {
+                program: Fake::Lsp.path().unwrap(),
+                args: vec!["normal".into()],
+            },
+        );
         let stop = CancellationToken::new();
         let manager = Manager::start(config, stop.child_token());
-        assert!(
-            manager
-                .query(first.clone(), false, query(first))
-                .await
-                .is_ok()
-        );
-        assert!(matches!(
-            manager.query(second.clone(), false, query(second)).await,
-            Err(LspError::Unavailable)
-        ));
+        for language in [lsp::Language::Rust, lsp::Language::Go, lsp::Language::Rust] {
+            let outcome = manager
+                .query(scope(&first), in_language(&first, language))
+                .await;
+            assert!(outcome.is_ok(), "{language:?}: {outcome:?}");
+        }
         stop.cancel();
         manager.stopped().await;
     })
     .await
     .unwrap();
+}
+
+fn in_language(root: &std::path::Path, language: lsp::Language) -> Query {
+    Query::DocumentSymbols(lsp::DocumentSymbols {
+        workspace: lsp::Workspace {
+            root: root.to_owned(),
+            language,
+        },
+        file: lsp::FilePath::try_from(PathBuf::from("fixture.rs")).unwrap(),
+        page: lsp::PageRequest::default(),
+    })
 }
 
 /// Review finding: open documents were never evicted, so 64 distinct files
@@ -195,11 +208,74 @@ async fn the_least_recently_used_document_makes_room_for_a_new_one() {
         let stop = CancellationToken::new();
         let manager = Manager::start(config("normal", &state), stop.child_token());
         for index in 0..=crate::process::MAX_DOCUMENTS {
-            let outcome = manager.query(root.clone(), false, file(index)).await;
+            let outcome = manager.query(scope(&root), file(index)).await;
             assert!(outcome.is_ok(), "file {index}: {outcome:?}");
         }
         // The evicted first file can be opened again, evicting another.
-        assert!(manager.query(root.clone(), false, file(0)).await.is_ok());
+        assert!(manager.query(scope(&root), file(0)).await.is_ok());
+        stop.cancel();
+        manager.stopped().await;
+    })
+    .await
+    .unwrap();
+}
+
+/// Review finding: one root could hold every server slot while another
+/// root was refused. A root holding fewer servers takes over the busiest
+/// root's least recently used slot; a root holding as many recycles its own
+/// and never takes another root's.
+#[tokio::test]
+async fn a_root_holding_every_slot_yields_one_to_another_root() {
+    within(Duration::from_secs(45), async {
+        let state = tempfile::tempdir().unwrap();
+        let first = root();
+        let second = root();
+        let first = first.path().canonicalize().unwrap();
+        let second = second.path().canonicalize().unwrap();
+        let started = state.path().join("second-root-started");
+        let interpreter = state.path().join("python");
+        std::fs::write(&interpreter, "stand-in interpreter").unwrap();
+        let mut config = Config {
+            max_servers: NonZeroUsize::MIN.saturating_add(1),
+            ..config("normal", &state)
+        };
+        config.registry.python_interpreter = Some(interpreter);
+        for (language, extra) in [
+            (lsp::Language::Go, None),
+            (lsp::Language::Cpp, None),
+            (lsp::Language::Python, Some(&started)),
+        ] {
+            let mut args = vec!["normal".to_owned()];
+            if let Some(path) = extra {
+                args.extend(["--record".to_owned(), path.to_string_lossy().into_owned()]);
+            }
+            let _previous = config.registry.overrides.insert(
+                language,
+                Override {
+                    program: Fake::Lsp.path().unwrap(),
+                    args,
+                },
+            );
+        }
+        let stop = CancellationToken::new();
+        let manager = Manager::start(config, stop.child_token());
+        let ask =
+            |root: &PathBuf, language| manager.query(scope(root), in_language(root, language));
+        for language in [lsp::Language::Rust, lsp::Language::Go] {
+            let outcome = ask(&first, language).await;
+            assert!(outcome.is_ok(), "{language:?}: {outcome:?}");
+        }
+        let outcome = ask(&second, lsp::Language::Python).await;
+        assert!(
+            outcome.is_ok(),
+            "the second root waited for a slot: {outcome:?}"
+        );
+        std::fs::remove_file(&started).unwrap();
+        // Each root now holds one server: the first recycles its own.
+        let outcome = ask(&first, lsp::Language::Cpp).await;
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(ask(&second, lsp::Language::Python).await.is_ok());
+        assert!(!started.exists(), "the second root's server was taken");
         stop.cancel();
         manager.stopped().await;
     })

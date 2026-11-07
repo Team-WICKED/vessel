@@ -20,5 +20,5 @@ mod sync;
 mod toolchain;
 
 pub use error::LspError;
-pub use manager::{Config, Manager};
+pub use manager::{Config, Manager, Scope};
 pub use query::Query;

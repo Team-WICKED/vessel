@@ -170,3 +170,69 @@ fn project(dir: &std::path::Path) {
     )
     .unwrap();
 }
+
+/// Review finding: four subdirectories of one allowed root took every
+/// server slot and any other root was refused until they idled out. Slots
+/// are now accounted to the allowed root, and another root takes one over.
+/// A symlinked workspace gets one answer whether its target exists or not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subdirectories_of_one_root_cannot_lock_out_another_root() {
+    within(async {
+        let fixture = Fixture::new();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        for index in 0..4 {
+            project(&first.path().join(format!("d{index}")));
+        }
+        project(second.path());
+        let tools = tempfile::tempdir().unwrap();
+        let node = fixture
+            .start_with(|config| {
+                config.lsp.registry.rust_toolchain = Some(toolchain(&tools));
+                for root in [first.path(), second.path()] {
+                    config.lsp_roots.push(vessel_node::LspRoot {
+                        path: root.to_owned(),
+                        full_analysis: false,
+                    });
+                }
+                let _previous = config.lsp.registry.overrides.insert(
+                    lsp::Language::Rust,
+                    Override {
+                        program: Fake::Lsp.path().unwrap(),
+                        args: vec!["normal".into()],
+                    },
+                );
+            })
+            .await;
+        let owner = fixture.connect(&node).await;
+        for index in 0..4 {
+            let page = owner
+                .call(request(first.path().join(format!("d{index}"))))
+                .await
+                .unwrap();
+            assert_eq!(page.items[0].name, "target");
+        }
+        let page = owner.call(request(second.path().to_owned())).await.unwrap();
+        assert_eq!(page.items[0].name, "target");
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            let present = first.path().join("present");
+            let absent = first.path().join("absent");
+            std::os::unix::fs::symlink(outside.path(), &present).unwrap();
+            std::os::unix::fs::symlink(outside.path().join("missing"), &absent).unwrap();
+            let answer =
+                |result: Result<lsp::Page<lsp::Symbol>, vessel_rpc::CallError>| match result {
+                    Err(vessel_rpc::CallError::Remote(error)) => (error.code, error.message),
+                    other => panic!("expected a refusal, got {other:?}"),
+                };
+            let present = answer(owner.call(request(present)).await);
+            let absent = answer(owner.call(request(absent)).await);
+            assert_eq!(present, absent);
+            assert_eq!(present.0, ErrorCode::Forbidden);
+        }
+        drop(owner);
+        node.stop().await.unwrap();
+    })
+    .await;
+}
