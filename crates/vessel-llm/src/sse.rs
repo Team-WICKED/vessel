@@ -13,7 +13,9 @@
 //! - Choice: an incremental decoder fed chunk by chunk, holding at most one
 //!   partial line and one event in progress, both bounded
 //!   ([`SseDecoder::new`]); lines end in CRLF, LF or CR, also across
-//!   chunks; a leading byte-order mark is skipped; comments are reported
+//!   chunks; a leading byte-order mark is skipped, even split across
+//!   chunks (the first three bytes are held until they show whether they
+//!   are one); comments are reported
 //!   (they keep a connection alive, which the proxy's stall watchdog
 //!   counts); `id` and `retry` fields are ignored (no model API resumes a
 //!   stream by id); other fields are ignored, as the format says.
@@ -30,6 +32,9 @@ use bytes::{BufMut as _, Bytes, BytesMut};
 /// The default bound on one event: a model's single delta is small, but a
 /// tool call's arguments or a final message snapshot can be large.
 pub const DEFAULT_MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
+
+/// The UTF-8 byte-order mark a stream may start with.
+const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// One dispatched event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +81,11 @@ pub struct SseDecoder {
     after_cr: bool,
     /// Nothing decoded yet: a byte-order mark may come first.
     at_start: bool,
+    /// The stream's first bytes while they may still be a byte-order mark:
+    /// a chunk can end inside one, and stripping only a whole mark seen
+    /// in one chunk would leave its pieces in front of the first field
+    /// name (`\u{feff}event` is not `event`), so that event lost its name.
+    head: Vec<u8>,
     /// The event in progress.
     event: Option<String>,
     data: String,
@@ -92,6 +102,7 @@ impl SseDecoder {
             line: Vec::new(),
             after_cr: false,
             at_start: true,
+            head: Vec::new(),
             event: None,
             data: String::new(),
             has_data: false,
@@ -105,10 +116,28 @@ impl SseDecoder {
     /// decoder is not usable after an error.
     pub fn feed(&mut self, chunk: &[u8], frames: &mut Vec<SseFrame>) -> Result<(), SseError> {
         let mut chunk = chunk;
-        if self.at_start && !chunk.is_empty() {
-            self.at_start = false;
-            chunk = chunk.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(chunk);
+        if self.at_start {
+            let wanted = BOM.len().saturating_sub(self.head.len()).min(chunk.len());
+            let (start, rest) = chunk.split_at(wanted);
+            self.head.extend_from_slice(start);
+            if self.head.len() < BOM.len() && BOM.starts_with(&self.head) {
+                return Ok(());
+            }
+            self.end_head(frames)?;
+            chunk = rest;
         }
+        self.decode(chunk, frames)
+    }
+
+    /// The stream's first bytes are known to be, or not to be, a mark:
+    /// decode them without it.
+    fn end_head(&mut self, frames: &mut Vec<SseFrame>) -> Result<(), SseError> {
+        self.at_start = false;
+        let head = std::mem::take(&mut self.head);
+        self.decode(head.strip_prefix(BOM).unwrap_or(&head), frames)
+    }
+
+    fn decode(&mut self, chunk: &[u8], frames: &mut Vec<SseFrame>) -> Result<(), SseError> {
         let mut rest = chunk;
         while !rest.is_empty() {
             if self.after_cr {
@@ -143,6 +172,9 @@ impl SseDecoder {
     /// # Errors
     /// As for [`feed`](Self::feed).
     pub fn finish(mut self, frames: &mut Vec<SseFrame>) -> Result<(), SseError> {
+        if self.at_start {
+            self.end_head(frames)?;
+        }
         if !self.line.is_empty() {
             let line = std::mem::take(&mut self.line);
             self.take_line(&line, frames)?;

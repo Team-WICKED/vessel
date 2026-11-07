@@ -19,8 +19,10 @@ fn event(name: Option<&str>, data: &str) -> SseFrame {
     })
 }
 
-/// The cheap fuzz: however a stream is cut into chunks, and whichever line
-/// ending it uses, it decodes to the same frames as in one piece.
+/// The cheap fuzz: however a stream is cut into chunks, whichever line
+/// ending it uses, and whether a byte-order mark starts it, it decodes to
+/// the same frames as in one piece (a mark cut into pieces once cost the
+/// first event its name).
 #[test]
 fn every_split_and_every_line_ending_decodes_the_same() {
     for (name, text) in FIXTURES {
@@ -28,7 +30,8 @@ fn every_split_and_every_line_ending_decodes_the_same() {
         assert!(whole.len() > 2, "{name}: too few frames");
         let crlf = text.replace('\n', "\r\n");
         let cr = text.replace('\n', "\r");
-        for variant in [text.to_owned(), crlf, cr] {
+        let marked = format!("\u{feff}{text}");
+        for variant in [text.to_owned(), crlf, cr, marked] {
             let bytes = variant.as_bytes();
             assert_eq!(decode([bytes]).unwrap(), whole, "{name}: one piece");
             for split in 0..=bytes.len() {
@@ -89,6 +92,24 @@ fn fields_follow_the_format() {
             event(None, ""),
             event(None, "last, without its blank line"),
         ]
+    );
+}
+
+/// A stream too short to tell whether it starts with a mark still
+/// decodes what it has.
+#[test]
+fn a_stream_shorter_than_a_mark_is_decoded_at_its_end() {
+    assert_eq!(decode([b"\xEF\xBB".as_slice()]), Err(SseError::NotUtf8));
+    assert_eq!(decode([b"\xEF\xBB\xBF".as_slice()]).unwrap(), []);
+    assert_eq!(decode([b"da".as_slice()]).unwrap(), []);
+    assert_eq!(
+        decode([
+            b"\xEF".as_slice(),
+            b"\xBB".as_slice(),
+            b"\xBFdata".as_slice()
+        ])
+        .unwrap(),
+        [event(None, "")]
     );
 }
 
