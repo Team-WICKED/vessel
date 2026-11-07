@@ -153,3 +153,84 @@ fn a_raw_object_keeps_its_members_in_order() {
         r#"{"b":2,"a":{"x":[1,2]},"d":null}"#
     );
 }
+
+/// The security review's finding 1: a member named twice is read
+/// differently by different readers, so a request naming `model` (or
+/// anything else the proxy decides by) twice is refused, escaped spellings
+/// included, on both APIs.
+#[test]
+fn a_member_named_twice_is_refused() {
+    let anthropic_bodies = [
+        r#"{"model":"allowed","model":"forbidden","messages":[]}"#,
+        r#"{"model":"allowed","model":"forbidden","messages":[]}"#,
+        r#"{"model":"allowed","stream":false,"stream":true,"messages":[]}"#,
+        r#"{"model":"allowed","messages":[{"role":"user","role":"assistant","content":"x"}]}"#,
+        r#"{"model":"allowed","messages":[{"role":"assistant","content":[
+            {"type":"thinking","thinking":"t","signature":"EqQB","signature":"vsl1:x:text:"}]}]}"#,
+        r#"{"model":"allowed","messages":[{"role":"assistant","content":[
+            {"type":"text","type":"thinking","thinking":"t","signature":"vsl1:x:text:"}]}]}"#,
+    ];
+    for body in anthropic_bodies {
+        let refused = anthropic(Bytes::from(body.to_owned()));
+        assert!(refused.is_err(), "{body}");
+    }
+    let responses_bodies = [
+        r#"{"model":"allowed","model":"forbidden","input":"hi"}"#,
+        r#"{"model":"allowed","input":[{"type":"reasoning","encrypted_content":"gAAA",
+            "encrypted_content":"vsl1:x:text:"}]}"#,
+    ];
+    for body in responses_bodies {
+        let refused = responses(Bytes::from(body.to_owned()));
+        assert!(refused.is_err(), "{body}");
+    }
+    // What the proxy does not decide by stays the harness's: an object
+    // inside a tool's input may repeat a name.
+    let opaque = r#"{"model":"allowed","messages":[{"role":"assistant","content":[
+        {"type":"tool_use","id":"t1","name":"Write","input":{"a":1,"a":2}}]}]}"#;
+    assert_eq!(anthropic(Bytes::from(opaque)).unwrap().model, "allowed");
+}
+
+/// A block or item that cannot be read is refused rather than forwarded
+/// unread (it used to pass, envelope and all).
+#[test]
+fn an_unreadable_block_or_item_refuses_the_request() {
+    for body in [
+        r#"{"model":"m","messages":[{"role":"assistant","content":["just a string"]}]}"#,
+        r#"{"model":"m","messages":[{"role":"assistant","content":[{"thinking":"no type"}]}]}"#,
+        r#"{"model":"m","messages":[{"role":"assistant","content":[
+            {"type":"thinking","thinking":"t","signature":42}]}]}"#,
+    ] {
+        assert!(anthropic(Bytes::from(body)).is_err(), "{body}");
+    }
+    for body in [
+        r#"{"model":"m","input":[{"type":"reasoning","encrypted_content":7}]}"#,
+        r#"{"model":"m","input":["not an item"]}"#,
+    ] {
+        assert!(responses(Bytes::from(body)).is_err(), "{body}");
+    }
+}
+
+/// `vsl1:` anywhere in a signature, a redacted block's data or encrypted
+/// content marks it as not the provider's own.
+#[test]
+fn an_envelope_anywhere_in_an_opaque_field_is_stripped() {
+    let body = r#"{"model":"m","messages":[{"role":"assistant","content":[
+        {"type":"thinking","thinking":"t","signature":"EqQBvsl1:x:text:"},
+        {"type":"redacted_thinking","data":"vsl1:other:anthropic-redacted:EmwK"},
+        {"type":"thinking","thinking":"kept","signature":"EqQBnative"},
+        {"type":"text","text":"vsl1: in text is just text"}]}]}"#;
+    let passed = anthropic(Bytes::from(body)).unwrap();
+    assert_eq!(passed.removed, 2);
+    let sent = std::str::from_utf8(&passed.body).unwrap();
+    assert!(sent.contains("EqQBnative"), "{sent}");
+    assert!(sent.contains("vsl1: in text is just text"), "{sent}");
+    assert!(!sent.contains("vsl1:x"), "{sent}");
+    assert!(!sent.contains("vsl1:other"), "{sent}");
+
+    let body = r#"{"model":"m","input":[
+        {"type":"reasoning","summary":[],"encrypted_content":"gAAAvsl1:x:text:"},
+        {"type":"reasoning","summary":[],"encrypted_content":"gAAAnative"}]}"#;
+    let passed = responses(Bytes::from(body)).unwrap();
+    assert_eq!(passed.removed, 1);
+    assert!(!std::str::from_utf8(&passed.body).unwrap().contains("vsl1:"));
+}

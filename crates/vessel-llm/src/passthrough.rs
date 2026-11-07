@@ -33,11 +33,30 @@
 //!   same API (Anthropic and a proxy in front of it) cannot tell each
 //!   other's apart; the second refuses the first's, as it would without
 //!   Vessel.
+//!
+//! [Decision Log] (the security review of milestone 5, finding 1)
+//! - Problem: JSON lets an object name a member twice, and readers
+//!   disagree on which one counts. The proxy read the first `model` and
+//!   forwarded the bytes; a provider reading the last one ran a model the
+//!   route does not allow, under the node's key. A thinking block with two
+//!   `signature`s failed its probe, and a block that could not be probed
+//!   was kept, so a `vsl1:` envelope reached Anthropic.
+//! - Choice: every object whose members decide admission or stripping
+//!   (the request, its messages, an assistant turn's blocks, its input
+//!   items) is read as a [`RawObject`], which refuses a member named twice
+//!   (after unescaping, as every reader compares names); and a block or
+//!   item that cannot be probed refuses the request instead of passing.
+//!   Members Vessel does not look at stay opaque: an object nested in a
+//!   tool's input may repeat a name, since nothing here decides by it.
+//! - Stripping looks for `vsl1:` anywhere in a signature or a redacted
+//!   block's data, not only at its start: neither Anthropic's signatures
+//!   nor `OpenAI`'s encrypted content (base64) can hold a `:`.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use bytes::Bytes;
-use serde::de::{DeserializeOwned, MapAccess, Visitor};
+use serde::de::{DeserializeOwned, Error as _, MapAccess, Visitor};
 use serde::ser::SerializeMap as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use vessel_proto::RawJson;
@@ -50,8 +69,8 @@ use crate::wire::open::open_str;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PassthroughError {
-    /// The body is not a JSON object.
-    #[error("the request body is not a JSON object: {0}")]
+    /// The body is not a JSON object, or names a member twice.
+    #[error("the request body is not a JSON object Vessel can read: {0}")]
     NotAnObject(serde_json::Error),
     /// A member the proxy needs is missing or of the wrong type.
     #[error("the request's `{member}` is missing or malformed")]
@@ -143,7 +162,15 @@ impl<'de> Visitor<'de> for RawObjectVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<RawObject, A::Error> {
         let mut members = Vec::with_capacity(map.size_hint().unwrap_or(0).min(64));
+        let mut names = HashSet::new();
         while let Some((name, value)) = map.next_entry::<String, RawJson>()? {
+            // Readers disagree on which of two same-named members counts
+            // (see the module's second Decision Log), so neither does.
+            if !names.insert(name.clone()) {
+                return Err(A::Error::custom(format_args!(
+                    "the member `{name}` appears twice"
+                )));
+            }
             members.push((name, value));
         }
         Ok(RawObject(members))
@@ -179,13 +206,30 @@ open_str! {
     }
 }
 
-/// What a passthrough reads of a content block.
-#[derive(Deserialize)]
+/// What a passthrough reads of a content block: its kind, and the opaque
+/// field that says whose reasoning it is (a thinking block's `signature`,
+/// a redacted one's `data`).
 struct BlockProbe {
-    #[serde(rename = "type")]
     kind: BlockKind,
-    #[serde(default)]
-    signature: Option<String>,
+    opaque: Option<String>,
+}
+
+/// Probe an assistant turn's block, refusing one that is not an object
+/// with distinct members, or whose fields are of the wrong type: a block
+/// that cannot be read is never forwarded unread.
+fn block_probe(block: &RawJson) -> Result<BlockProbe, PassthroughError> {
+    let malformed = || PassthroughError::Member { member: "content" };
+    let object: RawObject = serde_json::from_str(block.as_text()).map_err(|_bad| malformed())?;
+    let kind: BlockKind = object
+        .get("type")
+        .and_then(Result::ok)
+        .ok_or_else(malformed)?;
+    let opaque = match kind {
+        BlockKind::Thinking => optional::<String>(&object, "signature")?,
+        BlockKind::RedactedThinking => optional::<String>(&object, "data")?,
+        BlockKind::ToolUse | BlockKind::Unknown(_) => None,
+    };
+    Ok(BlockProbe { kind, opaque })
 }
 
 open_str! {
@@ -226,10 +270,12 @@ pub fn anthropic(body: Bytes) -> Result<Passed, PassthroughError> {
             continue;
         };
         let before = blocks.len();
-        let kept: Vec<RawJson> = blocks
-            .into_iter()
-            .filter(|block| !foreign_thinking(block))
-            .collect();
+        let mut kept: Vec<RawJson> = Vec::with_capacity(before);
+        for block in blocks {
+            if !foreign_thinking(&block_probe(&block)?) {
+                kept.push(block);
+            }
+        }
         if kept.len() != before {
             removed = removed.saturating_add(before.saturating_sub(kept.len()));
             message.set("content", RawJson::from_serialize(&kept)?);
@@ -263,16 +309,16 @@ pub fn anthropic(body: Bytes) -> Result<Passed, PassthroughError> {
     })
 }
 
-/// A thinking block Anthropic did not sign: a Vessel envelope, or no
-/// signature at all.
-fn foreign_thinking(block: &RawJson) -> bool {
-    let Ok(probe) = serde_json::from_str::<BlockProbe>(block.as_text()) else {
-        return false;
-    };
-    probe.kind == BlockKind::Thinking
-        && probe
-            .signature
-            .is_none_or(|signature| signature.is_empty() || envelope::is_envelope(&signature))
+/// A thinking block Anthropic did not sign, or a redacted one it did not
+/// make: a Vessel envelope (or one inside its opaque field), or none.
+fn foreign_thinking(probe: &BlockProbe) -> bool {
+    matches!(
+        probe.kind,
+        BlockKind::Thinking | BlockKind::RedactedThinking
+    ) && probe
+        .opaque
+        .as_deref()
+        .is_none_or(|opaque| opaque.is_empty() || envelope::mentions(opaque))
 }
 
 /// Whether the last assistant turn calls a tool without starting with
@@ -285,17 +331,13 @@ fn last_turn_calls_without_thinking(messages: &[RawObject]) -> Result<bool, Pass
         let Some(TextOr::Parts(blocks)) = optional::<TextOr<RawJson>>(message, "content")? else {
             return Ok(false);
         };
-        let kinds: Vec<BlockKind> = blocks
+        let kinds = blocks
             .iter()
-            .filter_map(|block| serde_json::from_str::<BlockProbe>(block.as_text()).ok())
-            .map(|probe| probe.kind)
-            .collect();
+            .map(|block| block_probe(block).map(|probe| probe.kind))
+            .collect::<Result<Vec<BlockKind>, _>>()?;
         let calls = kinds.contains(&BlockKind::ToolUse);
         let starts_thinking = matches!(
-            blocks
-                .first()
-                .and_then(|block| serde_json::from_str::<BlockProbe>(block.as_text()).ok())
-                .map(|probe| probe.kind),
+            kinds.first(),
             Some(BlockKind::Thinking | BlockKind::RedactedThinking)
         );
         return Ok(calls && !starts_thinking);
@@ -310,13 +352,18 @@ open_str! {
     }
 }
 
-/// What a passthrough reads of an input item.
-#[derive(Deserialize)]
-struct ItemProbe {
-    #[serde(rename = "type", default)]
-    kind: Option<ItemKind>,
-    #[serde(default)]
-    encrypted_content: Option<String>,
+/// Whether an input item is reasoning whose encrypted content is a Vessel
+/// envelope (or holds one), refusing an item that is not an object with
+/// distinct members or whose fields are of the wrong type.
+fn foreign_reasoning(item: &RawJson) -> Result<bool, PassthroughError> {
+    let malformed = || PassthroughError::Member { member: "input" };
+    let object: RawObject = serde_json::from_str(item.as_text()).map_err(|_bad| malformed())?;
+    let kind = optional::<ItemKind>(&object, "type")?;
+    if kind != Some(ItemKind::Reasoning) {
+        return Ok(false);
+    }
+    let content = optional::<String>(&object, "encrypted_content")?;
+    Ok(content.is_some_and(|content| envelope::mentions(&content)))
 }
 
 /// Codex's request, for a Responses upstream: every reasoning item whose
@@ -340,17 +387,12 @@ pub fn responses(body: Bytes) -> Result<Passed, PassthroughError> {
         });
     };
     let before = items.len();
-    let kept: Vec<RawJson> = items
-        .into_iter()
-        .filter(|item| {
-            serde_json::from_str::<ItemProbe>(item.as_text()).map_or(true, |probe| {
-                !(probe.kind == Some(ItemKind::Reasoning)
-                    && probe
-                        .encrypted_content
-                        .is_some_and(|content| envelope::is_envelope(&content)))
-            })
-        })
-        .collect();
+    let mut kept: Vec<RawJson> = Vec::with_capacity(before);
+    for item in items {
+        if !foreign_reasoning(&item)? {
+            kept.push(item);
+        }
+    }
     let removed = before.saturating_sub(kept.len());
     if removed == 0 {
         return Ok(Passed {
