@@ -202,6 +202,25 @@ Option 3.
   reports or automatic failure screenshots, and tests never log links.
 - npm.
 
+**Model routing (milestone 5, merged 2026-11-07).**
+- `model.list` passes the bridge like any read call, and each node's
+  routes load with its harnesses and profiles; a node older than
+  protocol 7 shows none rather than failing its other reads.
+- A route reaches a session only through a profile naming it, since
+  `session.create` has no route field and a routed harness is pinned to
+  its route's models. So New session's Model field lists the harness
+  default and the node's routes grouped by provider (DESIGN.md §6.2), and
+  picking a route picks a profile of that harness on it; picking a routed
+  profile shows its route. A route no profile of the harness names is
+  listed, disabled, as `vessel models` lists it. The move-profile dialog
+  offers only profiles on the session's own route, which is all the node
+  accepts.
+- A `model_call` record is a timeline row (route, model, tokens, how it
+  ended, how long) and is summed in the inspector; a terminal session's
+  calls are summed in the terminal's frame. Words and numbers follow
+  `vessel log`. The record holds no prompt, completion or key, and the
+  page adds none.
+
 **Wire types.**
 - `ts-rs` derives, behind an optional `ts` feature of `vessel-proto`
   (no change to the wire), generate TypeScript for every wire type.

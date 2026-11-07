@@ -47,8 +47,8 @@ next):
    memory moved on request, first-run setup, and agents that start and
    drive sessions on any node of the fleet (below).
 
-Being built: a web UI, `vessel ui` (milestone 7, on `backend/m7`; "Web UI"
-below). Not yet: model routing, the LSP bridge.
+Being built: model routing (milestone 5; "Models" below) and a web UI,
+`vessel ui` (milestone 7; "Web UI" below). Not yet: the LSP bridge.
 
 ## Try it
 
@@ -540,6 +540,11 @@ vessel ui --no-open  # prints the address instead
   printed address works and no handoff file is created.
 - Device pairing links and QR codes start hidden. Use **Show pairing link**;
   copying, leaving the page, or 30 seconds passing hides them again.
+- New session's Model field lists the node's model routes by provider;
+  picking one picks the profile on it (a route reaches a session only
+  through a profile). A routed session shows its route, and each model
+  call (route, model, tokens, how it ended, how long; never content) in
+  its timeline, summed in the inspector or the terminal's frame.
 - One connection per node is shared by every tab. A session's stream
   survives the node's connection dropping and resumes where it was.
 - Release builds of `vessel` embed the page. A build from source embeds it

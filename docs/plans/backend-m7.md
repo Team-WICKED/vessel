@@ -4,8 +4,9 @@ Status: drafted 2026-11-07 by Track M7 (web); the coordinator settled
 every open decision the same day as recommended ("Decisions" below), and
 ADR 0017 records them. Implementation on `backend/m7-web`. Builds on
 `main` with milestones 1 to 4. It is independent of milestones 5 (model
-routing) and 6 (IDE context), except for the model list, which is stubbed
-until M5's `model.list` exists.
+routing) and 6 (IDE context), except for the model list, which was
+stubbed until M5's `model.list` existed; M5 (`backend/m5-routing`) was
+merged in on 2026-11-07 and the UI now uses it ("M5 wiring" below).
 
 Read first: `AGENTS.md`, `docs/VISION.md` ("Order of attack", item 6:
 editors are clients), `docs/ROADMAP.md` Phase 5, ADR 0001 (crates and
@@ -45,7 +46,8 @@ The screens:
    - **Actions:** kill; copy to another profile or node; move to another
      profile (structured sessions only, as `session.move_profile` allows).
 4. **New session:** harness, profile, mode, model and working directory.
-   The model is free text until M5's `model.list` exists.
+   The model was a stub until M5's `model.list` existed; it now lists the
+   node's routes ("M5 wiring" below).
 5. **Fleet:**
    - the home and its members, with each member's applied generation;
    - conflicts;
@@ -77,8 +79,8 @@ credentials the CLI uses.
 - **Browsing the node's file system** for the working directory. There is
   no protocol method for it. The field is free text, with the cwds of
   recent sessions offered.
-- **Model routing and its model list** (M5): a stub until `model.list`
-  lands.
+- **Model routing itself** (M5). The UI only shows it: routes, a routed
+  profile, and model calls ("M5 wiring" below).
 - **Translations.** The strings are English, kept in one module so a
   translation can follow.
 - **A mobile-first layout.** It works on a narrow window; a phone app is
@@ -113,7 +115,7 @@ credentials the CLI uses.
 - **What is missing:**
   - generated TypeScript for the wire types;
   - a way to forward an untyped `Call` through a `NodeClient` (only typed calls exist);
-  - `model.list` (M5);
+  - `model.list` (M5; merged 2026-11-07);
   - any web code at all.
 
 ## Contract changes
@@ -605,8 +607,32 @@ Decided while building:
   read the path and `?node=` from the router's location (`useWhere`).
 - **Playwright 1.63.** Pinned to the release whose Chromium build the
   development host already has; CI installs its own.
-- **Models in New session** show "harness default" only, until model
-  routing (M5) gives `model.list`.
+- **Models in New session** showed "harness default" only until model
+  routing (M5) gave `model.list`; see "M5 wiring".
+
+## M5 wiring (2026-11-07)
+
+`origin/backend/m5-routing` merged into `backend/m7-web`; protocol 7 adds
+`model.list`, `ProfileInfo.model`, `SessionInfo.model` and the
+`model_call` record.
+
+- The bridge forwards `model.list` (`forwardable`, `is_unary`); the new
+  proto types derive their TypeScript, and `proto.ts` is regenerated.
+- The store reads each node's routes with its harnesses and profiles
+  (`null` for a node before protocol 7).
+- New session: the Model field lists the routes by provider; a route is
+  reached through a profile naming it, so the two fields move together
+  (`web/src/data/models.ts` records why). Profiles show their route
+  there, in the fleet panel (which also lists the routes) and in the
+  move-profile dialog, which offers only the session's own route.
+- Session view: a `model_call` is a timeline row and is summed in the
+  inspector ("Model calls"); a terminal session sums its calls in the
+  frame. Metadata only, as recorded.
+- Tests: `models.test.ts` and `timeline.test.ts` (vitest), the bridge's
+  `model.list` call (Rust), and `e2e/models.spec.ts`, where laptop's
+  routes point at `fake-provider` on loopback and `model <text>` prompts
+  make real calls through the node's proxy. The screenshots show the
+  routed profile and two calls.
 
 Not done in this milestone: the session hierarchy shows agent-created
 sessions nested as the protocol records them, but the e2e fleet has no

@@ -713,9 +713,12 @@ Fields in order, because each one filters the next:
    with the install hint from `StructuredSupport::Unavailable`.
 3. **Profile** — that harness's profiles on that node (`claude`,
    `claude-work`, …). Default profile labelled.
-4. **Model** — routed model ids. Until Phase 3 ships, this is the
-   harness's own list plus a placeholder "node default". Group by
-   provider; show which node would serve a local model.
+4. **Model** — "harness default", then the node's routes
+   (`model.list`) grouped by provider. A route reaches a session only
+   through a profile naming it, so picking a route picks that harness's
+   profile on it, and picking a routed profile shows its route; a route
+   no profile of the harness names is listed disabled. (Built 2026-11-07
+   with milestone 5, ADR 0017.)
 5. **Working directory** — text, placeholder the node's home, with a
    recent list.
 6. **Mode** — structured (default when available) or terminal.
@@ -779,7 +782,9 @@ So M7 does not have to guess names.
 | Harness | `HarnessKind` |
 | Profile | `ProfileName`; current is `SessionInfo.profile` |
 | Mode | `SessionMode` |
-| Model | `SessionMode::Structured.model` |
+| Model | `SessionInfo.model` (route and pinned model, protocol 7), else `SessionMode::Structured.model` |
+| Route | `ModelRoute` from `model.list`; a profile names one (`ProfileInfo.model`) |
+| Model call | `SessionEvent::ModelCall`: route, model, tokens, stop, duration; never content |
 | Cwd | `SessionSpec.cwd` |
 | Status | `SessionStatus` (+ turn from last `TurnStarted`/`TurnEnded`) |
 | Created | `SessionInfo.created_at` |
