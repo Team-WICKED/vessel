@@ -262,7 +262,8 @@ pub(crate) fn output_of(records: &[EventRecord]) -> String {
             SessionEvent::Terminal(output) => Some(output.data.bytes().to_vec()),
             SessionEvent::Status { .. }
             | SessionEvent::Agent { .. }
-            | SessionEvent::ProfileChanged { .. } => None,
+            | SessionEvent::ProfileChanged { .. }
+            | SessionEvent::ModelCall(_) => None,
         })
         .flatten()
         .collect();
@@ -306,7 +307,8 @@ pub(crate) fn status_of(record: &EventRecord) -> Option<&SessionStatus> {
         SessionEvent::Status { status } => Some(status),
         SessionEvent::Terminal(_)
         | SessionEvent::Agent { .. }
-        | SessionEvent::ProfileChanged { .. } => None,
+        | SessionEvent::ProfileChanged { .. }
+        | SessionEvent::ModelCall(_) => None,
     }
 }
 
@@ -349,7 +351,8 @@ pub(crate) const fn agent_of(record: &EventRecord) -> Option<&AgentEvent> {
         SessionEvent::Agent { event } => Some(event),
         SessionEvent::Status { .. }
         | SessionEvent::Terminal(_)
-        | SessionEvent::ProfileChanged { .. } => None,
+        | SessionEvent::ProfileChanged { .. }
+        | SessionEvent::ModelCall(_) => None,
     }
 }
 

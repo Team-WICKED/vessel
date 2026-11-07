@@ -377,7 +377,9 @@ mod support {
                 SessionEvent::Agent {
                     event: AgentEvent::HarnessLog { line },
                 } if line.starts_with("vessel:") => self.logs.push(line.clone()),
-                SessionEvent::Agent { .. } | SessionEvent::Status { .. } => {}
+                SessionEvent::Agent { .. }
+                | SessionEvent::Status { .. }
+                | SessionEvent::ModelCall(_) => {}
             }
             Some(record)
         }

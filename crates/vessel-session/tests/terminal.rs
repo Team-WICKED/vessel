@@ -230,7 +230,8 @@ mod support {
                 SessionEvent::Status { status } => status.clone(),
                 other @ (SessionEvent::Terminal(_)
                 | SessionEvent::Agent { .. }
-                | SessionEvent::ProfileChanged { .. }) => {
+                | SessionEvent::ProfileChanged { .. }
+                | SessionEvent::ModelCall(_)) => {
                     panic!("last record is not a status: {other:?}")
                 }
             }

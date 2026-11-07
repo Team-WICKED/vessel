@@ -4,8 +4,8 @@
 use std::fmt::Write as _;
 
 use vessel_proto::{
-    EnvName, Harness, NodeInfo, NodeState, ProfileInfo, ProfileName, SessionInfo, SessionMode,
-    SessionStatus, StructuredSupport,
+    EnvName, Harness, ModelCall, ModelStop, NodeInfo, NodeState, ProfileInfo, ProfileName,
+    SessionInfo, SessionMode, SessionStatus, StructuredSupport,
 };
 
 /// A session's status in a few words.
@@ -17,6 +17,49 @@ pub(crate) fn status(status: &SessionStatus) -> String {
         SessionStatus::Exited { code: None } => "exited (killed)".to_owned(),
         SessionStatus::Failed { message } => format!("failed: {message}"),
         SessionStatus::Interrupted => "interrupted".to_owned(),
+    }
+}
+
+/// One model call: the route and model, the tokens, how it ended and how
+/// long it took (protocol 7). Never content: the record holds none.
+pub(crate) fn model_call(call: &ModelCall) -> String {
+    let ended = call.failure.map_or_else(
+        || stop(call.stop).to_owned(),
+        |failure| format!("failed: {}", failure.as_str()),
+    );
+    let usage = &call.usage;
+    let mut text = format!(
+        "[model {} {}: {} in",
+        call.route,
+        call.model,
+        usage.input.get()
+    );
+    if usage.cache_read.get() > 0 || usage.cache_write.get() > 0 {
+        let _infallible = write!(
+            text,
+            " (+{} cached, +{} to cache)",
+            usage.cache_read.get(),
+            usage.cache_write.get()
+        );
+    }
+    let _infallible = write!(
+        text,
+        ", {} out, {ended}, {:.1?}]",
+        usage.output.get(),
+        call.duration_ms.as_duration()
+    );
+    text
+}
+
+const fn stop(stop: ModelStop) -> &'static str {
+    match stop {
+        ModelStop::EndTurn => "end turn",
+        ModelStop::ToolUse => "tool use",
+        ModelStop::MaxTokens => "max tokens",
+        ModelStop::StopSequence => "stop sequence",
+        ModelStop::Refusal => "refused",
+        ModelStop::Pause => "paused",
+        ModelStop::Error => "error",
     }
 }
 
@@ -157,6 +200,28 @@ mod tests {
     use vessel_proto::{HarnessKind, SessionId, SessionSpec, TerminalSize};
 
     use super::*;
+
+    #[test]
+    fn a_model_call_shows_its_counts_never_content() {
+        let call: ModelCall = serde_json::from_str(
+            r#"{"route":"qwen-coder","model":"qwen/qwen3-coder","api":"openai_chat_completions",
+                "usage":{"input":72,"cache_read":128,"output":50},"stop":"tool_use","duration_ms":1234}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            model_call(&call),
+            "[model qwen-coder qwen/qwen3-coder: 72 in (+128 cached, +0 to cache), 50 out, tool use, 1.2s]"
+        );
+        let failed: ModelCall = serde_json::from_str(
+            r#"{"route":"r","model":"m","api":"anthropic_messages","stop":"error",
+                "failure":"context_too_long","duration_ms":40}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            model_call(&failed),
+            "[model r m: 0 in, 0 out, failed: context_too_long, 40.0ms]"
+        );
+    }
 
     #[test]
     fn profiles_show_variable_names_and_labels() {

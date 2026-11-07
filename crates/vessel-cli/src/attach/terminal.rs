@@ -85,8 +85,11 @@ pub(super) async fn attach(mut stream: Stream, session: SessionId) -> Result<End
                     }
                     // Neither belongs to a terminal session: only
                     // structured sessions have agent events or move
-                    // between profiles.
-                    SessionEvent::Agent { .. } | SessionEvent::ProfileChanged { .. } => {}
+                    // between profiles. A model call's record is
+                    // bookkeeping (`vessel log` shows it), not output.
+                    SessionEvent::Agent { .. }
+                    | SessionEvent::ProfileChanged { .. }
+                    | SessionEvent::ModelCall(_) => {}
                 },
                 Some(Err(error)) if !error.is_fatal() => notice(&error, "\r\n").await?,
                 Some(Err(error)) => return Err(error.into()),

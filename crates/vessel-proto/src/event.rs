@@ -28,7 +28,8 @@
 //!   `seq`. `vessel-rpc` applies it where it encodes frames, the one place
 //!   that knows the connection's version.
 //! - Trade-off: an older client sees a stand-in, not the event: for
-//!   `ProfileChanged`, a `HarnessLog` line starting with `vessel:`. A new
+//!   `ProfileChanged` and `ModelCall` (protocol 7), a `HarnessLog` line
+//!   starting with `vessel:`. A new
 //!   variant must add its stand-in here, or the exhaustive matches stop the
 //!   build.
 
@@ -37,6 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentEvent;
 use crate::id::EventSeq;
+use crate::model::ModelCall;
 use crate::name::ProfileName;
 use crate::node::ProtocolVersion;
 use crate::session::SessionStatus;
@@ -69,6 +71,9 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<ProfileName>,
     },
+    /// The session's harness called a model through the node's proxy
+    /// (protocol 7): one per upstream call, metadata only.
+    ModelCall(ModelCall),
 }
 
 impl SessionEvent {
@@ -78,6 +83,7 @@ impl SessionEvent {
         match self {
             Self::Status { .. } | Self::Terminal(_) | Self::Agent { .. } => ProtocolVersion::new(2),
             Self::ProfileChanged { .. } => ProtocolVersion::new(5),
+            Self::ModelCall(_) => ProtocolVersion::new(7),
         }
     }
 
@@ -104,6 +110,24 @@ impl SessionEvent {
                             name(to)
                         ),
                     },
+                })
+            }
+            Self::ModelCall(call) => {
+                let line = match call.failure {
+                    None => format!(
+                        "vessel: model call to {}: {} in, {} out",
+                        call.model,
+                        call.usage.total_input().get(),
+                        call.usage.output.get()
+                    ),
+                    Some(failure) => format!(
+                        "vessel: model call to {} failed ({})",
+                        call.model,
+                        failure.as_str()
+                    ),
+                };
+                Some(Self::Agent {
+                    event: AgentEvent::HarnessLog { line },
                 })
             }
         }

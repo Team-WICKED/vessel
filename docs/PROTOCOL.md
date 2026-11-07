@@ -27,6 +27,13 @@ built:
   `profiles.toml`); `SessionInfo.model?`: `{ route, model }`, the route a
   session was launched with and the provider's model its harness is pinned
   to. Both optional and absent from older nodes, so no version gate.
+- Event `model_call { route, model, api, usage, stop, failure?,
+  duration_ms }`: one per call a session's harness made through the node's
+  proxy, metadata only (never prompt or completion content, tool arguments
+  or keys). A version 2-6 client gets a `harness_log` line in its place at
+  the same position: `vessel: model call to <model>: <in> in, <out> out`,
+  `<in>` counting cached input, or `vessel: model call to <model> failed
+  (<failure>)`.
 
 ## Version 6 (2026-11-06)
 

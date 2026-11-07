@@ -79,6 +79,7 @@ impl Conversation {
                 render::profile(from.as_ref()),
                 render::profile(to.as_ref())
             )),
+            SessionEvent::ModelCall(call) => self.line(render::model_call(call)),
         }
     }
 

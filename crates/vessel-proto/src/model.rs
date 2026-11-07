@@ -139,6 +139,23 @@ pub enum ModelFailure {
     Unauthorized,
 }
 
+impl ModelFailure {
+    /// Its name on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RateLimited => "rate_limited",
+            Self::Overloaded => "overloaded",
+            Self::UpstreamError => "upstream_error",
+            Self::RefusedRequest => "refused_request",
+            Self::ContextTooLong => "context_too_long",
+            Self::Timeout => "timeout",
+            Self::Truncated => "truncated",
+            Self::Unauthorized => "unauthorized",
+        }
+    }
+}
+
 /// A duration in whole milliseconds.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
