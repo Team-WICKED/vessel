@@ -114,3 +114,11 @@ contract.
 - A new edge needs an update to this ADR and `docs/ARCHITECTURE.md`.
 - Shared helpers have no grab-bag home; they go to the lowest crate whose job
   they are.
+
+## Milestone 6 addition (2026-11-07)
+
+`vessel-lsp -> proc` owns the language-server transport, saved-document
+positions and later its process lifecycle (ADR 0016). Authentication stays
+in the node. Agent-facing types and the node integration add their edges
+when those steps land; the initial framing/position foundation needs no
+wire dependency.

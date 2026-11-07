@@ -47,7 +47,9 @@ next):
    memory moved on request, first-run setup, and agents that start and
    drive sessions on any node of the fleet (below).
 
-Not yet: model routing, the LSP bridge, a web UI.
+Not yet: model routing, the LSP bridge, a web UI. The LSP bridge is being
+built under [the milestone 6 plan](docs/plans/backend-m6.md); its framing
+and position-conversion foundations are not yet exposed as agent tools.
 
 ## Try it
 
