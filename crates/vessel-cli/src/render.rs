@@ -166,6 +166,7 @@ mod tests {
                 label: None,
                 harness: HarnessKind::ClaudeCode,
                 sets: Vec::new(),
+                model: None,
             },
             ProfileInfo {
                 name: "claude-alt".parse().unwrap(),
@@ -175,6 +176,7 @@ mod tests {
                     "CLAUDE_CONFIG_DIR".parse().unwrap(),
                     "ANTHROPIC_BASE_URL".parse().unwrap(),
                 ],
+                model: None,
             },
         ];
         let text = profiles_text(&profiles);

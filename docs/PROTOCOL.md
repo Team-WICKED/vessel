@@ -23,6 +23,10 @@ built:
   `overloaded`, `upstream_error`, `refused_request`, `context_too_long`,
   `timeout`, `truncated` or `unauthorized`, the class of a failure and
   never the provider's message.
+- `ProfileInfo.model?`: the route a profile names (`model = "<route>"` in
+  `profiles.toml`); `SessionInfo.model?`: `{ route, model }`, the route a
+  session was launched with and the provider's model its harness is pinned
+  to. Both optional and absent from older nodes, so no version gate.
 
 ## Version 6 (2026-11-06)
 

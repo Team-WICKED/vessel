@@ -145,6 +145,8 @@ impl Profile {
             label: self.label.clone(),
             harness: self.harness,
             sets: self.env.keys().cloned().collect(),
+            // Routes are milestone 5's B7; until then no profile names one.
+            model: None,
         }
     }
 }
