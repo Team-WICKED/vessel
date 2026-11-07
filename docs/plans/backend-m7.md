@@ -1,7 +1,8 @@
 # Milestone 7: the web UI
 
-Status: drafted 2026-11-07 by Track M7 (web); open decisions below await
-the coordinator. Phase B starts on what they do not touch. Builds on
+Status: drafted 2026-11-07 by Track M7 (web); the coordinator settled
+every open decision the same day as recommended ("Decisions" below), and
+ADR 0017 records them. Implementation on `backend/m7-web`. Builds on
 `main` with milestones 1 to 4. It is independent of milestones 5 (model
 routing) and 6 (IDE context), except for the model list, which is stubbed
 until M5's `model.list` exists.
@@ -118,22 +119,29 @@ credentials the CLI uses.
 ## Contract changes
 
 None to the protocol: the UI speaks protocol 6 through the bridge, and no
-node changes. Two changes to shared crates need the coordinator's yes
-(decisions 2 and 5):
+node changes. Two changes to shared crates, both approved (decisions 2 and
+5), each in commits of its own so they merge cleanly against M5 and M6,
+which add protocol rows of their own:
 
 1. **`vessel-proto`, an optional feature `ts`.** It adds `ts-rs` derives on
    every wire type, behind `cfg_attr(feature = "ts", ...)`, so nothing
    changes for builds without it.
    - A test under the feature writes the TypeScript into `web/src/wire/proto/`.
    - CI regenerates it and fails on any difference.
-   - Overrides for types serde writes as text (keys, base64 bytes, ids, `RawJson` as `unknown`) sit next to the types.
+   - Overrides for types serde writes as text (keys, base64 bytes, ids)
+     sit next to the types.
+   - The generated files are committed. They contain no `any`; a type that
+     would map to `unknown` is fixed at its source, or the exception is
+     recorded in ADR 0017 (`RawJson`, opaque by design, is the expected
+     one).
 2. **`vessel-client` (and the `vessel-rpc` client under it), one method:**
    `NodeClient::call_any(Call) -> Result<Reply, CallError>`. It sends an
-   already-built `Call` and returns the `Reply` as it came. The
-   alternative, if the coordinator prefers no change there, is an
-   exhaustive `match` over `Call` in the bridge (about 45 arms, one per
-   method). It is a compile error when a method is added, so it cannot
-   drift either.
+   already-built `Call` and returns the `Reply` as it came.
+   - Scopes stay the node's to enforce, unchanged.
+   - The browser's JSON is decoded into the typed `Call` at the bridge,
+     never into an untyped tree.
+   - The protocol-version gate (`NotInProtocol`) applies as it does to
+     every typed call.
 
 ## Crates and seams
 
@@ -176,7 +184,8 @@ web/  (TypeScript, Vite)  ── built into web/dist, embedded by vessel-web's b
   - `e2e/` (Playwright, screenshots).
 - **Docs:**
   - ADR 0001 and `docs/ARCHITECTURE.md` gain the crate and its edges;
-  - a new ADR 0015 records the decisions below;
+  - ADR 0017 records the decisions below (0015 and 0016 are M5's and
+    M6's);
   - `README.md` gains a "Web UI" section.
 
 ## Data flow
@@ -243,7 +252,7 @@ browser tab ──ws /api/ws (JSON frames)──> vessel ui (bridge)
 Each step ends with the local gate (Rust gate, plus the web checks once
 they exist) and green CI on Linux, macOS and Windows.
 
-1. **B1: the plan and ADR 0015**, once the decisions are settled.
+1. **B1: the plan and ADR 0017.**
 2. **B2: `vessel-web`'s server.**
    - Loopback bind, per-launch token, the Host/Origin checks, the headers,
      embedded files with a placeholder page when no bundle was built.
@@ -398,7 +407,22 @@ can drive the fleet. So:
        refused;
      - another OS user on the machine gets only the static files.
 
-## Open decisions
+## Decisions
+
+Settled by the coordinator on 2026-11-07, all as recommended below
+(ADR 0017), with these additions:
+
+- 2: the generated TypeScript is committed and CI fails on any
+  difference; it holds no `any`, and every `unknown` is fixed at its
+  source or recorded in the ADR.
+- 3b: `vessel` is released too, with the UI embedded.
+- 4: a fresh token per launch; the fragment is removed with
+  `history.replaceState` right after it is read; tokens are compared in
+  constant time; a websocket whose first frame is not a valid token
+  within a short deadline is refused.
+- 5: as in "Contract changes" above.
+
+The options as weighed:
 
 1. **React or Svelte.**
    - **Recommendation: React 19, with TanStack Router.**
