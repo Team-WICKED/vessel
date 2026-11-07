@@ -10,9 +10,10 @@ use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
 use vessel_proto::{
-    Call, CreateSession, ErrorCode, EventRecord, EventSeq, GetNode, GetSession, HarnessKind,
-    ListSessions, Reply, SendInput, SessionEvent, SessionId, SessionInput, SessionMode,
-    SessionSpec, TerminalBytes, TerminalInput, TerminalOutput, TerminalSize,
+    AgentEvent, Call, ContentBlock, CreateSession, ErrorCode, EventRecord, EventSeq, GetNode,
+    GetSession, HarnessKind, ListSessions, PermissionOptionId, PermissionOutcome, Reply, SendInput,
+    SessionEvent, SessionId, SessionInput, SessionMode, SessionSpec, TerminalBytes, TerminalInput,
+    TerminalOutput, TerminalSize,
 };
 use vessel_web::wire::{
     CallId, CallOutcome, ClientFrame, Failure, NodeKey, NodeStatus, Op, OpOutcome, OpResult,
@@ -319,6 +320,161 @@ async fn a_followed_session_resumes_after_its_node_connection_drops() {
 
         // Unfollowed: no more records for it.
         tab.send(&ClientFrame::Unfollow { stream }).await;
+    }))
+    .await;
+}
+
+/// Records of `stream` until `done` says the last one arrived.
+async fn records_until(
+    tab: &mut Tab,
+    stream: StreamId,
+    records: &mut Vec<EventRecord>,
+    done: impl Fn(&EventRecord) -> bool,
+) {
+    loop {
+        if let ServerFrame::Event {
+            stream: from,
+            record,
+        } = tab.next().await
+            && from == stream
+        {
+            let last = done(&record);
+            records.push(record);
+            if last {
+                return;
+            }
+        }
+    }
+}
+
+/// The answer to call `id`, keeping the records of `stream` that arrive
+/// meanwhile.
+async fn reply_keeping(
+    tab: &mut Tab,
+    id: CallId,
+    stream: StreamId,
+    records: &mut Vec<EventRecord>,
+) -> CallOutcome {
+    loop {
+        match tab.next().await {
+            ServerFrame::Reply {
+                id: replied,
+                outcome,
+            } if replied == id => return outcome,
+            ServerFrame::Event {
+                stream: from,
+                record,
+            } if from == stream => records.push(record),
+            _other => {}
+        }
+    }
+}
+
+fn agent_event(record: &EventRecord) -> Option<&AgentEvent> {
+    match &record.event {
+        SessionEvent::Agent { event } => Some(event),
+        _other => None,
+    }
+}
+
+/// A structured turn through the bridge with `fake-acp`: the records a
+/// real node produces, which the page's timeline reducer is tested
+/// against (`web/src/data/fixtures/fake-acp-turn.json`, written when
+/// `VESSEL_WRITE_FIXTURES` is set).
+#[tokio::test]
+async fn a_structured_turn_with_a_permission_reaches_the_page() {
+    within(Box::pin(async {
+        let node = TestNode::start().await;
+        let ui = Ui::start(Source::default().with("box", node.address(), node.token())).await;
+        let mut tab = ui.tab().await;
+        let mut spec = SessionSpec::new(
+            HarnessKind::ClaudeCode,
+            SessionMode::Structured {
+                model: None,
+                resume: None,
+            },
+        );
+        spec.cwd = Some(node.dir().to_path_buf());
+        let id = tab
+            .call("box", &Call::CreateSession(CreateSession { spec }))
+            .await;
+        let session = match reply(&mut tab, id).await {
+            CallOutcome::Ok(reply) => match *reply {
+                Reply::CreateSession(info) => info.id,
+                other => panic!("{other:?}"),
+            },
+            CallOutcome::Err(failure) => panic!("{failure:?}"),
+        };
+        let stream = StreamId::new(1);
+        tab.send(&ClientFrame::Follow {
+            stream,
+            node: NodeKey::new("box"),
+            session,
+            from: EventSeq::ZERO,
+        })
+        .await;
+        let mut records = Vec::new();
+        records_until(&mut tab, stream, &mut records, |record| {
+            matches!(agent_event(record), Some(AgentEvent::Ready { .. }))
+        })
+        .await;
+        let prompt = SendInput {
+            session,
+            input: SessionInput::Prompt {
+                content: vec![ContentBlock::Text {
+                    text: "tidy the overview".to_owned(),
+                }],
+            },
+        };
+        let id = tab.call("box", &Call::SendInput(prompt)).await;
+        let sent = reply_keeping(&mut tab, id, stream, &mut records).await;
+        assert!(matches!(sent, CallOutcome::Ok(_)));
+        let asked = |record: &EventRecord| {
+            matches!(
+                agent_event(record),
+                Some(AgentEvent::PermissionRequested(_))
+            )
+        };
+        if !records.iter().any(asked) {
+            records_until(&mut tab, stream, &mut records, asked).await;
+        }
+        let Some(AgentEvent::PermissionRequested(request)) = records
+            .iter()
+            .filter_map(agent_event)
+            .find(|event| matches!(event, AgentEvent::PermissionRequested(_)))
+            .cloned()
+        else {
+            panic!("no permission request");
+        };
+        let answer = SendInput {
+            session,
+            input: SessionInput::AnswerPermission {
+                id: request.id,
+                outcome: PermissionOutcome::Selected {
+                    option: PermissionOptionId::new("allow-once"),
+                },
+            },
+        };
+        let id = tab.call("box", &Call::SendInput(answer)).await;
+        let answered = reply_keeping(&mut tab, id, stream, &mut records).await;
+        assert!(matches!(answered, CallOutcome::Ok(_)));
+        let ended = |record: &EventRecord| {
+            matches!(agent_event(record), Some(AgentEvent::TurnEnded { .. }))
+        };
+        if !records.iter().any(ended) {
+            records_until(&mut tab, stream, &mut records, ended).await;
+        }
+        let seqs: Vec<u64> = records.iter().map(|record| record.seq.get()).collect();
+        let expected: Vec<u64> = (0..).take(seqs.len()).collect();
+        assert_eq!(seqs, expected);
+        if std::env::var_os("VESSEL_WRITE_FIXTURES").is_some() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../web/src/data/fixtures/fake-acp-turn.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut text = serde_json::to_string_pretty(&records).unwrap();
+            text.push('\n');
+            std::fs::write(path, text).unwrap();
+        }
     }))
     .await;
 }
