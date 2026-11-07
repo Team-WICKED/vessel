@@ -61,8 +61,8 @@ pub use id::{
 };
 pub use key::{KeyTextError, NodePublicKey, RoutingId};
 pub use model::{
-    DurationMs, ModelApi, ModelCall, ModelFailure, ModelRoute, ModelStop, SessionModel, TokenCount,
-    TokenUsage,
+    DurationMs, ListModels, ModelApi, ModelCall, ModelFailure, ModelRoute, ModelStop, SessionModel,
+    TokenCount, TokenUsage,
 };
 pub use name::{
     EnvName, HeaderName, InvalidName, McpServerName, ModelRouteName, NameKind, ProfileName,

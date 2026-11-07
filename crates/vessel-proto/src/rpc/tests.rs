@@ -156,7 +156,8 @@ fn the_forwardable_set_is_pinned() {
             "transfer.read",
             "transfer.close",
             "secret.set",
-            "secret.list"
+            "secret.list",
+            "model.list"
         ]
     );
 }

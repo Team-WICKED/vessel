@@ -432,6 +432,7 @@ impl Handler for Fake {
         list_secrets: vessel_proto::ListSecrets => Vec<vessel_proto::SecretName>;
         delete_secret: vessel_proto::DeleteSecret => Ack;
         copy_secret: vessel_proto::CopySecret => Ack;
+        list_models: vessel_proto::ListModels => Vec<vessel_proto::ModelRoute>;
     }
 }
 

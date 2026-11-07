@@ -34,6 +34,11 @@ built:
   the same position: `vessel: model call to <model>: <in> in, <out> out`,
   `<in>` counting cached input, or `vessel: model call to <model> failed
   (<failure>)`.
+- `model.list` (read, forwardable) returns `ModelRoute[]`: `{ name,
+  provider, api, model, small_model? }`, the routes the node offers. No base
+  URL, header or secret name crosses the wire. (Answered `unsupported`, "not
+  built on this node yet", until the node's proxy lands.) There is no usage
+  row: usage is in each session's log, and clients sum it.
 
 ## Version 6 (2026-11-06)
 

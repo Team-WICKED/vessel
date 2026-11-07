@@ -214,6 +214,11 @@ pub struct SessionModel {
     pub model: ModelId,
 }
 
+/// `model.list` (protocol 7): the routes this node offers, for pickers and
+/// `vessel models`. Needs `read`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListModels;
+
 /// A route a node offers (`model.list`, protocol 7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRoute {

@@ -35,11 +35,12 @@ use vessel_proto::{
     DeviceInfo, EventPage, ExportMemory, ExportSession, FleetMember, FleetNode, ForgetNode,
     Forward, Forwarded, Generation, GetCallback, GetManifest, GetNode, GetSession, GrantHome,
     Handler, Harness, ImportMemory, ImportSession, Invitation, InviteDevice, KillSession,
-    ListDevices, ListHarnesses, ListMembers, ListNodes, ListPeers, ListProfiles, ListSecrets,
-    ListSessions, Manifest, MemoryImported, MoveProfile, NodeForgotten, NodeInfo, ProfileInfo,
-    ReadBlob, ReadEvents, ReadTransfer, RelayCall, ReloadProfiles, ReportApplied, Request,
-    RevokeDevice, SecretName, SendInput, SessionId, SessionImported, SessionInfo, SetSecret,
-    StopNode, Subscribe, Subscribed, TransferManifest, Unsubscribe, WatchFleet, WireError,
+    ListDevices, ListHarnesses, ListMembers, ListModels, ListNodes, ListPeers, ListProfiles,
+    ListSecrets, ListSessions, Manifest, MemoryImported, ModelRoute, MoveProfile, NodeForgotten,
+    NodeInfo, ProfileInfo, ReadBlob, ReadEvents, ReadTransfer, RelayCall, ReloadProfiles,
+    ReportApplied, Request, RevokeDevice, SecretName, SendInput, SessionId, SessionImported,
+    SessionInfo, SetSecret, StopNode, Subscribe, Subscribed, TransferManifest, Unsubscribe,
+    WatchFleet, WireError,
 };
 
 use crate::service::{Connection, NodeService};
@@ -130,6 +131,7 @@ targets!(SendInput, KillSession, MoveProfile, ExportSession);
 // agent; the envelope's rows carry a call whose own row is checked where it
 // runs (protocol 6, Track X); the rest are not `operate` calls.
 untargeted!(
+    ListModels,
     GetNode,
     ListHarnesses,
     ListSessions,
@@ -206,6 +208,7 @@ guarded! {
     list_secrets: ListSecrets => Vec<SecretName>;
     delete_secret: DeleteSecret => Ack;
     copy_secret: CopySecret => Ack;
+    list_models: ListModels => Vec<ModelRoute>;
     @through_the_guard {
         forward: Forward => Forwarded;
         relay: RelayCall => Forwarded;

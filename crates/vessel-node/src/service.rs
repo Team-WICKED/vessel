@@ -11,11 +11,11 @@ use vessel_proto::{
     Ack, BlobChunk, CloseTransfer, CopySecret, CreateSession, Creator, DeleteSecret, DeviceInfo,
     ErrorCode, EventPage, ExportMemory, ExportSession, FleetMember, Generation, GetManifest,
     GetNode, GetSession, Harness, ImportMemory, ImportSession, Invitation, InviteDevice,
-    KillSession, ListDevices, ListHarnesses, ListMembers, ListProfiles, ListSecrets, ListSessions,
-    Manifest, MemoryImported, MoveProfile, NodeInfo, ProfileInfo, ReadBlob, ReadEvents,
-    ReadTransfer, ReloadProfiles, ReportApplied, RevokeDevice, SecretName, SendInput, SessionId,
-    SessionImported, SessionInfo, SessionOrigin, SessionSpec, SetSecret, StopNode, Subscribe,
-    Subscribed, TransferManifest, Unsubscribe, WatchFleet, WireError,
+    KillSession, ListDevices, ListHarnesses, ListMembers, ListModels, ListProfiles, ListSecrets,
+    ListSessions, Manifest, MemoryImported, ModelRoute, MoveProfile, NodeInfo, ProfileInfo,
+    ReadBlob, ReadEvents, ReadTransfer, ReloadProfiles, ReportApplied, RevokeDevice, SecretName,
+    SendInput, SessionId, SessionImported, SessionInfo, SessionOrigin, SessionSpec, SetSecret,
+    StopNode, Subscribe, Subscribed, TransferManifest, Unsubscribe, WatchFleet, WireError,
 };
 use vessel_rpc::{Outbound, Peer};
 
@@ -400,6 +400,26 @@ impl NodeService {
             .await
             .map(|()| Ack)
             .map_err(|error| wire(&error))
+    }
+}
+
+/// Model routes (protocol 7, milestone 5, ADR 0015).
+impl NodeService {
+    /// `model.list`: the routes this node offers. Not built yet: the
+    /// node's proxy and its `models.toml` come next (milestone 5, B6).
+    #[expect(
+        clippy::unused_async,
+        reason = "every call has the same async shape, so the guard's rows are uniform"
+    )]
+    pub(crate) async fn list_models(
+        &self,
+        _: &Connection,
+        _: ListModels,
+    ) -> Result<Vec<ModelRoute>, WireError> {
+        Err(WireError::new(
+            ErrorCode::Unsupported,
+            "model routes are not built on this node yet".to_owned(),
+        ))
     }
 }
 
