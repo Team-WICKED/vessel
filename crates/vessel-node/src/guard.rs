@@ -168,6 +168,16 @@ untargeted!(
     ListSecrets,
     DeleteSecret,
     CopySecret,
+    vessel_proto::lsp::WorkspaceSymbols,
+    vessel_proto::lsp::DocumentSymbols,
+    vessel_proto::lsp::Definition,
+    vessel_proto::lsp::References,
+    vessel_proto::lsp::GetHover,
+    vessel_proto::lsp::Implementations,
+    vessel_proto::lsp::TypeDefinition,
+    vessel_proto::lsp::IncomingCalls,
+    vessel_proto::lsp::OutgoingCalls,
+    vessel_proto::lsp::Diagnostics,
 );
 
 guarded! {
@@ -209,6 +219,17 @@ guarded! {
     delete_secret: DeleteSecret => Ack;
     copy_secret: CopySecret => Ack;
     list_models: ListModels => Vec<ModelRoute>;
+    lsp_workspace_symbols: vessel_proto::lsp::WorkspaceSymbols => vessel_proto::lsp::Page<vessel_proto::lsp::Symbol>;
+    lsp_document_symbols: vessel_proto::lsp::DocumentSymbols => vessel_proto::lsp::Page<vessel_proto::lsp::Symbol>;
+    lsp_definition: vessel_proto::lsp::Definition => vessel_proto::lsp::Page<vessel_proto::lsp::Location>;
+    lsp_references: vessel_proto::lsp::References => vessel_proto::lsp::Page<vessel_proto::lsp::Location>;
+    lsp_hover: vessel_proto::lsp::GetHover => vessel_proto::lsp::Hover;
+    lsp_implementations: vessel_proto::lsp::Implementations => vessel_proto::lsp::Page<vessel_proto::lsp::Location>;
+    lsp_type_definition: vessel_proto::lsp::TypeDefinition => vessel_proto::lsp::Page<vessel_proto::lsp::Location>;
+    lsp_incoming_calls: vessel_proto::lsp::IncomingCalls => vessel_proto::lsp::Page<vessel_proto::lsp::Call>;
+    lsp_outgoing_calls: vessel_proto::lsp::OutgoingCalls => vessel_proto::lsp::Page<vessel_proto::lsp::Call>;
+    lsp_diagnostics: vessel_proto::lsp::Diagnostics => vessel_proto::lsp::Page<vessel_proto::lsp::Diagnostic>;
+
     @through_the_guard {
         forward: Forward => Forwarded;
         relay: RelayCall => Forwarded;

@@ -27,6 +27,9 @@
 //! <text>` by making one model call where a routed session's harness is
 //! pointed ([`model::call`], milestone 5).
 //!
+//! [`rust_toolchain`] lays out a stand-in Rust toolchain for `fake-lsp`
+//! tests of the Rust language server's launch (milestone 6).
+//!
 //! It also locates a freshly built `vesseld` ([`vesseld()`]) for tests
 //! outside `vessel-node` that need the real node binary (installing it on a
 //! fake remote, attaching to it over `fake-ssh`).
@@ -101,6 +104,8 @@ pub use vesseld::vesseld;
 /// A fake harness binary built from this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Fake {
+    /// `fake-lsp`: deterministic saved-file language server, no real toolchain.
+    Lsp,
     /// `fake-tui`: echoes stdin, prints `size COLSxROWS` on start and on
     /// `SIGWINCH` (Unix), runs `exit [code]`, `env NAME` and `cwd` commands,
     /// and keeps a sleeping grandchild in its process group.
@@ -122,6 +127,7 @@ impl Fake {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::Lsp => "fake-lsp",
             Self::Tui => "fake-tui",
             Self::Acp => "fake-acp",
             Self::Ssh => "fake-ssh",
@@ -213,6 +219,27 @@ pub fn write_cmd_shim(dir: &Path, name: &str, program: &Path) -> std::io::Result
         program.display()
     )?;
     Ok(shim)
+}
+
+/// Lay out a stand-in Rust toolchain under `dir` and return its directory,
+/// for a language-server registry's `rust_toolchain`.
+///
+/// `vessel-lsp` resolves absolute `rustc`/`cargo` before it starts a
+/// conservative Rust server, so a test using `fake-lsp` for Rust needs a
+/// toolchain to resolve. Nothing runs these files: the fake server never
+/// calls a compiler, and a test can assert the paths it was given.
+///
+/// # Errors
+/// The directory cannot be created or written.
+pub fn rust_toolchain(dir: &Path) -> std::io::Result<PathBuf> {
+    let toolchain = dir.join("toolchain");
+    let bin = toolchain.join("bin");
+    std::fs::create_dir_all(&bin)?;
+    for tool in ["rustc", "cargo"] {
+        let path = bin.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(path, "not a real Rust tool\n")?;
+    }
+    Ok(toolchain)
 }
 
 /// Why a fake binary could not be provided.

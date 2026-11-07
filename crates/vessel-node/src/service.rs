@@ -39,6 +39,8 @@ use crate::waits::{ConnectionWaits, Share, WaitSlot, Waiter, Waits};
 /// The node's protocol implementation.
 #[derive(Debug)]
 pub(crate) struct NodeService {
+    pub(crate) lsp: vessel_lsp::Manager,
+    pub(crate) lsp_roots: Vec<crate::LspRoot>,
     pub(crate) lifecycle: Lifecycle,
     lookup: Lookup,
     sessions: Arc<Sessions>,
@@ -66,6 +68,8 @@ pub(crate) struct NodeService {
 
 /// The parts a [`NodeService`] serves.
 pub(crate) struct Parts {
+    pub(crate) lsp: vessel_lsp::Manager,
+    pub(crate) lsp_roots: Vec<crate::LspRoot>,
     pub(crate) lifecycle: Lifecycle,
     pub(crate) lookup: Lookup,
     pub(crate) sessions: Arc<Sessions>,
@@ -83,6 +87,8 @@ pub(crate) struct Parts {
 impl NodeService {
     pub(crate) fn new(parts: Parts) -> Self {
         let Parts {
+            lsp,
+            lsp_roots,
             lifecycle,
             lookup,
             sessions,
@@ -97,6 +103,8 @@ impl NodeService {
             transfers,
         } = parts;
         Self {
+            lsp,
+            lsp_roots,
             lifecycle,
             lookup,
             sessions,

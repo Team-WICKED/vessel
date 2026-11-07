@@ -114,8 +114,8 @@ Not planned yet. In roadmap order the next milestone is Phase 3. Milestone
 
 ## Phase 4: IDE context
 
-- [ ] LSP client inside the node.
-- [ ] Expose symbols, references, diagnostics as MCP tools.
+- [x] LSP client inside the node (milestone 6).
+- [x] Expose symbols, references, diagnostics as MCP tools (milestone 6).
 
 ## Phase 5: clients
 
