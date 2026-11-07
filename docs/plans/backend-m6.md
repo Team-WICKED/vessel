@@ -344,3 +344,10 @@ P2 issues (each test failed before its fix) and two inaccurate claims:
 | A byte-budget eviction during a bulk refresh made the refresh fail and restart a healthy server | the pass skips entries evicted earlier in it | `review_byte_eviction_during_refresh_keeps_server_healthy` |
 | ADR: "project files do not outrank the client" | rewritten: scoped `rust-analyzer.toml` can outrank client settings in 1.98.1, but the execution paths ignore scoped config; re-verify when the pinned version moves | `real_rust_analyzer::review_rust_layout_variations` (ignored; nine layouts, nothing runs) |
 | TypeScript plugin claim | "no plugin from the workspace; only plugins installed beside the pinned tsserver can load" | documentation |
+
+Local gate on 2026-11-07 at `5f7cf56`: `cargo fmt --all -- --check` and
+`cargo clippy --workspace --all-targets -- -D warnings` passed;
+`cargo test --workspace -- --test-threads=4`: 782 passed, 0 failed, 6
+ignored real-server tests. Those passed separately against rust-analyzer
+1.98.1: the five `real_rust_analyzer` tests (including the pin regression
+and the nine-layout matrix) and the MCP smoke, with unchanged counts.
