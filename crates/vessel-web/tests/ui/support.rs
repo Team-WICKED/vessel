@@ -24,12 +24,17 @@ use vessel_web::wire::{
 };
 use vessel_web::{LaunchToken, NodeSource, UiConfig};
 
-/// Only turns a hang into a failure (the fakes are built before the
-/// tests run, as in CI).
+/// Only turns a hang into a failure.
 pub(crate) const SAFETY: Duration = Duration::from_secs(60);
 
+/// `work` under the safety net, counted from after the fakes are built:
+/// the first `Fake::path` of a process runs a nested `cargo build` that can
+/// take a minute, which must not count against the deadline
+/// (`vessel_testkit::within`).
 pub(crate) async fn within<T>(work: impl Future<Output = T>) -> T {
-    tokio::time::timeout(SAFETY, Box::pin(work)).await.unwrap()
+    vessel_testkit::within(SAFETY, Box::pin(work))
+        .await
+        .unwrap()
 }
 
 /// A running UI and its token.
