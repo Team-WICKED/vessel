@@ -113,11 +113,16 @@ async function newSession(
   node: string,
   mode: "Structured" | "Terminal",
   cwd: string,
+  route = "",
 ): Promise<void> {
   await page.getByRole("button", { name: "New", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "New session" });
   await dialog.getByLabel("Node").selectOption({ label: `${node} · serving` });
   await dialog.getByLabel("Harness").selectOption("claude-code");
+  if (route !== "") {
+    // Picks the profile on the route (e2e/fleet.ts: claude-qwen).
+    await dialog.getByLabel("Model").selectOption(route);
+  }
   await dialog.getByLabel("Working directory").fill(cwd);
   // The radio sits inside its segment's label, which is what a person clicks.
   await dialog.locator(".seg label").filter({ hasText: mode }).click();
@@ -136,8 +141,9 @@ test("every main screen", async ({ page }) => {
   }
   const origin = await openUi(page);
 
-  // Some work on the fleet: a structured session with a pending permission
-  // on laptop, terminals on gpu-box and build-server.
+  // Some work on the fleet: a structured session on laptop's model route
+  // with two model calls and a pending permission, terminals on gpu-box
+  // and build-server.
   const project = join(env.root, "laptop-home");
   await newSession(page, "gpu-box", "Terminal", join(env.root, "gpu-box-home"));
   const terminal = page.getByLabel("Session terminal");
@@ -159,9 +165,21 @@ test("every main screen", async ({ page }) => {
     "Terminal",
     join(env.root, "build-server-home"),
   );
-  await newSession(page, "laptop", "Structured", project);
+  await newSession(page, "laptop", "Structured", project, "qwen-coder");
   const prompt = page.getByRole("textbox", { name: "Prompt" });
   await expect(page.getByText(/Ready · harness session/)).toBeVisible();
+  // `model <text>` is one call through laptop's proxy to fake-provider.
+  for (const question of [
+    "What does the fleet overview's generation column mean?",
+    "Which member reported last?",
+  ]) {
+    await prompt.fill(`model ${question}`);
+    await prompt.press("Control+Enter");
+    await expect(
+      page.getByText(`model fake reply to: ${question}`),
+    ).toBeVisible();
+  }
+  await expect(page.locator(".t-item.model-call")).toHaveCount(2);
   await prompt.fill(
     "The fleet overview draws stale generation numbers. Check how members report what they applied, then fix the display.",
   );
@@ -169,6 +187,14 @@ test("every main screen", async ({ page }) => {
   await expect(page.locator(".perm-sticky")).toBeVisible();
   await shot(page, "03-session-structured");
   const structured = page.url();
+  // The same session scrolled back to its model calls.
+  await page
+    .locator(".t-item.model-call")
+    .first()
+    .evaluate((row) => {
+      row.scrollIntoView({ block: "start" });
+    });
+  await shot(page, "03b-session-model-calls");
 
   await page.goto(`${origin}/fleet/laptop`);
   await expect(
@@ -190,7 +216,11 @@ test("every main screen", async ({ page }) => {
   await shot(page, "04-session-terminal");
 
   await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "New session" })).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "New session" });
+  await dialog.getByLabel("Node").selectOption({ label: "laptop · serving" });
+  await dialog.getByLabel("Harness").selectOption("claude-code");
+  await dialog.getByLabel("Model").selectOption("qwen-coder");
+  await expect(dialog.getByLabel("Profile")).toHaveValue("claude-qwen");
   await shot(page, "05-new-session");
   await page.keyboard.press("Escape");
 

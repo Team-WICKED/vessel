@@ -6,6 +6,13 @@
 // temporary home, data and config directory, and the nodes listen on
 // loopback ports chosen by the system.
 //
+// laptop also routes models (milestone 5): `fake-provider` stands in for
+// an OpenAI-compatible provider on a loopback port, `models.toml` names it
+// under two routes, and profile `claude-qwen` runs Claude Code on one of
+// them, so a `model <text>` prompt to the fakes is a real call through
+// the node's proxy. The provider and model names are only labels; nothing
+// leaves the machine, and the key is made up for the run.
+//
 // The Rust binaries are built beforehand (`cargo build -p vessel-cli -p
 // vessel-node -p vessel-testkit --bins`, with the bundle embedded); their
 // directory comes from `VESSEL_TARGET_DIR` or `cargo metadata`.
@@ -20,6 +27,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,6 +142,73 @@ function spawnLogged(
   return child;
 }
 
+/** laptop's model routes: `fake-provider` on loopback, the files naming
+ * it, and its key as the node's secret, all before the node starts. */
+async function routeModels(
+  root: string,
+  data: string,
+  vessel: string,
+  env: NodeJS.ProcessEnv,
+): Promise<ChildProcess> {
+  const key = `fake-key-${randomBytes(12).toString("hex")}`;
+  const provider = spawnLogged(root, "provider", binary("fake-provider"), [], {
+    ...env,
+    FAKE_PROVIDER_KEY: key,
+  });
+  const log = join(root, "provider.log");
+  let port = "";
+  await until("fake-provider's port", () => {
+    const match = existsSync(log)
+      ? /^listening (\d+)/m.exec(readFileSync(log, "utf8"))
+      : null;
+    port = match?.[1] ?? "";
+    return port !== "";
+  });
+  // The node refuses a models.toml others can read.
+  mkdirSync(data, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(data, "models.toml"),
+    [
+      "[providers.openrouter]",
+      'api = "openai-chat-completions"',
+      `base_url = "http://127.0.0.1:${port}/v1"`,
+      'key = { secret = "OPENROUTER_API_KEY" }',
+      "",
+      "[providers.ollama]",
+      'api = "openai-chat-completions"',
+      `base_url = "http://127.0.0.1:${port}/v1"`,
+      "",
+      "[models.qwen-coder]",
+      'provider = "openrouter"',
+      'model = "qwen/qwen3-coder"',
+      'small_model = "qwen/qwen3-coder-flash"',
+      "",
+      "[models.gpt-oss]",
+      'provider = "ollama"',
+      'model = "gpt-oss:20b"',
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(data, "profiles.toml"),
+    [
+      "[profiles.claude-qwen]",
+      'harness = "claude"',
+      'model = "qwen-coder"',
+      'label = "Claude Code on Qwen"',
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+  execFileSync(
+    vessel,
+    ["--data-dir", data, "fleet", "secret", "set", "OPENROUTER_API_KEY"],
+    { env, input: key },
+  );
+  return provider;
+}
+
 /** Start the nodes and the UI. */
 export async function startFleet(): Promise<FleetEnv> {
   const root = mkdtempSync(join(tmpdir(), "vessel-e2e-"));
@@ -156,11 +231,23 @@ export async function startFleet(): Promise<FleetEnv> {
   };
   const pids: number[] = [];
   const nodes: FleetEnv["nodes"] = {};
+  const vessel = binary("vessel");
   for (const name of ["laptop", "gpu-box", "build-server"]) {
     const port = await freePort();
     const data = join(root, name);
     const home = join(root, `${name}-home`);
     mkdirSync(home, { recursive: true });
+    if (name === "laptop") {
+      const provider = await routeModels(root, data, vessel, {
+        ...base,
+        HOME: home,
+        USERPROFILE: home,
+        VESSEL_CONFIG_DIR: join(home, "config"),
+      });
+      if (provider.pid !== undefined) {
+        pids.push(provider.pid);
+      }
+    }
     const args = [
       "--data-dir",
       data,
@@ -184,7 +271,6 @@ export async function startFleet(): Promise<FleetEnv> {
     nodes[name] = { port, data };
     await until(`${name}'s token`, () => existsSync(join(data, "token")));
   }
-  const vessel = binary("vessel");
   const cli = {
     ...base,
     HOME: root,

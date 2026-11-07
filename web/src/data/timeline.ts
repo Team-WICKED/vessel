@@ -10,6 +10,9 @@
 //   entries that change, so React re-renders those alone, and replaying a
 //   long log is linear. Keys come from sequence numbers and the protocol's
 //   ids, so an entry keeps its key while it grows.
+// - Model calls (protocol 7) are entries too, and summed into `usage` as
+//   they arrive, so the inspector's totals cost nothing per render. They
+//   carry metadata only; the record holds no content to show.
 // - It is plain TypeScript with no React, tested on its own, including
 //   against records a real node produced with `fake-acp`.
 
@@ -17,6 +20,7 @@ import type {
   AgentEvent,
   ContentBlock,
   EventRecord,
+  ModelCall,
   PermissionOutcome,
   PermissionRequest,
   PlanEntry,
@@ -27,6 +31,7 @@ import type {
   ToolKind,
   ToolLocation,
 } from "../wire/proto";
+import { addCall, type Usage } from "./models";
 
 /** A tool call as it stands after its updates. */
 export interface ToolState {
@@ -63,7 +68,8 @@ export type Entry =
   | (Base & { kind: "turn_failed"; message: string })
   | (Base & { kind: "log"; line: string })
   | (Base & { kind: "status"; status: SessionStatus })
-  | (Base & { kind: "profile"; from: string | null; to: string | null });
+  | (Base & { kind: "profile"; from: string | null; to: string | null })
+  | (Base & { kind: "model"; call: ModelCall });
 
 export interface Timeline {
   entries: readonly Entry[];
@@ -79,6 +85,8 @@ export interface Timeline {
   files: readonly string[];
   /** The session's status, as its records last said. */
   status: SessionStatus | null;
+  /** Its model calls so far; `null` before the first. */
+  usage: Usage | null;
   /** The next record expected. */
   next: number;
 }
@@ -91,6 +99,7 @@ export const EMPTY: Timeline = {
   pending: null,
   files: [],
   status: null,
+  usage: null,
   next: 0,
 };
 
@@ -130,6 +139,7 @@ class Work {
   inTurn: boolean;
   readonly files: string[];
   status: SessionStatus | null;
+  usage: Usage | null;
   next: number;
 
   constructor(timeline: Timeline) {
@@ -139,6 +149,7 @@ class Work {
     this.inTurn = timeline.inTurn;
     this.files = [...timeline.files];
     this.status = timeline.status;
+    this.usage = timeline.usage;
     this.next = timeline.next;
   }
 
@@ -156,6 +167,7 @@ class Work {
       pending,
       files: this.files,
       status: this.status,
+      usage: this.usage,
       next: this.next,
     };
   }
@@ -187,6 +199,12 @@ class Work {
         return;
       case "agent":
         this.agent(base, event.event);
+        return;
+      case "model_call":
+        // The record itself: it is metadata only (route, model, tokens,
+        // how it ended, how long).
+        this.entries.push({ ...base, kind: "model", call: event });
+        this.usage = addCall(this.usage, event);
         return;
     }
   }

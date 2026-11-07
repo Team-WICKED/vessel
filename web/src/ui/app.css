@@ -1230,6 +1230,15 @@ tr:focus-within .row-actions,
   font: var(--t-mono);
 }
 
+/* A model call (protocol 7): metadata only, the route and model in mono. */
+.t-item.model-call .glyph {
+  border-color: var(--accent);
+}
+
+.t-item.model-call .mono {
+  color: var(--text-secondary);
+}
+
 /* --- Tool cards --- */
 
 .tool {
@@ -1483,6 +1492,10 @@ tr:focus-within .row-actions,
 
 .term-chrome .live {
   margin-left: auto;
+}
+
+.term-chrome .calls {
+  color: var(--text-secondary);
 }
 
 .term {

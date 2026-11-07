@@ -1,11 +1,18 @@
 // New session (DESIGN.md §7.5): each field filters the next. The dialog
 // stays open until the node answers; a failure shows inline.
+//
+// The Model field lists the harness's own provider and the node's model
+// routes (`model.list`). A route reaches a session only through a profile
+// naming it (data/models.ts), so the two fields move together: picking a
+// route picks a profile of this harness on it, and picking a routed
+// profile shows its route.
 
 import { useNavigate } from "@tanstack/react-router";
 import { type SyntheticEvent, useState } from "react";
 
 import { closeNewSession, useFleet, useFleetState } from "../context";
 import { harnessName, nodeState } from "../data/format";
+import { byProvider, profileOn } from "../data/models";
 import { nodeLabel } from "../data/nodes";
 import { Dialog } from "../ui/dialog";
 import { Icon } from "../ui/parts";
@@ -24,6 +31,7 @@ export function NewSessionDialog({
   const statuses = useFleetState((state) => state.statuses);
   const allHarnesses = useFleetState((state) => state.harnesses);
   const allProfiles = useFleetState((state) => state.profiles);
+  const allModels = useFleetState((state) => state.models);
   const nodes = book ?? [];
   const connected = nodes.filter(
     (node) => statuses[node.key]?.state === "connected",
@@ -45,8 +53,13 @@ export function NewSessionDialog({
   const profiles = (allProfiles[node] ?? []).filter(
     (profile) => profile.harness === chosenHarness?.kind,
   );
+  const routes = allModels[node];
   const [profile, setProfile] = useState("");
-  const [model, setModel] = useState("");
+  const chosenProfile = profiles.find(
+    (candidate) => candidate.name === profile,
+  );
+  const route = chosenProfile?.model ?? "";
+  const chosenRoute = routes?.find((candidate) => candidate.name === route);
   const [cwd, setCwd] = useState("");
   const [mode, setMode] = useState<Mode>("structured");
   const effectiveMode: Mode = structuredAvailable ? mode : "terminal";
@@ -63,7 +76,9 @@ export function NewSessionDialog({
         ? {
             harness: chosenHarness.kind,
             mode: "structured",
-            model: model === "" ? null : model,
+            // A routed harness is pinned to its route's models; an
+            // unrouted one uses its own default.
+            model: null,
           }
         : {
             harness: chosenHarness.kind,
@@ -180,6 +195,9 @@ export function NewSessionDialog({
               {profiles.map((candidate) => (
                 <option key={candidate.name} value={candidate.name}>
                   {candidate.label ?? candidate.name}
+                  {candidate.model === undefined || candidate.model === null
+                    ? ""
+                    : ` · ${candidate.model}`}
                 </option>
               ))}
             </select>
@@ -188,18 +206,51 @@ export function NewSessionDialog({
             <span>Model</span>
             <select
               aria-label="Model"
-              value={model}
-              disabled={effectiveMode !== "structured"}
+              value={route}
               onChange={(event) => {
-                setModel(event.target.value);
+                const next = event.target.value;
+                setProfile(
+                  next === "" ? "" : (profileOn(profiles, next)?.name ?? ""),
+                );
               }}
             >
-              <optgroup label="Node default">
+              <optgroup label="The harness's own provider">
                 <option value="">harness default</option>
               </optgroup>
+              {byProvider(routes ?? []).map(([provider, list]) => (
+                <optgroup key={provider} label={provider}>
+                  {list.map((candidate) => {
+                    const usable =
+                      profileOn(profiles, candidate.name) !== undefined;
+                    return (
+                      <option
+                        key={candidate.name}
+                        value={candidate.name}
+                        disabled={!usable}
+                      >
+                        {candidate.name} · {candidate.model}
+                        {usable ? "" : " · no profile"}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              ))}
             </select>
             <span className="hint">
-              Routed models arrive with model routing (M5).
+              {chosenRoute !== undefined
+                ? `Through profile ${profile}, pinned to ${chosenRoute.model}${
+                    chosenRoute.small_model === undefined ||
+                    chosenRoute.small_model === null
+                      ? ""
+                      : ` and ${chosenRoute.small_model}`
+                  }.`
+                : route !== ""
+                  ? `Profile ${profile} names route ${route}, which the node does not offer.`
+                  : routes === null
+                    ? "This node predates model routing."
+                    : routes !== undefined && routes.length > 0
+                      ? "A route runs the harness on another provider's model, through a profile naming it."
+                      : "The node's models.toml defines model routes; it has none."}
             </span>
           </label>
         </div>

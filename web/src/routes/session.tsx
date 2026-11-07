@@ -131,7 +131,11 @@ function SessionHead({
         {session.spec.mode}
       </Badge>
       <span className="meta">
-        {label} · {profile} · {session.spec.cwd ?? "~"}
+        {label} · {profile}
+        {session.model === undefined || session.model === null
+          ? ""
+          : ` · ${session.model.route} (${session.model.model})`}{" "}
+        · {session.spec.cwd ?? "~"}
       </span>
       <div className="actions">
         {session.spec.mode === "structured" && live ? (
@@ -246,7 +250,19 @@ function MoveProfile({
   const choices = (profiles ?? []).filter(
     (profile) => profile.harness === session.spec.harness,
   );
-  const [chosen, setChosen] = useState<string>("");
+  // A session keeps its model route: the node refuses a move to a
+  // profile of another route, or between a route and none (ADR 0015).
+  const route = session.model?.route ?? null;
+  const [chosen, setChosen] = useState<string>(
+    route === null
+      ? ""
+      : (choices.find(
+          (profile) =>
+            profile.model === route && profile.name !== session.profile,
+        )?.name ??
+          session.profile ??
+          ""),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -294,8 +310,10 @@ function MoveProfile({
     >
       <p className="hint">
         The conversation continues under the other account, between turns. Only
-        profiles of {harnessName(session.spec.harness)} on this node are
-        offered.
+        profiles of {harnessName(session.spec.harness)} on this node are offered
+        {route === null
+          ? "."
+          : `, on route ${route}: a session keeps the route it started on.`}
       </p>
       <label className="field">
         <span>Profile</span>
@@ -305,10 +323,19 @@ function MoveProfile({
             setChosen(event.target.value);
           }}
         >
-          <option value="">default</option>
+          <option value="" disabled={route !== null}>
+            default
+          </option>
           {choices.map((profile) => (
-            <option key={profile.name} value={profile.name}>
+            <option
+              key={profile.name}
+              value={profile.name}
+              disabled={(profile.model ?? null) !== route}
+            >
               {profile.label ?? profile.name}
+              {profile.model === undefined || profile.model === null
+                ? ""
+                : ` · ${profile.model}`}
             </option>
           ))}
         </select>

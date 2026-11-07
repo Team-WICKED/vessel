@@ -1,14 +1,19 @@
 // The fleet as the page knows it: the book's nodes, each node's link
 // state (pushed by the bridge), and what each connected node reports
-// (harnesses, profiles, sessions).
+// (harnesses, profiles, model routes, sessions).
 //
 // Sessions have no list subscription in the protocol, so each connected
 // node's list is read again every few seconds while the page is visible;
 // rows patch in place because unchanged sessions keep their objects.
 
-import { Bridge, type LinkState } from "../bridge/client";
+import { Bridge, CallFailed, type LinkState } from "../bridge/client";
 import type { BookNode, NodeKey, NodeStatus } from "../wire/bridge";
-import type { Harness, ProfileInfo, SessionInfo } from "../wire/proto";
+import type {
+  Harness,
+  ModelRoute,
+  ProfileInfo,
+  SessionInfo,
+} from "../wire/proto";
 import { Store } from "./store";
 
 const SESSIONS_EVERY_MS = 2000;
@@ -21,6 +26,9 @@ export interface FleetState {
   statuses: Readonly<Record<NodeKey, NodeStatus>>;
   harnesses: Readonly<Record<NodeKey, readonly Harness[]>>;
   profiles: Readonly<Record<NodeKey, readonly ProfileInfo[]>>;
+  /** The model routes each node offers (`model.list`, protocol 7);
+   * `null` for a node older than model routing. */
+  models: Readonly<Record<NodeKey, readonly ModelRoute[] | null>>;
   sessions: Readonly<Record<NodeKey, readonly SessionInfo[]>>;
   /** The last error reading a node, by node. */
   errors: Readonly<Record<NodeKey, string>>;
@@ -35,6 +43,7 @@ const INITIAL: FleetState = {
   statuses: {},
   harnesses: {},
   profiles: {},
+  models: {},
   sessions: {},
   errors: {},
   selected: null,
@@ -130,9 +139,10 @@ export class Fleet {
   /** Read what `node` reports. */
   async refresh(node: NodeKey): Promise<void> {
     try {
-      const [harnesses, profiles, sessions] = await Promise.all([
+      const [harnesses, profiles, models, sessions] = await Promise.all([
         this.bridge.call(node, "harness.list", null),
         this.bridge.call(node, "profile.list", {}),
+        this.#models(node),
         this.bridge.call(node, "session.list", null),
       ]);
       this.store.update((state) => {
@@ -143,6 +153,7 @@ export class Fleet {
           ...state,
           harnesses: { ...state.harnesses, [node]: harnesses },
           profiles: { ...state.profiles, [node]: profiles },
+          models: { ...state.models, [node]: models },
           sessions: {
             ...state.sessions,
             [node]: keep(state.sessions[node], sessions),
@@ -155,6 +166,22 @@ export class Fleet {
         ...state,
         errors: { ...state.errors, [node]: message(error) },
       }));
+    }
+  }
+
+  /** `node`'s routes; `null` when it predates them, so the rest of what
+   * it reports still shows. */
+  async #models(node: NodeKey): Promise<readonly ModelRoute[] | null> {
+    try {
+      return await this.bridge.call(node, "model.list", null);
+    } catch (error) {
+      if (
+        error instanceof CallFailed &&
+        error.failure.kind === "not_in_protocol"
+      ) {
+        return null;
+      }
+      throw error;
     }
   }
 

@@ -7,6 +7,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { openNewSession, useCrumbs, useFleet, useFleetState } from "../context";
 import type { FleetState } from "../data/fleet";
 import { harnessName, isLive, nodeState, shortId, when } from "../data/format";
+import { apiName, routeLine } from "../data/models";
 import { nodeLabel } from "../data/nodes";
 import { useWhere } from "../data/where";
 import type { BookNode, NodeStatus } from "../wire/bridge";
@@ -236,6 +237,7 @@ function NodePanel({ node }: { node: BookNode }) {
   const status = useFleetState((state: FleetState) => state.statuses[node.key]);
   const harnesses = useFleetState((state) => state.harnesses[node.key]);
   const profiles = useFleetState((state) => state.profiles[node.key]);
+  const routes = useFleetState((state) => state.models[node.key]);
   const sessions = useFleetState((state) => state.sessions[node.key]);
   const info = status?.state === "connected" ? status.node : null;
   const live = (sessions ?? []).filter(isLive);
@@ -298,7 +300,11 @@ function NodePanel({ node }: { node: BookNode }) {
               {harnesses.map((harness) => {
                 const names = (profiles ?? [])
                   .filter((profile) => profile.harness === harness.kind)
-                  .map((profile) => profile.name);
+                  .map((profile) =>
+                    profile.model === undefined || profile.model === null
+                      ? profile.name
+                      : `${profile.name} → ${profile.model}`,
+                  );
                 return (
                   <div className="inline" key={harness.kind}>
                     <Badge
@@ -317,6 +323,31 @@ function NodePanel({ node }: { node: BookNode }) {
                   </div>
                 );
               })}
+            </div>
+          </section>
+        )}
+        {routes === undefined ||
+        routes === null ||
+        routes.length === 0 ? null : (
+          <section className="panel-section">
+            <h3>Model routes</h3>
+            <div className="stack">
+              {routes.map((route) => (
+                <div
+                  className="inline"
+                  key={route.name}
+                  title={apiName(route.api)}
+                >
+                  <Badge tone="accent">{route.name}</Badge>
+                  <span className="muted">
+                    {routeLine(route)}
+                    {route.small_model === undefined ||
+                    route.small_model === null
+                      ? ""
+                      : ` · small ${route.small_model}`}
+                  </span>
+                </div>
+              ))}
             </div>
           </section>
         )}

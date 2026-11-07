@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentEvent, EventRecord, SessionStatus } from "../wire/proto";
+import type {
+  AgentEvent,
+  EventRecord,
+  ModelCall,
+  SessionStatus,
+} from "../wire/proto";
 import { EMPTY, reduce } from "./timeline";
 
 let seq = 0;
@@ -11,6 +16,31 @@ function agent(event: AgentEvent): EventRecord {
   seq += 1;
   return record;
 }
+
+function model(call: ModelCall): EventRecord {
+  const record: EventRecord = {
+    seq,
+    at,
+    event: { type: "model_call", ...call },
+  };
+  seq += 1;
+  return record;
+}
+
+const QWEN: ModelCall = {
+  route: "qwen-coder",
+  model: "qwen/qwen3-coder",
+  api: "openai_chat_completions",
+  usage: {
+    input: 72,
+    cache_read: 128,
+    cache_write: 0,
+    output: 50,
+    reasoning: 10,
+  },
+  stop: "tool_use",
+  duration_ms: 1234,
+};
 
 function status(value: SessionStatus): EventRecord {
   const record: EventRecord = {
@@ -158,5 +188,57 @@ describe("the timeline", () => {
     const prompt = timeline.entries[0];
     expect(prompt?.kind === "prompt" && prompt.replayed).toBe(true);
     expect(prompt?.kind === "prompt" && prompt.text).toBe("earlier question");
+  });
+
+  it("lists model calls and sums them, failures counted apart", () => {
+    seq = 0;
+    const timeline = reduce(EMPTY, [
+      model(QWEN),
+      model({
+        ...QWEN,
+        model: "qwen/qwen3-coder-flash",
+        usage: {
+          input: 8,
+          cache_read: 0,
+          cache_write: 4,
+          output: 2,
+          reasoning: 0,
+        },
+        stop: "end_turn",
+        duration_ms: 300,
+      }),
+      model({
+        ...QWEN,
+        usage: {
+          input: 0,
+          cache_read: 0,
+          cache_write: 0,
+          output: 0,
+          reasoning: 0,
+        },
+        stop: "error",
+        failure: "rate_limited",
+        duration_ms: 40,
+      }),
+    ]);
+    expect(timeline.entries.map((entry) => entry.kind)).toEqual([
+      "model",
+      "model",
+      "model",
+    ]);
+    const first = timeline.entries[0];
+    expect(first?.kind === "model" && first.call).toMatchObject(QWEN);
+    expect(timeline.usage).toEqual({
+      calls: 3,
+      failed: 1,
+      input: 80,
+      cacheRead: 128,
+      cacheWrite: 4,
+      output: 52,
+      reasoning: 10,
+      ms: 1574,
+      models: ["qwen/qwen3-coder", "qwen/qwen3-coder-flash"],
+    });
+    expect(reduce(EMPTY, turn()).usage).toBeNull();
   });
 });

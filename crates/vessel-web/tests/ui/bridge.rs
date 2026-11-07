@@ -11,9 +11,9 @@ use std::sync::atomic::Ordering;
 use bytes::Bytes;
 use vessel_proto::{
     AgentEvent, Call, ContentBlock, CreateSession, ErrorCode, EventRecord, EventSeq, GetNode,
-    GetSession, HarnessKind, ListSessions, PermissionOptionId, PermissionOutcome, Reply, SendInput,
-    SessionEvent, SessionId, SessionInput, SessionMode, SessionSpec, TerminalBytes, TerminalInput,
-    TerminalOutput, TerminalSize,
+    GetSession, HarnessKind, ListModels, ListSessions, PermissionOptionId, PermissionOutcome,
+    Reply, SendInput, SessionEvent, SessionId, SessionInput, SessionMode, SessionSpec,
+    TerminalBytes, TerminalInput, TerminalOutput, TerminalSize,
 };
 use vessel_web::wire::{
     CallId, CallOutcome, ClientFrame, Failure, NodeKey, NodeStatus, Op, OpOutcome, OpResult,
@@ -64,6 +64,15 @@ async fn a_call_reaches_the_node_and_failures_come_back_by_id() {
         match reply(&mut tab, id).await {
             CallOutcome::Ok(reply) => match *reply {
                 Reply::NodeInfo(info) => assert_eq!(info.id, node.id()),
+                other => panic!("{other:?}"),
+            },
+            CallOutcome::Err(failure) => panic!("{failure:?}"),
+        }
+        // Model routes (protocol 7) pass like any read: this node has none.
+        let id = tab.call("box", &Call::ListModels(ListModels)).await;
+        match reply(&mut tab, id).await {
+            CallOutcome::Ok(reply) => match *reply {
+                Reply::ListModels(routes) => assert!(routes.is_empty(), "{routes:?}"),
                 other => panic!("{other:?}"),
             },
             CallOutcome::Err(failure) => panic!("{failure:?}"),

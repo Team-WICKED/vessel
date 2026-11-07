@@ -1,11 +1,19 @@
 // A structured session (DESIGN.md §6.5–6.7): the timeline, the inspector
-// (plan, files, meta) and the composer with any pending permission.
+// (plan, files, model calls, meta) and the composer with any pending
+// permission.
 
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { Markdown } from "../data/markdown";
 
 import { useFleet } from "../context";
 import { harnessName, isLive, shortId, when } from "../data/format";
+import {
+  apiName,
+  callParts,
+  duration,
+  sessionModel,
+  tokens,
+} from "../data/models";
 import {
   blockText,
   EMPTY,
@@ -411,7 +419,62 @@ function TimelineItem({
           </p>
         </div>
       );
+    case "model": {
+      const call = entry.call;
+      const failed = call.failure !== undefined && call.failure !== null;
+      return (
+        <div className="t-item meta-item model-call">
+          <span className="glyph" aria-hidden="true" />
+          <p
+            className={failed ? "t-meta error" : "t-meta"}
+            title={`${apiName(call.api)} · ${when(entry.at)}`}
+          >
+            Model call · <span className="mono">{call.route}</span> ·{" "}
+            <span className="mono">{call.model}</span> ·{" "}
+            {callParts(call).join(" · ")}
+          </p>
+        </div>
+      );
+    }
   }
+}
+
+/** The session's model calls, summed (metadata only). */
+function ModelCalls({ timeline }: { timeline: Timeline }) {
+  const usage = timeline.usage;
+  if (usage === null) {
+    return null;
+  }
+  return (
+    <section>
+      <h2>Model calls</h2>
+      <dl>
+        <dt>calls</dt>
+        <dd>
+          {usage.calls}
+          {usage.failed === 0 ? "" : ` · ${String(usage.failed)} failed`}
+        </dd>
+        <dt>input</dt>
+        <dd>
+          {tokens(usage.input + usage.cacheRead + usage.cacheWrite)}
+          {usage.cacheRead + usage.cacheWrite === 0
+            ? ""
+            : ` · ${tokens(usage.cacheRead)} cached`}
+        </dd>
+        <dt>output</dt>
+        <dd>
+          {tokens(usage.output)}
+          {usage.reasoning === 0
+            ? ""
+            : ` · ${tokens(usage.reasoning)} reasoning`}
+        </dd>
+        <dt>time</dt>
+        <dd>{duration(usage.ms)}</dd>
+        <dt>models</dt>
+        <dd>{usage.models.join(", ")}</dd>
+      </dl>
+    </section>
+  );
 }
 
 function Inspector({
@@ -465,6 +528,7 @@ function Inspector({
           ))
         )}
       </section>
+      <ModelCalls timeline={timeline} />
       <section>
         <h2>Meta</h2>
         <dl>
@@ -476,12 +540,14 @@ function Inspector({
           <dd>{harnessName(spec.harness)}</dd>
           <dt>profile</dt>
           <dd>{session.profile ?? "default"}</dd>
+          {session.model === undefined || session.model === null ? null : (
+            <>
+              <dt>route</dt>
+              <dd>{session.model.route}</dd>
+            </>
+          )}
           <dt>model</dt>
-          <dd>
-            {spec.mode === "structured"
-              ? (spec.model ?? "harness default")
-              : "—"}
-          </dd>
+          <dd>{sessionModel(session)}</dd>
           <dt>cwd</dt>
           <dd>{spec.cwd ?? "~"}</dd>
           <dt>created</dt>
@@ -547,8 +613,7 @@ function Compose({
       );
   };
   const spec = session.spec;
-  const model =
-    spec.mode === "structured" ? (spec.model ?? "harness default") : "";
+  const model = sessionModel(session);
   return (
     <div className="compose">
       {pending === null ? null : (
