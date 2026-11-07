@@ -20,6 +20,7 @@ struct Settings {
     typescript_server: Option<PathBuf>,
     rust_toolchain: Option<PathBuf>,
     cargo_home: Option<PathBuf>,
+    python_interpreter: Option<PathBuf>,
 }
 
 /// Why an explicitly selected LSP configuration could not be used.
@@ -58,5 +59,6 @@ pub async fn load_lsp_config(config: &mut Config, path: &Path) -> Result<(), Lsp
     config.lsp.registry.typescript_server = settings.typescript_server;
     config.lsp.registry.rust_toolchain = settings.rust_toolchain;
     config.lsp.registry.cargo_home = settings.cargo_home;
+    config.lsp.registry.python_interpreter = settings.python_interpreter;
     Ok(())
 }

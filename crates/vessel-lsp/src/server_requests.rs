@@ -13,6 +13,7 @@ enum Setting {
     Cargo(init::Cargo),
     Enabled(init::Enabled),
     Flag(bool),
+    Python(init::PythonSection),
     Absent,
 }
 
@@ -39,10 +40,14 @@ impl Process {
                     return Err(Error::Limit);
                 }
                 let settings = self.settings.clone();
+                let python = self.python_interpreter.clone();
                 let values: Vec<_> = request
                     .items
                     .into_iter()
                     .map(|item| match item.section.as_deref() {
+                        Some("python") => python.clone().map_or(Setting::Absent, |python_path| {
+                            Setting::Python(init::PythonSection { python_path })
+                        }),
                         None | Some("rust-analyzer") => Setting::All(settings.clone()),
                         Some("rust-analyzer.cargo") => Setting::Cargo(settings.cargo.clone()),
                         Some("rust-analyzer.procMacro") => {

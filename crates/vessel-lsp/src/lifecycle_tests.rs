@@ -23,11 +23,13 @@ fn query(root: PathBuf) -> Query {
         page: lsp::PageRequest::default(),
     })
 }
-fn config(mode: &str) -> Config {
+fn config(mode: &str, state: &tempfile::TempDir) -> Config {
     let mut config = Config {
         request_timeout: Duration::from_secs(3),
         ..Config::default()
     };
+    config.registry.state_dir = Some(state.path().to_owned());
+    config.registry.rust_toolchain = Some(vessel_testkit::rust_toolchain(state.path()).unwrap());
     let _previous = config.registry.overrides.insert(
         lsp::Language::Rust,
         Override {
@@ -39,6 +41,11 @@ fn config(mode: &str) -> Config {
 }
 fn root() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\n",
+    )
+    .unwrap();
     std::fs::write(
         dir.path().join("fixture.rs"),
         "pub fn caller() {}\npub fn target() {}\n",
@@ -55,22 +62,24 @@ async fn call(sender: &mpsc::Sender<Work>, query: Query) -> Result<Reply, LspErr
 #[tokio::test]
 async fn an_idle_server_shuts_down_and_closes_its_mailbox() {
     within(Duration::from_secs(45), async {
+        let state = tempfile::tempdir().unwrap();
         let dir = root();
         let root = dir.path().canonicalize().unwrap();
         let config = Config {
             idle_timeout: Duration::from_secs(5),
-            ..config("normal")
+            ..config("normal", &state)
         };
         let (sender, receiver) = mpsc::channel(8);
         let task = tokio::spawn(server(
             Key {
-                root: root.clone(),
+                workspace: root.clone(),
                 language: lsp::Language::Rust,
                 full: false,
             },
             config,
             CancellationToken::new(),
             receiver,
+            super::Tools::default(),
         ));
         assert!(call(&sender, query(root)).await.is_ok());
         tokio::time::pause();
@@ -86,10 +95,11 @@ async fn an_idle_server_shuts_down_and_closes_its_mailbox() {
 #[tokio::test]
 async fn a_crashed_server_restarts_only_after_backoff() {
     within(Duration::from_secs(45), async {
+        let state = tempfile::tempdir().unwrap();
         let dir = root();
         let root = dir.path().canonicalize().unwrap();
         let stop = CancellationToken::new();
-        let manager = Manager::start(config("crash"), stop.child_token());
+        let manager = Manager::start(config("crash", &state), stop.child_token());
         let at = lsp::AtPosition {
             workspace: lsp::Workspace {
                 root: root.clone(),
@@ -133,13 +143,14 @@ async fn a_crashed_server_restarts_only_after_backoff() {
 #[tokio::test]
 async fn the_global_server_bound_is_enforced() {
     within(Duration::from_secs(45), async {
+        let state = tempfile::tempdir().unwrap();
         let first = root();
         let second = root();
         let first = first.path().canonicalize().unwrap();
         let second = second.path().canonicalize().unwrap();
         let config = Config {
             max_servers: NonZeroUsize::MIN,
-            ..config("normal")
+            ..config("normal", &state)
         };
         let stop = CancellationToken::new();
         let manager = Manager::start(config, stop.child_token());
@@ -165,6 +176,7 @@ async fn the_global_server_bound_is_enforced() {
 #[tokio::test]
 async fn the_least_recently_used_document_makes_room_for_a_new_one() {
     within(Duration::from_secs(90), async {
+        let state = tempfile::tempdir().unwrap();
         let dir = root();
         let root = dir.path().canonicalize().unwrap();
         for index in 0..=crate::process::MAX_DOCUMENTS {
@@ -181,7 +193,7 @@ async fn the_least_recently_used_document_makes_room_for_a_new_one() {
             })
         };
         let stop = CancellationToken::new();
-        let manager = Manager::start(config("normal"), stop.child_token());
+        let manager = Manager::start(config("normal", &state), stop.child_token());
         for index in 0..=crate::process::MAX_DOCUMENTS {
             let outcome = manager.query(root.clone(), false, file(index)).await;
             assert!(outcome.is_ok(), "file {index}: {outcome:?}");

@@ -34,6 +34,17 @@ pub(crate) struct Document {
     pub(crate) used: u64,
 }
 
+/// What a server is started with, besides its command.
+#[derive(Debug)]
+pub(crate) struct Launch {
+    pub(crate) root: PathBuf,
+    pub(crate) language: Language,
+    pub(crate) settings: init::Settings,
+    pub(crate) request_timeout: Duration,
+    pub(crate) typescript_engine: Option<PathBuf>,
+    pub(crate) python_interpreter: Option<PathBuf>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Diagnostics {
     pub(crate) items: Vec<data::Diagnostic>,
@@ -59,6 +70,7 @@ pub(crate) struct Process {
     saw_progress: bool,
     rust_status: Option<init::RustStatus>,
     pub(crate) settings: init::Settings,
+    pub(crate) python_interpreter: Option<PathBuf>,
     pub(crate) request_timeout: Duration,
     /// Monotonic use counter for document LRU. Saturating: 2^64 opens are
     /// out of reach, and a stuck clock only makes eviction order arbitrary.
@@ -75,14 +87,15 @@ impl Drop for Process {
 }
 
 impl Process {
-    pub(crate) async fn start(
-        command: &CommandSpec,
-        root: PathBuf,
-        language: Language,
-        full: bool,
-        request_timeout: Duration,
-        typescript_engine: Option<PathBuf>,
-    ) -> Result<Self, Error> {
+    pub(crate) async fn start(command: &CommandSpec, launch: Launch) -> Result<Self, Error> {
+        let Launch {
+            root,
+            language,
+            settings,
+            request_timeout,
+            typescript_engine,
+            python_interpreter,
+        } = launch;
         let Spawned {
             child,
             stdin,
@@ -132,7 +145,8 @@ impl Process {
             progress: BTreeSet::new(),
             saw_progress: false,
             rust_status: None,
-            settings: init::Settings::new(full),
+            settings,
+            python_interpreter,
             request_timeout,
             clock: 0,
         };
@@ -168,6 +182,7 @@ impl Process {
                 Language::Rust => init::Options::Rust(self.settings.clone()),
                 Language::TypeScript => init::Options::TypeScript(init::TypeScriptOptions {
                     disable_automatic_typing_acquisition: true,
+                    plugins: [],
                     tsserver: init::TypeScriptServer {
                         path: typescript_engine,
                     },

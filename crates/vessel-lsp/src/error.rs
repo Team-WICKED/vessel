@@ -11,6 +11,16 @@ pub enum LspError {
         "project configuration can run code; the operator can enable full analysis for this root"
     )]
     ProjectConfiguration,
+    /// Conservative Rust analysis links only checked Cargo projects, and
+    /// the root has none: the server is never left to discover one itself.
+    #[error("no Cargo project found for this workspace; Rust analysis is unavailable")]
+    NoProject,
+    /// Conservative Python analysis on Windows needs an operator-pinned
+    /// interpreter: a bare `python` lookup can select a repository binary.
+    #[error(
+        "Python analysis on Windows needs an operator-configured python_interpreter; it is unavailable"
+    )]
+    PythonInterpreter,
     /// Only trusted roots and regular saved files may be read.
     #[error("path is outside the authorized workspace or is not a regular saved file")]
     Path,

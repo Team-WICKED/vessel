@@ -16,6 +16,7 @@ mod tests {
 
     struct Fixture {
         dir: TempDir,
+        _state: TempDir,
         manager: Manager,
         stop: CancellationToken,
         workspace: lsp::Workspace,
@@ -26,11 +27,21 @@ mod tests {
             tokio::fs::write(dir.path().join("fixture.rs"), SOURCE)
                 .await
                 .unwrap();
+            tokio::fs::write(
+                dir.path().join("Cargo.toml"),
+                "[package]\nname = \"fixture\"\n",
+            )
+            .await
+            .unwrap();
             let root = tokio::fs::canonicalize(dir.path()).await.unwrap();
+            let state = tempfile::tempdir().unwrap();
             let mut config = Config {
                 request_timeout: Duration::from_secs(3),
                 ..Config::default()
             };
+            config.registry.state_dir = Some(state.path().to_owned());
+            config.registry.rust_toolchain =
+                Some(vessel_testkit::rust_toolchain(state.path()).unwrap());
             let _previous = config.registry.overrides.insert(
                 lsp::Language::Rust,
                 Override {
@@ -42,6 +53,7 @@ mod tests {
             let manager = Manager::start(config, stop.child_token());
             Self {
                 dir,
+                _state: state,
                 manager,
                 stop,
                 workspace: lsp::Workspace {

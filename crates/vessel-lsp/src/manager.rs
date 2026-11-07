@@ -1,12 +1,16 @@
-//! Bounded workspace/language actors. A server owns all mutable LSP state.
+//! Bounded root/language actors. A server owns all mutable LSP state.
 //!
-//! Each server admits one active query and eight queued queries; overload is
-//! refused. The manager never waits for a query while routing another server.
-//! Idle and backoff timers are deadlines, not filesystem/readiness polling.
+//! Servers are keyed by the workspace they analyse and accounted to the
+//! allowed root the node granted, so slots are shared fairly between roots
+//! (see `Pool`). Each server admits one active query and eight
+//! queued queries; overload is refused. The manager never waits for a query
+//! while routing another server. Idle and backoff timers are deadlines, not
+//! filesystem/readiness polling.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
@@ -16,10 +20,12 @@ use tokio_util::sync::CancellationToken;
 use vessel_proto::{Reply, lsp::Language};
 
 use crate::error::LspError as Error;
-use crate::process::Process;
+use crate::process::{Launch, Process};
+use crate::protocol::initialize as init;
 use crate::query::Query;
 use crate::registry::Registry;
 use crate::sync::Watcher;
+use crate::toolchain::RustTools;
 
 /// Resource limits and trusted server selection, configured only by the node.
 #[derive(Debug, Clone)]
@@ -47,9 +53,10 @@ impl Default for Config {
     }
 }
 
+/// A server's identity: what it analyses, never who asked.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Key {
-    root: PathBuf,
+    workspace: PathBuf,
     language: Language,
     full: bool,
 }
@@ -63,6 +70,10 @@ struct Admission {
     key: Key,
     work: Work,
 }
+
+/// The node's Rust toolchain, resolved at the first Rust launch and then
+/// shared by every server of this manager (see `toolchain`).
+type Tools = Arc<tokio::sync::OnceCell<RustTools>>;
 
 /// Cheap sender to the node's LSP manager. Authority is checked by the node.
 #[derive(Debug, Clone)]
@@ -109,7 +120,7 @@ impl Manager {
         }
         let (reply, response) = oneshot::channel();
         let key = Key {
-            root,
+            workspace: root,
             language: query.workspace().language,
             full: full_analysis,
         };
@@ -126,6 +137,7 @@ impl Manager {
 async fn run(config: Config, shutdown: CancellationToken, mut inbox: mpsc::Receiver<Admission>) {
     let mut servers: BTreeMap<Key, mpsc::Sender<Work>> = BTreeMap::new();
     let mut tasks = JoinSet::new();
+    let tools = Tools::default();
     loop {
         tokio::select! {
             () = shutdown.cancelled() => break,
@@ -139,7 +151,7 @@ async fn run(config: Config, shutdown: CancellationToken, mut inbox: mpsc::Recei
                     }
                     let (sender, receiver) = mpsc::channel(8);
                     drop(servers.insert(key.clone(), sender));
-                    drop(tasks.spawn(server(key.clone(), config.clone(), shutdown.child_token(), receiver)));
+                    drop(tasks.spawn(server(key.clone(), config.clone(), shutdown.child_token(), receiver, Arc::clone(&tools))));
                 }
                 if let Some(sender) = servers.get(&key) {
                     if let Err(error) = sender.try_send(work) { drop(error.into_inner().reply.send(Err(Error::Unavailable))); }
@@ -152,17 +164,35 @@ async fn run(config: Config, shutdown: CancellationToken, mut inbox: mpsc::Recei
     while tasks.join_next().await.is_some() {}
 }
 
+/// The project set and configuration identity a server generation uses.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Generation {
+    projects: Vec<PathBuf>,
+    stamp: Option<crate::policy::Stamp>,
+}
+
+/// Recheck the policy and identify the generation the server must run.
+fn plan(key: &Key, home: Option<&Path>) -> Result<Generation, Error> {
+    let projects = crate::policy::check(&key.workspace, key.language, key.full, home)?;
+    let stamp = crate::policy::stamp(&key.workspace, &projects)?;
+    Ok(Generation {
+        projects,
+        stamp: Some(stamp),
+    })
+}
+
 async fn server(
     key: Key,
     config: Config,
     shutdown: CancellationToken,
     mut inbox: mpsc::Receiver<Work>,
+    tools: Tools,
 ) {
     let Ok((watcher, mut changes)) = Watcher::new().await else {
         return;
     };
     let mut process: Option<Process> = None;
-    let mut configuration = None;
+    let mut generation = Generation::default();
     let mut retry_at = Instant::now();
     let mut backoff = config.restart_backoff.min(Duration::from_secs(30));
     let mut idle_at = Instant::now()
@@ -196,35 +226,21 @@ async fn server(
                 if Instant::now() < retry_at { drop(work.reply.send(Err(Error::Unavailable))); continue; }
                 let policy_key = key.clone();
                 let policy_home = config.registry.home.clone();
-                let policy = tokio::task::spawn_blocking(move || {
-                    crate::policy::check(&policy_key.root, policy_key.language, policy_key.full, policy_home.as_deref())?;
-                    crate::policy::stamp(&policy_key.root)
+                let planned = tokio::task::spawn_blocking(move || {
+                    plan(&policy_key, policy_home.as_deref())
                 }).await;
-                let stamp = match policy {
-                    Ok(Ok(stamp)) => stamp,
+                let next = match planned {
+                    Ok(Ok(next)) => next,
                     Ok(Err(error)) => { process = None; drop(work.reply.send(Err(error))); continue; }
                     Err(error) => { process = None; drop(work.reply.send(Err(error.into()))); continue; }
                 };
-                if configuration.is_some_and(|previous| previous != stamp) { process = None; }
-                configuration = Some(stamp);
+                if next != generation { process = None; }
+                generation = next;
                 if process.is_none() {
-                    // The previous generation's documents are gone with its process.
-                    if let Err(error) = watcher.reset().await { drop(work.reply.send(Err(error))); continue; }
-                    let registry = config.registry.clone();
-                    let copy = key.clone();
-                    let command = tokio::task::spawn_blocking(move || {
-                        let command = registry.command(copy.language, &copy.root, copy.full)?;
-                        let engine = if copy.language == Language::TypeScript { registry.typescript_engine(&copy.root, copy.full)? } else { None };
-                        Ok::<_, Error>((command, engine))
-                    }).await;
-                    let started = match command {
-                        Ok(Ok((command, engine))) => tokio::select! {
-                            () = shutdown.cancelled() => break,
-                            _cancelled = work.reply.closed() => Err(Error::Unavailable),
-                            result = Process::start(&command, key.root.clone(), key.language, key.full, config.request_timeout, engine) => result,
-                        },
-                        Ok(Err(error)) => Err(error),
-                        Err(error) => Err(error.into()),
+                    let started = tokio::select! {
+                        () = shutdown.cancelled() => break,
+                        _cancelled = work.reply.closed() => Err(Error::Unavailable),
+                        result = launch(&key, &config, &tools, &generation.projects, &watcher) => result,
                     };
                     match started {
                         Ok(started) => process = Some(started),
@@ -236,9 +252,10 @@ async fn server(
                     }
                 }
                 let Some(server) = &mut process else { break; };
+                let mut reply = work.reply;
                 let result = tokio::select! {
                     () = shutdown.cancelled() => break,
-                    _cancelled = work.reply.closed() => Err(Error::Unavailable),
+                    _cancelled = reply.closed() => Err(Error::Unavailable),
                     result = tokio::time::timeout(config.request_timeout, server.query(work.query, &watcher)) => result.unwrap_or(Err(Error::Timeout)),
                 };
                 let failed = matches!(&result, Err(Error::Protocol | Error::Timeout | Error::Frame(_) | Error::Json(_) | Error::Unavailable));
@@ -247,7 +264,7 @@ async fn server(
                     retry_at = Instant::now().checked_add(backoff).unwrap_or_else(Instant::now);
                     backoff = backoff.saturating_mul(2).min(Duration::from_secs(30));
                 } else { backoff = config.restart_backoff.min(Duration::from_secs(30)); }
-                drop(work.reply.send(result));
+                drop(reply.send(result));
                 idle_at = Instant::now().checked_add(config.idle_timeout).unwrap_or_else(Instant::now);
             }
         }
@@ -255,6 +272,53 @@ async fn server(
     if let Some(mut process) = process {
         process.shutdown().await;
     }
+}
+
+/// Start a new server generation: resolve the toolchain once, prepare the
+/// launch off the async workers and initialize the process.
+async fn launch(
+    key: &Key,
+    config: &Config,
+    tools: &Tools,
+    projects: &[PathBuf],
+    watcher: &Watcher,
+) -> Result<Process, Error> {
+    // The previous generation's documents are gone with its process.
+    watcher.reset().await?;
+    // Conservative Rust only: full analysis keeps rustup's own toolchain
+    // selection, project files included.
+    let rust = if key.language == Language::Rust && !key.full {
+        let registry = config.registry.clone();
+        let deadline = config.request_timeout;
+        let resolved = tools
+            .get_or_try_init(|| async move {
+                let state = registry.clone();
+                let (cwd, _tmp) = tokio::task::spawn_blocking(move || state.state()).await??;
+                crate::toolchain::resolve(&registry, &cwd, deadline).await
+            })
+            .await?;
+        Some(resolved.clone())
+    } else {
+        None
+    };
+    let registry = config.registry.clone();
+    let copy = key.clone();
+    let prepared = tokio::task::spawn_blocking(move || {
+        registry.prepare(copy.language, &copy.workspace, copy.full, rust.as_ref())
+    })
+    .await??;
+    Process::start(
+        &prepared.command,
+        Launch {
+            root: key.workspace.clone(),
+            language: key.language,
+            settings: init::Settings::new(key.full, projects),
+            request_timeout: config.request_timeout,
+            typescript_engine: prepared.typescript_engine,
+            python_interpreter: prepared.python_interpreter,
+        },
+    )
+    .await
 }
 
 async fn receive_event(

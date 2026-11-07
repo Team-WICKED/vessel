@@ -168,12 +168,21 @@ impl Sync {
 }
 
 /// No arbitrary initialization options: only operator-controlled policies.
+///
+/// rust-analyzer reads these both from initialization options and from
+/// `workspace/configuration` answers; both carry this one value.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
     pub(crate) cargo: Cargo,
     pub(crate) proc_macro: Enabled,
     pub(crate) check_on_save: bool,
+    /// Conservative mode: the manifests `policy::check` approved. A
+    /// non-empty list turns rust-analyzer's own project discovery off, so it
+    /// never loads a project nobody checked. Full analysis leaves it empty
+    /// (omitted), letting the server discover projects itself.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) linked_projects: Vec<std::path::PathBuf>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,7 +195,8 @@ pub(crate) struct Enabled {
     pub(crate) enable: bool,
 }
 impl Settings {
-    pub(crate) const fn new(full: bool) -> Self {
+    /// `projects` are checked project directories; their manifests are linked.
+    pub(crate) fn new(full: bool, projects: &[std::path::PathBuf]) -> Self {
         Self {
             cargo: Cargo {
                 build_scripts: Enabled { enable: full },
@@ -194,6 +204,10 @@ impl Settings {
             },
             proc_macro: Enabled { enable: full },
             check_on_save: full,
+            linked_projects: projects
+                .iter()
+                .map(|project| project.join("Cargo.toml"))
+                .collect(),
         }
     }
 }
@@ -209,6 +223,11 @@ pub(crate) enum Options {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TypeScriptOptions {
     pub(crate) disable_automatic_typing_acquisition: bool,
+    /// Always empty. typescript-language-server turns this list into
+    /// tsserver's `--globalPlugins`/`--pluginProbeLocations`; with none,
+    /// and without `--allowLocalPluginLoads` (never passed), a project's
+    /// tsconfig plugins resolve only beside the trusted TypeScript engine.
+    pub(crate) plugins: [Empty; 0],
     pub(crate) tsserver: TypeScriptServer,
 }
 #[derive(Debug, Serialize)]
@@ -242,4 +261,11 @@ pub(crate) struct ConfigurationChanged {
 pub(crate) struct RustSection {
     #[serde(rename = "rust-analyzer")]
     pub(crate) rust: Settings,
+}
+
+/// pyright's `python` section: the operator-pinned interpreter.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PythonSection {
+    pub(crate) python_path: std::path::PathBuf,
 }

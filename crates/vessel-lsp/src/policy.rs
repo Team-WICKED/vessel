@@ -2,11 +2,13 @@
 //!
 //! This is a fail-closed compatibility policy, not an OS sandbox. Native tools
 //! and operator-owned homes remain trusted. Recheck before every query because
-//! a working tree may acquire executable configuration after startup.
+//! a working tree may acquire executable configuration after startup. For
+//! Rust it also decides which Cargo projects the server may load at all: the
+//! server is never left to discover a project this module did not check.
 
 use serde::Deserialize;
 use serde::de::IgnoredAny;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use vessel_proto::lsp::Language;
 
 use crate::error::LspError as Error;
@@ -37,50 +39,145 @@ struct SafeProfile {
     _debug: Option<IgnoredAny>,
 }
 
-/// Check only inert supported settings. Unrecognized settings are refused:
-/// trying to enumerate just today's dangerous options is not fail-closed.
+/// Most Cargo projects one conservative Rust server links.
+pub(crate) const MAX_PROJECTS: usize = 32;
+/// Directory entries examined when looking for child projects.
+const MAX_ENTRIES: usize = 4096;
+
+/// Check only inert supported settings for a server analysing `root`.
+/// Unrecognized settings are refused: trying to enumerate just today's
+/// dangerous options is not fail-closed.
+///
+/// Conservative Rust returns the project directories whose `Cargo.toml` the
+/// server may load (`linkedProjects`); nothing else is ever discovered.
+/// Every other case returns an empty list.
 pub(crate) fn check(
     root: &Path,
     language: Language,
     full: bool,
     home: Option<&Path>,
-) -> Result<(), Error> {
+) -> Result<Vec<PathBuf>, Error> {
     if full {
-        return Ok(());
+        return Ok(Vec::new());
     }
     match language {
-        Language::Rust => {
-            for directory in root.ancestors() {
-                for name in ["rust-analyzer.toml", "rust-project.json"] {
-                    if directory.join(name).try_exists()? {
-                        return Err(Error::ProjectConfiguration);
-                    }
-                }
-                let cargo = directory.join(".cargo");
-                // The explicit operator home is trusted; repository config
-                // is not. This exception never applies inside the workspace.
-                if home.is_some_and(|home| directory == home) && !directory.starts_with(root) {
-                    continue;
-                }
-                for name in ["config", "config.toml"] {
-                    let path = cargo.join(name);
-                    if path.try_exists()? {
-                        let config: CargoConfig = toml_edit::de::from_str(&bounded_text(&path)?)
-                            .map_err(|_executable_or_unknown| Error::ProjectConfiguration)?;
-                        consume(config);
-                    }
-                }
-                for name in ["rust-toolchain", "rust-toolchain.toml"] {
-                    let path = directory.join(name);
-                    if path.try_exists()? {
-                        check_toolchain(&bounded_text(&path)?)?;
-                    }
-                }
-            }
-        }
+        Language::Rust => return check_rust(root, home),
         Language::TypeScript => check_typescript(root)?,
         Language::Python => check_python(root)?,
         Language::Go | Language::Cpp => {}
+    }
+    Ok(Vec::new())
+}
+
+/// [Decision Log]
+/// - Purpose: no Cargo, rustup or rust-analyzer configuration that could run
+///   code reaches a conservative server, wherever the project sits.
+/// - Before: only the root and its parents were checked, while
+///   rust-analyzer itself found `sub/Cargo.toml` one level down and then ran
+///   Cargo/rustc with cwd `sub`, reading `sub/`'s files (review finding).
+/// - Alternatives: walk the whole tree for configuration (unbounded, and
+///   rust-analyzer would still discover projects we never looked at); or
+///   refuse roots without a manifest (breaks monorepos with Rust in a
+///   subdirectory).
+/// - Chosen: find the projects rust-analyzer would find for this root (the
+///   nearest manifest at or above it, else its direct children), check every
+///   directory from the root and from each project up to the filesystem
+///   root, and hand exactly that list to the server with discovery off.
+/// - Trade-off: projects deeper than one level below a manifest-less root
+///   are not linked; query them with a deeper workspace root.
+fn check_rust(root: &Path, home: Option<&Path>) -> Result<Vec<PathBuf>, Error> {
+    let mut checked = std::collections::BTreeSet::new();
+    for directory in root.ancestors() {
+        if checked.insert(directory.to_owned()) {
+            check_rust_directory(directory, root, home)?;
+        }
+    }
+    let projects = cargo_projects(root)?;
+    if projects.is_empty() {
+        return Err(Error::NoProject);
+    }
+    for project in &projects {
+        for directory in project.ancestors() {
+            if checked.insert(directory.to_owned()) {
+                check_rust_directory(directory, root, home)?;
+            }
+        }
+    }
+    Ok(projects)
+}
+
+/// The projects rust-analyzer would discover for `root`: the nearest
+/// manifest at or above it, otherwise manifests one directory below it.
+fn cargo_projects(root: &Path) -> Result<Vec<PathBuf>, Error> {
+    for directory in root.ancestors() {
+        if manifest(directory)? {
+            return Ok(vec![directory.to_owned()]);
+        }
+    }
+    let mut projects = Vec::new();
+    for (index, entry) in std::fs::read_dir(root)?.enumerate() {
+        if index >= MAX_ENTRIES {
+            return Err(Error::Limit);
+        }
+        let entry = entry?;
+        // file_type does not follow symlinks: a linked directory could
+        // lead anywhere and is never treated as a project.
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let directory = entry.path();
+        if manifest(&directory)? {
+            projects.push(directory);
+            if projects.len() > MAX_PROJECTS {
+                return Err(Error::Limit);
+            }
+        }
+    }
+    projects.sort();
+    Ok(projects)
+}
+
+fn manifest(directory: &Path) -> Result<bool, Error> {
+    match std::fs::symlink_metadata(directory.join("Cargo.toml")) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        // A symlinked or special manifest is not followed.
+        Ok(_) => Err(Error::ProjectConfiguration),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn check_rust_directory(directory: &Path, root: &Path, home: Option<&Path>) -> Result<(), Error> {
+    for name in [
+        "rust-analyzer.toml",
+        "rust-project.json",
+        ".rust-project.json",
+    ] {
+        if directory.join(name).try_exists()? {
+            return Err(Error::ProjectConfiguration);
+        }
+    }
+    // The explicit operator home is trusted; repository config is not.
+    // This exception never applies inside the workspace.
+    let trusted_home = home.is_some_and(|home| directory == home) && !directory.starts_with(root);
+    if !trusted_home {
+        for name in ["config", "config.toml"] {
+            let path = directory.join(".cargo").join(name);
+            if path.try_exists()? {
+                let config: CargoConfig = toml_edit::de::from_str(&bounded_text(&path)?)
+                    .map_err(|_executable_or_unknown| Error::ProjectConfiguration)?;
+                consume(config);
+            }
+        }
+    }
+    // Defence in depth: rustup is never reached through a proxy (see
+    // `toolchain`), so these files cannot select a compiler; refusing
+    // path/custom toolchains still keeps the policy fail-closed.
+    for name in ["rust-toolchain", "rust-toolchain.toml"] {
+        let path = directory.join(name);
+        if path.try_exists()? {
+            check_toolchain(&bounded_text(&path)?)?;
+        }
     }
     Ok(())
 }
@@ -252,10 +349,18 @@ fn check_python(root: &Path) -> Result<(), Error> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Stamp(u64);
 
-pub(crate) fn stamp(root: &Path) -> Result<Stamp, Error> {
+/// Covers the server root's parents and every linked project's parents, so a
+/// changed manifest or configuration restarts the server after a recheck.
+pub(crate) fn stamp(root: &Path, projects: &[PathBuf]) -> Result<Stamp, Error> {
     use std::hash::{Hash as _, Hasher as _};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for directory in root.ancestors() {
+    projects.hash(&mut hash);
+    let mut directories = std::collections::BTreeSet::new();
+    for start in std::iter::once(root).chain(projects.iter().map(PathBuf::as_path)) {
+        directories.extend(start.ancestors());
+    }
+    for directory in directories {
+        directory.hash(&mut hash);
         for name in [
             "Cargo.toml",
             "Cargo.lock",
@@ -263,6 +368,7 @@ pub(crate) fn stamp(root: &Path) -> Result<Stamp, Error> {
             ".cargo/config.toml",
             "rust-analyzer.toml",
             "rust-project.json",
+            ".rust-project.json",
             "rust-toolchain",
             "rust-toolchain.toml",
             "go.mod",

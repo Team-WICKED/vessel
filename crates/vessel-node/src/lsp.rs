@@ -19,6 +19,8 @@ pub struct LspRoot {
     pub path: PathBuf,
     /// Permit repository build scripts/proc macros for more accurate analysis.
     /// False is the conservative default for every implicit session root.
+    /// It applies to every workspace below `path`, including session cwds
+    /// and fleet callers' roots nested inside it.
     #[serde(default)]
     pub full_analysis: bool,
 }
@@ -117,9 +119,12 @@ handlers! {
 
 fn wire_error(error: &Error) -> WireError {
     let code = match error {
-        Error::NotInstalled | Error::ProjectConfiguration | Error::Unavailable | Error::Timeout => {
-            ErrorCode::Unavailable
-        }
+        Error::NotInstalled
+        | Error::ProjectConfiguration
+        | Error::NoProject
+        | Error::PythonInterpreter
+        | Error::Unavailable
+        | Error::Timeout => ErrorCode::Unavailable,
         Error::Path => ErrorCode::Forbidden,
         Error::Limit | Error::Position(_) | Error::Encoding(_) => ErrorCode::InvalidRequest,
         Error::Unsupported => ErrorCode::Unsupported,

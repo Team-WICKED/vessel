@@ -119,6 +119,10 @@ impl Config {
             lsp: vessel_lsp::Config {
                 registry: vessel_lsp::registry::Registry {
                     home: Some(harness_env.user_home().to_owned()),
+                    // Language servers run in an empty directory of the
+                    // node's own, never in a repository, and keep their
+                    // temporary files there instead of in the account home.
+                    state_dir: Some(data_dir.root().join("lsp")),
                     ..vessel_lsp::registry::Registry::default()
                 },
                 ..vessel_lsp::Config::default()

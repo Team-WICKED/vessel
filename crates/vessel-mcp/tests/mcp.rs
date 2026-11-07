@@ -390,8 +390,12 @@ async fn an_ended_sessions_credential_is_refused() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_uses_every_lsp_tool_through_mcp() {
     within(async {
+        // A stand-in Rust toolchain outside the session's root.
+        let tools = tempfile::tempdir().unwrap();
         let fixture = Fixture::start_with(|config, data| {
             std::fs::write(data.join("fixture.rs"), "pub fn caller() { target(); }\npub fn target() {}\n").unwrap();
+            std::fs::write(data.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
+            config.lsp.registry.rust_toolchain = Some(vessel_testkit::rust_toolchain(tools.path()).unwrap());
             let _previous = config.lsp.registry.overrides.insert(vessel_proto::lsp::Language::Rust, vessel_lsp::registry::Override { program: vessel_testkit::Fake::Lsp.path().unwrap(), args: vec!["normal".into()] });
         }).await;
         let owner = owner(&fixture).await;

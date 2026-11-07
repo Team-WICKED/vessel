@@ -17,6 +17,7 @@ mod query;
 pub mod registry;
 mod server_requests;
 mod sync;
+mod toolchain;
 
 pub use error::LspError;
 pub use manager::{Config, Manager};

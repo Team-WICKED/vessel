@@ -24,14 +24,12 @@ fn request(root: PathBuf) -> lsp::DocumentSymbols {
 async fn a_local_agent_has_its_own_cwd_but_an_owner_still_needs_a_configured_root() {
     within(async {
         let fixture = Fixture::new();
-        std::fs::write(
-            fixture.cwd().join("fixture.rs"),
-            "pub fn caller() { target(); }\npub fn target() {}\n",
-        )
-        .unwrap();
+        project(&fixture.cwd());
+        let tools = tempfile::tempdir().unwrap();
         let node = fixture
             .start_with(|config| {
                 config.vessel_mcp = Some(vessel_mcp(&fixture));
+                config.lsp.registry.rust_toolchain = Some(toolchain(&tools));
                 let _previous = config.lsp.registry.overrides.insert(
                     lsp::Language::Rust,
                     Override {
@@ -70,11 +68,8 @@ async fn forwarded_lsp_reads_require_destination_roots_and_read_scope() {
         let sources = tempfile::tempdir().unwrap();
         let home = crate::across::home(&relay, sources.path()).await;
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(
-            root.path().join("fixture.rs"),
-            "pub fn caller() { target(); }\npub fn target() {}\n",
-        )
-        .unwrap();
+        project(root.path());
+        let tools = tempfile::tempdir().unwrap();
         let target = crate::across::member_custom(
             &relay,
             &home,
@@ -82,6 +77,7 @@ async fn forwarded_lsp_reads_require_destination_roots_and_read_scope() {
             vec![Scope::Sync],
             vec![Scope::Read],
             |config| {
+                config.lsp.registry.rust_toolchain = Some(toolchain(&tools));
                 config.lsp_roots.push(vessel_node::LspRoot {
                     path: root.path().to_owned(),
                     full_analysis: false,
@@ -156,4 +152,21 @@ async fn forwarded_lsp_reads_require_destination_roots_and_read_scope() {
         relay.stop().await;
     })
     .await;
+}
+
+/// A stand-in toolchain outside every root (conservative Rust pins one).
+fn toolchain(dir: &tempfile::TempDir) -> PathBuf {
+    vessel_testkit::rust_toolchain(dir.path()).unwrap()
+}
+
+/// A Cargo project with the fake's `fixture.rs`, so conservative Rust has a
+/// checked project to link.
+fn project(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
+    std::fs::write(
+        dir.join("fixture.rs"),
+        "pub fn caller() { target(); }\npub fn target() {}\n",
+    )
+    .unwrap();
 }
