@@ -490,6 +490,56 @@ plus tests of our own beside each fix). The threat notes they add:
   `apiKeyHelper`, Codex's managed requirements) can still steer it: that
   configuration is the account's, and Vessel does not rewrite it.
 
+### After the verification round (2026-11-07)
+
+A second look at the fixes (568385e) found redaction still depended on
+how the provider spelled things, and four smaller gaps. The verifier's
+tests (`crates/*/tests/m5_verify_*.rs`) pass, ported with formatting and
+two lint fixes and one loop adjusted (below), beside tests of our own:
+
+- **Spelling decides nothing** (P1). The relay classified an event first
+  and decoded only an error event's JSON: an escaped `"\u0065rror"`, an
+  event name of the provider's choosing, or an escaped key in a text
+  delta reached the harness, which decodes them. Every event the
+  provider sends, same API or translated, now has its name and data
+  checked once, the data decoded as JSON with member names
+  (`Redactor::holds`). An event holding the key is not written: the call
+  ends with a classified failure in the front's form, the provider's own
+  error (redacted) or "the provider's answer quoted the call's key". A
+  whole answer has the key removed from its strings and member names.
+- **Untyped error bodies** (P1). An error body that is JSON but not the
+  API's error shape is decoded and redacted whole before it is cut; one
+  that is not JSON shows only its status.
+- **Member names** (P1): covered by the two above.
+- **Tokenless keep-alives** (P2). A 401 kept its connection, so 256
+  peers renewing theirs with 401s held every place and the harness got
+  503. A refusal now closes its connection; a connection is unproven
+  until a request on it shows a live session's token, and when every
+  place is held the oldest unproven one is closed to make room. Only a
+  proxy full of harnesses' connections answers 503. A smaller cap for
+  unproven connections would not do: a harness's next connection starts
+  unproven too. The header deadline (10 s) is also the idle keep-alive
+  timeout.
+- **A stream cut short** (P2). A same-API stream that ended cleanly
+  before its last event (no `message_stop`) looked whole. It is reported
+  to the harness as an error event and recorded as truncated.
+- **A split byte-order mark** (P3). The decoder holds a stream's first
+  bytes until three show whether they are a mark.
+- **Deadlines answer** (check). A head cut off by the 10 s deadline is
+  answered 408 before the close (hyper sends nothing, so the proxy's
+  socket does; an idle connection is closed without a word); a body past
+  30 s already got 408. Both give their places back.
+- **What redaction covers.** The key as written and in any JSON
+  spelling, in values and member names, and in event names. Not other
+  encodings (base64, a key cut across events, JSON inside a JSON
+  string): a provider set on sending its own key back cannot be stopped
+  by matching, and none of those is how an error quotes a key by
+  accident.
+- **The adjusted test.** `verify_unauthenticated_keepalives_cannot_starve_a_real_harness`
+  renewed each refused connection with a second 401. Refusals now close,
+  so it checks that each held socket reads its end; the sockets stay
+  open, and the extra connection must still get 200.
+
 ## Done criteria
 
 - Claude Code and Codex sessions on a routed profile work through the

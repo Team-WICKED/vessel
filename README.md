@@ -484,8 +484,9 @@ vessel log 3f2a                              # model calls: route, model, tokens
   (Codex's `-m`, `-p`, `--oss`, `-c model...`; Claude Code's
   `--settings`); settings in the account's own home still apply.
 - The proxy answers only on `127.0.0.1`, to a live session's token, with
-  its own address as `Host`; it removes the provider's key from anything
-  the provider sends back.
+  its own address as `Host`. The provider's key does not reach the
+  harness in what the provider sends back: it is removed from an error,
+  and a streamed answer that quotes it ends in an error there.
 - Each call is a `model_call` record in the session's log, with its
   tokens and how it ended; never its content.
 - At most 4 calls at once per session and 16 per node; a call past them

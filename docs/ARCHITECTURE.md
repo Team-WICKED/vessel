@@ -382,16 +382,22 @@ In the crate table's order.
     403), the route still defined, room in the limits (4 calls per
     session, 16 per node; else 429 with `Retry-After`); then the body is
     read under 32 MiB and 30 s. Its own accept loop (`models::listen`)
-    bounds connections (256) and header reads (10 s). The model must
+    bounds connections (256) and header reads (10 s, also the idle
+    keep-alive timeout; a head cut off by it gets 408); a refusal closes
+    its connection, and when every place is held the oldest connection
+    that has not shown a token is closed to make room. The model must
     be the route's model or small model (else 400 naming both). Same API
     on both sides: the request's bytes go up (less what
     `vessel_llm::passthrough` must strip) with only `anthropic-version`
     and `anthropic-beta` of the harness's headers, and the answer's bytes
-    come back event by event, decoded and written again with the call's
-    key removed (an error event's JSON strings decoded to find it however
-    escaped), read alongside for usage. Different APIs: translated
-    through the neutral form, the upstream always streamed, keepalives
-    every 15 s of silence, failures redacted before they are written.
+    come back event by event, decoded and written again, read alongside
+    for usage; a stream that ends before its answer did gets an error
+    event. Different APIs: translated through the neutral form, the
+    upstream always streamed, keepalives every 15 s of silence, failures
+    redacted before they are written. Either way an upstream event
+    holding the call's key (in its name or data, the data decoded as JSON
+    with member names) is not written: the call ends in a classified
+    failure.
     Every answer is bounded (32 MiB, as read) and every write toward the
     harness has the client's idle timeout. The provider's key is read
     from `secrets.toml` for each call. Each admitted call ends in one `ModelCall` record in

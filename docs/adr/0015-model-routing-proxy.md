@@ -176,3 +176,19 @@ test (the plan's "Security", "After the review"):
   provider or configuration profile, and the route's arguments come
   last. What the harness reads from its own home (an account's settings,
   an administrator's managed configuration) is the account's.
+
+Amended after the verification round on those fixes (2026-11-07):
+
+- Nothing from the provider is classified before it is checked: every
+  event's name and data, the data decoded as JSON with member names, and
+  every error body that is JSON. An event holding the key is not
+  written; the call ends there with a classified failure in the front's
+  form. An error body that is not JSON shows only its status. Redaction
+  covers the key as written and in any JSON spelling, not other
+  encodings: it is against an echo, not against a provider set on
+  sending its key back.
+- A refusal closes its connection. A connection that has not shown a
+  session's token is the first closed to make room when the proxy is
+  full; a head cut off by its deadline is answered 408.
+- A same-API stream that ends before its answer did is reported to the
+  harness as an error and recorded as truncated.
