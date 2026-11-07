@@ -385,7 +385,10 @@ In the crate table's order.
     bounds connections (256) and header reads (10 s, also the idle
     keep-alive timeout; a head cut off by it gets 408); a refusal closes
     its connection, and when every place is held the oldest connection
-    that has not shown a token is closed to make room. The model must
+    that has not shown a token (or is past its session's 32) is closed
+    to make room. A provider key under 20 bytes or of fewer than ten
+    different ones refuses the call (403) before anything goes up; a
+    local server is given none. The model must
     be the route's model or small model (else 400 naming both). Same API
     on both sides: the request's bytes go up (less what
     `vessel_llm::passthrough` must strip) with only `anthropic-version`

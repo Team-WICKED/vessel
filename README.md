@@ -477,6 +477,11 @@ vessel log 3f2a                              # model calls: route, model, tokens
   provider's key, and is pinned to the route's models: a request for
   another model is refused with both names. The key is read for each
   call and goes only into the request to the provider.
+- Give a provider no key, or a long random one. A local server (vLLM,
+  LM Studio, Ollama) that needs none gets no `key` line at all; a key
+  under 20 characters, or one as plain as `EMPTY` or `sk-1234`, is
+  refused, since the proxy searches every answer for it and a model may
+  write such a word.
 - Claude Code and Codex can be routed, in terminal and structured mode;
   Gemini CLI and OpenCode cannot yet. A session keeps its route: moving
   it to a profile of another route is refused. A routed profile or

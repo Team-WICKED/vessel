@@ -192,3 +192,15 @@ Amended after the verification round on those fixes (2026-11-07):
   full; a head cut off by its deadline is answered 408.
 - A same-API stream that ends before its answer did is reported to the
   harness as an error and recorded as truncated.
+
+Amended after the third round (2026-11-07):
+
+- A provider gets no key or a distinctive one (at least 20 bytes, of at
+  least ten different ones); a call with any other key is refused before
+  it goes up, since the proxy looks for the key in every answer. An
+  answer withheld for quoting it is an invalid request, not a transient
+  failure.
+- Text with a backslash that `serde_json` cannot decode is searched as
+  text, unescaped leniently: redaction fails closed.
+- A session proves at most 32 of the proxy's connections; past that its
+  connections may be closed to make room like a tokenless one.
