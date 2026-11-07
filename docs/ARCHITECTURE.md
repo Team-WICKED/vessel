@@ -41,7 +41,7 @@ and 0013).
 | `vessel-rpc` | Moves `ClientFrame`/`ServerFrame` over any frame transport; handshake, correlation, concurrency limits, generic over `Handler`. From protocol 5 it holds both sides to the negotiated version: a call newer than the connection (`Call::since`) is refused by the client before sending and by the server before dispatch, and outgoing frames are adapted to an older client where they are encoded (`ServerFrame::for_protocol`). | proto |
 | `vessel-proc` | Command specs, spawning in a process group (a kill-on-close job object on Windows), killing the group. | - |
 | `vessel-harness` | Everything harness-specific, one module per harness: discovery, version probe, terminal and ACP launch commands; `HarnessEnv` (the account harnesses run as, given by the binaries, never read from the process by a library); since milestone 4 harness profiles and `profiles.toml`, each harness's home and login check, a session's files and linking them between homes, a profile's memory files and renaming a path for another working directory (transfers, protocol 6), MCP servers for terminal sessions, and what `vessel init` offers (install and login commands, other accounts' homes). | proto, proc |
-| `vessel-lsp` | Saved-file language context (M6, ADR 0016): bounded Content-Length transport, typed LSP edge, process actors keyed by root/language, conservative launch policy, native watches and saved snapshots, progress/diagnostics, query conversion and pagination. No authentication or arbitrary LSP method passthrough. | proto, proc |
+| `vessel-lsp` | Saved-file language context (M6, ADR 0016): bounded Content-Length transport, typed LSP edge, process actors keyed by workspace/language and shared fairly between allowed roots, conservative launch policy with a once-resolved Rust toolchain and checked Cargo projects, native watches and saved snapshots, progress/diagnostics, query conversion and pagination. No authentication or arbitrary LSP method passthrough. | proto, proc |
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize; on Windows, answers the pseudo console's startup cursor query. | proc |
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
@@ -510,7 +510,10 @@ canonicalizes roots, and `vessel-lsp` checks files before starting a server.
 `lsp_config` reads only an explicitly named operator JSON file. Server results
 are confined again before any result-selected source is opened.
 
-`vessel-lsp::manager` owns a bounded map of server actors. `process` owns the
+`vessel-lsp::manager` owns a bounded map of server actors keyed by the
+workspace they analyse and accounted to the caller's allowed root, so slots
+are shared fairly between roots (a busier root yields its least recently
+used server). `process` owns the
 child group and two pipe tasks; `protocol` contains the typed LSP subset;
 `sync` owns bounded saved snapshots and coalesced native watches; `query`
 converts into protocol types. A server handles one query at a time (eight
@@ -519,6 +522,9 @@ Different servers run independently. Idle/crash/shutdown drop or reap the
 whole process group. The node's task tracker waits for LSP shutdown.
 
 `registry` resolves trusted executables from an explicit PATH and creates a
-minimal environment. `policy` refuses executable or unsupported repository
-configuration in conservative mode. This is not an OS sandbox; ADR 0016
+minimal environment with a node-owned working and temporary directory.
+`toolchain` resolves the operator's Rust toolchain once to absolute
+binaries, so no rustup proxy chooses a compiler from a project directory.
+`policy` refuses executable or unsupported repository configuration in
+conservative mode and returns the Cargo projects rust-analyzer may link. This is not an OS sandbox; ADR 0016
 records each server's execution risks and the full-analysis opt-in.

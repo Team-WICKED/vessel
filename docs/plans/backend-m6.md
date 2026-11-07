@@ -96,7 +96,8 @@ Reconsider using Value-free leaf types if that measurably reduces code.
    non-file URIs, escaping symlinks and non-regular files. A local agent may
    use its session cwd; a remote agent may use only destination-configured
    roots (or an explicitly authorized destination session in a later API).
-3. Manager chooses `(canonical root, language)` and a trusted server command:
+3. Manager chooses `(canonical workspace, language)`, accounts the server to
+   the caller's allowed root for fair slot sharing, and a trusted server command:
    rust-analyzer, typescript-language-server --stdio, basedpyright-langserver
    --stdio (fallback pyright-langserver), gopls, clangd. PATH is supplied by
    the binary, not read implicitly by library tests. Overrides are node-only.
@@ -288,3 +289,43 @@ approved LSP rows. No existing test timeout was relaxed.
 Three-platform CI runs on the track push; the coordinator merges only after
 Linux, macOS and Windows pass on the submitted head. CI run details are in
 the track handoff, rather than claiming platform execution from Linux alone.
+
+
+## Hardening round (2026-11-07)
+
+An independent review of the conservative-mode claim found one high and
+several lower issues; regression tests reproduce each before the fix.
+
+| Finding | Fix | Proof |
+| --- | --- | --- |
+| High: rustup proxy honoured a child `path` toolchain (reproduced, rust-analyzer 1.98.1) | `toolchain`: absolute rustc/cargo resolved once, `RUSTUP_TOOLCHAIN` pinned, conservative only; `policy`: `linkedProjects` = checked Cargo projects, every level to `/` checked, discovery off, `unavailable` without a project | `real_rust_analyzer::a_child_rust_toolchain_never_runs_a_repository_binary` (ignored, real server; failed before: the repository rustc ran), `policy::child_cargo_project_configuration_is_refused_before_spawn`, `launch::conservative_rust_launches_with_pinned_tools_and_linked_projects`, `toolchain` and `registry` unit tests |
+| Every server ran with the repository as cwd; `TMPDIR` was the home | node-owned `<data>/lsp/cwd` and `<data>/lsp/tmp` | `launch::conservative_rust_launches_with_pinned_tools_and_linked_projects` |
+| Medium (Windows): pyright finds `python` by name | neutral cwd; `python_interpreter` answered as `python.pythonPath`; Windows conservative Python refused without it | `launch::python_gets_the_pinned_interpreter` (the refusal branch runs on the Windows CI runner) |
+| No eviction of open documents | LRU `didClose`, watch reference counts | `the_least_recently_used_document_makes_room_for_a_new_one` (failed before) |
+| Slots keyed by requested subdirectory | per-allowed-root fairness with parked admissions | `subdirectories_of_one_root_cannot_lock_out_another_root` (node e2e, failed before), `a_root_holding_every_slot_yields_one_to_another_root` |
+| Symlink existence oracle | one `Forbidden` answer for missing/escaping/non-regular | `missing_and_escaping_symlinks_get_the_same_answer` (failed before), node e2e |
+| FIFO swapped in before open | non-blocking open, `fstat` on the handle | `a_fifo_is_refused_without_blocking` (failed before: blocked) |
+| TypeScript plugin options | `plugins: []` sent explicitly; child tsconfig gap in ADR 0016 | `launch::typescript_receives_no_plugin_locations` |
+
+Deliberate deviation: the review suggested keying servers by the allowed
+root. Servers stay keyed by the requested workspace and are *accounted* to
+the allowed root instead (ADR 0016, "Review hardening"): a broad allowed
+root such as a session cwd of a home directory would otherwise become the
+analysis root. Full-analysis roots keep rustup's own toolchain selection,
+because full analysis permits project configuration.
+
+`vessel-lsp` gains the Unix `nix` dependency (`fs` feature, already in the
+workspace) for `O_NONBLOCK`. `vessel-testkit` gains `rust_toolchain` (a
+stand-in toolchain directory) and `fake-lsp --record-launch`/`python-config`.
+
+### Hardening gate
+
+Local gate on 2026-11-07, code commit `2edc7a9`: `cargo fmt --all -- --check`
+passed; `cargo clippy --workspace --all-targets -- -D warnings` passed;
+`cargo test --workspace -- --test-threads=4` passed: 777 passed, 0 failed,
+4 ignored real-server tests. Those ran separately against rust-analyzer
+1.98.1 and passed: the three `real_rust_analyzer` regressions and the MCP
+smoke (`docs/smoke/m6-lsp.py`'s test), whose counts match the earlier
+record (document symbols 15, workspace 1, definition 1, references 7, hover
+nonempty, incoming 3, outgoing 1, cached diagnostics 3). Three-platform CI
+results are in the track handoff.

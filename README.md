@@ -507,13 +507,22 @@ An operator configuration can pin executable paths and a TypeScript engine:
   "servers": {"rust": {"program": "/opt/tools/rust-analyzer", "args": []}},
   "typescript_server": "/opt/tools/typescript/lib/tsserver.js",
   "rust_toolchain": "/opt/tools/rust-toolchain",
-  "cargo_home": "/opt/tools/cargo-cache"
+  "cargo_home": "/opt/tools/cargo-cache",
+  "python_interpreter": "/opt/tools/python/bin/python3"
 }
 ```
 
 The optional tool/cache paths are useful with isolated homes; conservative
 TypeScript needs a trusted `tsserver.js` (explicit, or discovered through a
 global `tsserver` on PATH), never one selected from project `node_modules`.
+Conservative Rust uses `rust_toolchain`, else rustup's default toolchain
+(resolved once to absolute binaries, never through a rustup proxy that a
+project's `rust-toolchain.toml` could redirect), else `rustc`/`cargo` on
+PATH; with a custom `RUSTUP_HOME`, pin `rust_toolchain`. It analyses only
+the Cargo projects it checked: the nearest `Cargo.toml` at or above the
+workspace, else those one directory below it. `python_interpreter` is the
+interpreter pyright runs; on Windows conservative Python needs it. Servers
+run in `<data dir>/lsp/cwd` with temporary files in `<data dir>/lsp/tmp`.
 Config is read once at startup. `--lsp-root` may repeat; each directory grants
 Read callers access, including callers from other fleet nodes. A local
 session also has its own cwd. Requests cannot change these grants.
@@ -549,10 +558,14 @@ and refuses executable or unsupported project configuration. This loses
 semantic coverage, including unexpanded derives and uncached offline dependencies.
 Only the operator can enable full analysis for a root, with
 `--lsp-full-analysis-root` or `full_analysis: true`; it may execute repository
-build tools. LSP runs as the node account: **this is not an OS sandbox**.
+build tools. It covers every directory below that root, including session
+cwds and fleet callers' workspaces inside it: a full-analysis parent makes
+every root under it full. LSP runs as the node account: **this is not an OS sandbox**.
 The per-server restrictions and residual trust boundaries are in ADR 0016.
 
-Servers start lazily (at most four), shut down after five idle minutes, and
-retry after crashes with backoff. Documents, diagnostics, queues and output
+Servers start lazily (at most four, shared fairly between allowed roots: a
+root holding fewer servers takes over the busiest root's least recently used
+one), shut down after five idle minutes, and retry after crashes with
+backoff. Documents, diagnostics, queues and output
 sizes are bounded. To exercise this repository through a real rust-analyzer
 and an isolated agent MCP connection, run `python3 docs/smoke/m6-lsp.py`.
