@@ -64,3 +64,58 @@ jobs:
       # Every test binary runs even after one fails, so a single failure
       # does not hide the state of the rest (on Windows it hid all of it).
       - run: cargo test --workspace --no-fail-fast
+
+  # The web UI (ADR 0017), on Linux: the page's own checks, then the
+  # `vessel` binary with the page embedded (a missing bundle fails the
+  # build here, as in a release), then the page end to end against real
+  # nodes with the fake harnesses, and the screenshots of every main
+  # screen, kept as an artifact for review.
+  web:
+    name: web UI (lint / test / build / e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93"
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: web
+      # ESLint (no `any`, no raw HTML), Prettier, the font rule.
+      - run: npm run lint
+        working-directory: web
+      - run: npm run typecheck
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      # The font rule over the built CSS too (third-party stylesheets).
+      - run: npm run fonts
+        working-directory: web
+      - run: cargo build -p vessel-cli
+        env:
+          VESSEL_WEB_REQUIRE_BUNDLE: "1"
+      - run: cargo build -p vessel-node --bin vesseld
+      - run: cargo build -p vessel-testkit --bins
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run e2e
+        working-directory: web
+      - run: npm run screens
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-ui-screens
+          path: |
+            web/artifacts/screens
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore

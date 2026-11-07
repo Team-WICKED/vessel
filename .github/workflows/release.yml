@@ -1,8 +1,11 @@
-# Release builds of `vesseld` for remote installs (ADR 0008, plan C7).
+# Release builds of `vesseld` for remote installs (ADR 0008, plan C7), and
+# of `vessel` with the web UI embedded (ADR 0017).
 #
-# On a `v<version>` tag: one `vesseld-<version>-<target>.tar.gz` per target,
-# holding `vesseld` at its root, and a `SHA256SUMS` over them, attached to a
-# GitHub release of that tag. `vessel node install` downloads the archive for
+# On a `v<version>` tag: one `vesseld-<version>-<target>.tar.gz` and one
+# `vessel-<version>-<target>.tar.gz` per target, each holding its binary at
+# its root, and a `SHA256SUMS` over them, attached to a GitHub release of
+# that tag. `vessel` embeds the web UI built from `web/` on the same
+# runner; a missing bundle fails the build (`VESSEL_WEB_REQUIRE_BUNDLE`). `vessel node install` downloads the archive for
 # the remote's platform with `gh release download` and checks it against
 # `SHA256SUMS`, here and again on the remote.
 #
@@ -28,13 +31,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  VESSEL_WEB_REQUIRE_BUNDLE: "1"
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: vesseld (${{ matrix.target }})
+    name: vessel and vesseld (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
@@ -65,6 +69,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
       - name: Version from the tag
         id: version
         shell: bash
@@ -83,10 +97,10 @@ jobs:
           cargo install --locked cargo-zigbuild@0.24.1
       - name: Build (zig)
         if: matrix.zig
-        run: cargo zigbuild --release --locked -p vessel-node --bin vesseld --target ${{ matrix.target }}
+        run: cargo zigbuild --release --locked -p vessel-node --bin vesseld -p vessel-cli --bin vessel --target ${{ matrix.target }}
       - name: Build
         if: ${{ !matrix.zig }}
-        run: cargo build --release --locked -p vessel-node --bin vesseld --target ${{ matrix.target }}
+        run: cargo build --release --locked -p vessel-node --bin vesseld -p vessel-cli --bin vessel --target ${{ matrix.target }}
       - name: Check the version line
         if: matrix.runs_here
         shell: bash
@@ -100,13 +114,14 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          archive="vesseld-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz"
-          tar -czf "$archive" -C "target/${{ matrix.target }}/release" vesseld
-          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+          for binary in vesseld vessel; do
+            archive="$binary-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz"
+            tar -czf "$archive" -C "target/${{ matrix.target }}/release" "$binary"
+          done
       - uses: actions/upload-artifact@v4
         with:
-          name: vesseld-${{ matrix.target }}
-          path: ${{ env.ARCHIVE }}
+          name: release-${{ matrix.target }}
+          path: "*.tar.gz"
           if-no-files-found: error
 
   release:
@@ -119,11 +134,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: vesseld-*
+          pattern: release-*
           merge-multiple: true
       - name: Checksums
         run: |
-          sha256sum vesseld-*.tar.gz > SHA256SUMS
+          sha256sum vesseld-*.tar.gz vessel-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
       - name: Create the release
         env:
@@ -134,6 +149,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "vesseld $GITHUB_REF_NAME for remote installs (\`vessel node install\`)." \
+            --notes "vesseld $GITHUB_REF_NAME for remote installs (\`vessel node install\`), and vessel with its web UI (\`vessel ui\`)." \
             $prerelease \
-            vesseld-*.tar.gz SHA256SUMS
+            vesseld-*.tar.gz vessel-*.tar.gz SHA256SUMS
