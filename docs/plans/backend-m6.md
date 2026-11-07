@@ -1,6 +1,7 @@
 # Milestone 6: IDE context through LSP
 
-Status: Phase A accepted by the coordinator, 2026-11-07 (ADR 0016). Track M6 owns `vessel-lsp`, its
+Status: done, 2026-11-07, after two security review rounds (recorded
+below). Phase A was accepted by the coordinator the same day (ADR 0016). Track M6 owns `vessel-lsp`, its
 `vessel-testkit` fake, and the LSP integration in proto, node and MCP. M5 and
 M7 share protocol 7; LSP rows append to the RPC table in separate commits.
 Read `AGENTS.md`, VISION section 5, ORIGIN.ko, ARCHITECTURE and PROTOCOL first.
