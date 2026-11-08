@@ -29,6 +29,14 @@ Vessel aims for:
 See [docs/VISION.md](docs/VISION.md) for the long version and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit.
 
+## Documentation
+
+- [Tutorial](docs/tutorial.md) and [interface reference](docs/api.md)
+- [Changelog](CHANGELOG.md), [migration guide](docs/migration-guide.md) and
+  [roadmap](docs/ROADMAP.md)
+- [Benchmarking](docs/benchmarking.md), [development and reports](CONTRIBUTING.md),
+  [security](SECURITY.md) and [community conduct](CODE_OF_CONDUCT.md)
+
 ## Status
 
 Milestones 1 to 7 are done, on `main`, and green on Linux, macOS and
