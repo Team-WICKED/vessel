@@ -80,14 +80,14 @@ impl Publisher {
         };
         let at = Utc::now();
         let change = InfoChange::of(&event);
-        // The one allocation of this record; the store, the ring and every
-        // follower share it.
         // Before the record is anywhere: whoever sees the end finds it.
         if let SessionEvent::Status { status } = &event
             && !status.is_live()
         {
             self.shared.ended.store(true, Ordering::Release);
         }
+        // The one allocation of this record; the store, the ring and every
+        // follower share it.
         let record = Arc::new(EventRecord { seq, at, event });
         match slot {
             Slot::Durable(permit) => drop(permit.send(Arc::clone(&record))),
