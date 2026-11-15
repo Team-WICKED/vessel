@@ -1,8 +1,10 @@
 //! `vessel`: the command-line client for Vessel nodes.
 //!
-//! Commands: `node start`, `node install`, `nodes`, `status`, `harnesses`,
-//! `sessions`, `run`, `attach`, `send`, `log`, `kill`. Everything goes through
-//! `vessel-client`; this crate only parses arguments, resolves the token,
+//! Commands (`args` has the whole tree): `node` (start, install, update,
+//! status, pair, devices), `nodes`, `status`, `harnesses`, `profiles`,
+//! `models`, `sessions`, `run`, `attach`, `send`, `log`, `kill`, `session`
+//! (move-profile, copy, move), `fleet`, `init`, `mcp` and `ui`. Everything
+//! goes through `vessel-client`; this crate only parses arguments, resolves the token,
 //! and turns results into text. Output goes to stdout, notes and errors to
 //! stderr, so `vessel log ID > file` captures exactly the session's output.
 
