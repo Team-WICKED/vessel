@@ -100,6 +100,11 @@ impl Node {
         } = prepare_off_thread(&config).await?;
         let store = open_store(&config).await?;
         let (models, proxy) = model_proxy(models).await?;
+        // Bound before `core` starts any task: a socket or address that
+        // cannot be bound then fails the start with nothing left running
+        // (the fleet loop, the LSP manager and the model proxy are spawned
+        // from here on, and only a started node stops them).
+        let (local, tcp) = bind(&config, id).await?;
         let session_setup = SessionSetup::new(&config, id, profiles, Arc::clone(&models), mcp_dir);
 
         let Core {
@@ -124,7 +129,6 @@ impl Node {
         let token = Arc::new(token);
         let connections = TaskTracker::new();
 
-        let (local, tcp) = bind(&config, id).await?;
         let local_endpoint = local.endpoint().clone();
         let address = tcp.as_ref().map(|(_, address)| *address);
 
