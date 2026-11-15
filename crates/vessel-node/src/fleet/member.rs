@@ -288,7 +288,6 @@ pub(crate) async fn run<C: Connector>(
                 continue;
             }
         };
-        failures = 0;
         tracing::info!(home = %client.node().id, "connected to the fleet's home");
         links.connected_home(client.clone());
         let granted = links.grant(&client, &membership, &stop).await;
@@ -296,12 +295,32 @@ pub(crate) async fn run<C: Connector>(
         // A member called back through its home's relays asks for a newer
         // ticket while connected (`fleet.callback`); the connection's end
         // stops that.
-        tokio::select! {
-            () = session(&client, &local, pacing, &mut applied, &stop) => {}
-            () = links.keep_callback(&client, &membership) => {}
-        }
+        let contact = tokio::select! {
+            contact = session(&client, &local, pacing, &mut applied, &stop) => contact,
+            () = links.keep_callback(&client, &membership) => Contact::Answered,
+        };
         links.lost_home();
+        // A connection the home answered on was a working one: reconnect at
+        // once. One that ended before the home answered anything counts as
+        // a failure, so a home that accepts and drops at once is not dialled
+        // (and granted) in a tight loop.
+        match contact {
+            Contact::Answered => failures = 0,
+            Contact::None => {
+                failures = failures.saturating_add(1);
+                pause(pacing.backoff.delay(failures), &stop).await;
+            }
+        }
     }
+}
+
+/// Whether the home answered during one connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Contact {
+    /// A pull or a watch got an answer.
+    Answered,
+    /// The connection ended before any answer.
+    None,
 }
 
 /// One connection's worth: pull, then wait for news or the timer.
@@ -311,7 +330,8 @@ async fn session(
     pacing: Pacing,
     applied: &mut Option<Generation>,
     stop: &CancellationToken,
-) {
+) -> Contact {
+    let mut contact = Contact::None;
     let mut failures = 0_u32;
     let mut due = true;
     let mut timer = tokio::time::interval(pacing.pull_every);
@@ -323,10 +343,11 @@ async fn session(
                 Ok(generation) => {
                     *applied = Some(generation);
                     failures = 0;
+                    contact = Contact::Answered;
                 }
                 Err(PullError::Call(error)) if is_lost(&error) => {
                     tracing::info!(%error, "lost the fleet's home; reconnecting");
-                    return;
+                    return contact;
                 }
                 Err(error) => {
                     let message = format!("pulling from the home: {error}");
@@ -335,7 +356,7 @@ async fn session(
                     failures = failures.saturating_add(1);
                     pause(pacing.backoff.delay(failures), stop).await;
                     if stop.is_cancelled() {
-                        return;
+                        return contact;
                     }
                     continue;
                 }
@@ -346,11 +367,12 @@ async fn session(
             answer = client.fleet_watch(after) => match answer {
                 Ok(generation) => {
                     contacted(local).await;
+                    contact = Contact::Answered;
                     due = Some(generation) != *applied;
                 }
                 Err(error) if is_lost(&error) => {
                     tracing::info!(%error, "lost the fleet's home; reconnecting");
-                    return;
+                    return contact;
                 }
                 Err(error) => {
                     let message = format!("watching the home: {error}");
@@ -361,8 +383,8 @@ async fn session(
                 }
             },
             _tick = timer.tick() => due = true,
-            () = stop.cancelled() => return,
-            () = client.closed() => return,
+            () = stop.cancelled() => return contact,
+            () = client.closed() => return contact,
         }
     }
 }
