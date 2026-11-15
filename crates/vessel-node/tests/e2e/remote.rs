@@ -41,7 +41,11 @@ impl Remote {
         // A login shell reads this; the node then finds `claude` exactly as
         // it would find a real install under `~/.local/bin`.
         let profile = format!("export PATH='{}':\"$PATH\"\n", bin.path().display());
-        std::fs::write(home.path().join(".profile"), profile).unwrap();
+        // `.profile` for sh and bash, `.zprofile` for zsh (macOS's login
+        // shell, whose `/etc/zprofile` rebuilds `PATH` first): either way
+        // the fakes come before any real harness this machine has.
+        std::fs::write(home.path().join(".profile"), &profile).unwrap();
+        std::fs::write(home.path().join(".zprofile"), &profile).unwrap();
         Self { home, _bin: bin }
     }
 
