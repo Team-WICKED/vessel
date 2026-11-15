@@ -426,7 +426,9 @@ impl Importer<'_> {
                 .and_then(|placed| placed.map_err(|error| to_wire(TransferError::Place(error))))
             }
             Err(FetchError::Read(error)) => Err(error),
-            Err(error) => Err(to_wire(TransferError::Fetch(error.to_string()))),
+            Err(FetchError::Sink(error)) => Err(to_wire(TransferError::Fetch(error))),
+            Err(FetchError::Oversized(size)) => Err(to_wire(TransferError::FetchedTooLarge(size))),
+            Err(FetchError::Task(error)) => Err(to_wire(TransferError::Task(error))),
         };
         let root = blobs.root().to_owned();
         if let Err(error) = tokio::task::spawn_blocking(move || discard(&root)).await {

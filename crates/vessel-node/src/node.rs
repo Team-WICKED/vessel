@@ -527,9 +527,6 @@ fn prepare(dir: &DataDir, env: HarnessEnv) -> Result<Prepared, NodeError> {
     })
 }
 
-/// The client model calls go out with: the operating system's roots, or
-/// none (with a warning) on a machine that has none, where only `http`
-/// providers (a local server) can then be reached.
 /// [`prepare`], on a thread that may block.
 async fn prepare_off_thread(config: &Config) -> Result<Prepared, NodeError> {
     let dir = config.data_dir.clone();
@@ -551,6 +548,9 @@ async fn model_proxy(models: Models) -> Result<(Arc<Models>, TcpListener), NodeE
     Ok((Arc::new(models), listener))
 }
 
+/// The client model calls go out with: the operating system's roots, or
+/// none (with a warning) on a machine that has none, where only `http`
+/// providers (a local server) can then be reached.
 fn model_client() -> Result<vessel_llm::client::Client, NodeError> {
     let limits = vessel_llm::client::Limits::default();
     vessel_llm::client::Client::new(limits)

@@ -19,6 +19,7 @@ use super::links::Links;
 use super::local::Local;
 use super::member::{self, Membership, Pacing};
 use super::secrets::{self, Secrets, SecretsError};
+use crate::error::chain;
 
 /// The home publishes at least this often, whatever the stamp says.
 const REBUNDLE_EVERY: Duration = Duration::from_secs(10 * 60);
@@ -195,15 +196,16 @@ impl Supervisor {
         let bundled = tokio::task::spawn_blocking(move || {
             publish_blocking(&files, &local, &sources, previous.as_deref(), requested)
         })
-        .await;
+        .await
+        .map_err(PublishError::Task)
+        .and_then(|bundled| bundled);
         match bundled {
-            Ok(Ok(published)) => {
+            Ok(published) => {
                 self.stamp = Some((stamp, Instant::now()));
                 self.logged = None;
                 self.home.publish(Some(published));
             }
-            Ok(Err(message)) => self.note(message).await,
-            Err(error) => self.note(format!("bundling failed: {error}")).await,
+            Err(error) => self.note(chain(&error)).await,
         }
     }
 
@@ -262,24 +264,24 @@ impl Supervisor {
     /// manifest it has, without the home.
     async fn apply_stored(&mut self) {
         let local = Arc::clone(&self.local);
-        let applied = tokio::task::spawn_blocking(move || -> Result<(), String> {
-            files::remove(&local.files.apply_request()).map_err(|error| error.to_string())?;
+        let applied = tokio::task::spawn_blocking(move || -> Result<(), PublishError> {
+            files::remove(&local.files.apply_request()).map_err(PublishError::Request)?;
             let Some(manifest) = files::read_json::<Manifest>(&local.files.manifest())
-                .map_err(|error| error.to_string())?
+                .map_err(PublishError::Manifest)?
             else {
                 return Ok(());
             };
-            let blobs = BlobStore::open(local.files.blobs()).map_err(|error| error.to_string())?;
+            let blobs = BlobStore::open(local.files.blobs()).map_err(PublishError::Blobs)?;
             local
                 .apply(&manifest, &blobs, &[])
                 .map(drop)
-                .map_err(|error| error.to_string())
+                .map_err(PublishError::Apply)
         })
-        .await;
-        match applied {
-            Ok(Ok(())) => {}
-            Ok(Err(message)) => self.note(message).await,
-            Err(error) => self.note(format!("applying failed: {error}")).await,
+        .await
+        .map_err(PublishError::Task)
+        .and_then(|applied| applied);
+        if let Err(error) = applied {
+            self.note(chain(&error)).await;
         }
     }
 
@@ -298,31 +300,53 @@ impl Supervisor {
     }
 }
 
+/// Why bundling or applying the fleet's files failed.
+#[derive(Debug, thiserror::Error)]
+enum PublishError {
+    /// The blob store could not be opened.
+    #[error("blob store")]
+    Blobs(#[source] std::io::Error),
+    /// The saved manifest could not be read or written.
+    #[error("the fleet's manifest")]
+    Manifest(#[source] files::FileError),
+    /// The sources could not be bundled.
+    #[error("bundling")]
+    Bundle(#[source] vessel_fleet::BundleError),
+    /// The apply request could not be cleared.
+    #[error("the apply request")]
+    Request(#[source] files::FileError),
+    /// Applying into this node's homes failed.
+    #[error("applying here")]
+    Apply(#[source] super::local::LocalError),
+    /// The blocking task failed.
+    #[error("a fleet task failed")]
+    Task(#[source] tokio::task::JoinError),
+}
+
 /// Bundle `sources` into the home's store, save the manifest, clean the
-/// store and apply here. Blocks. The message is what went wrong.
+/// store and apply here. Blocks.
 fn publish_blocking(
     files: &FleetFiles,
     local: &Local,
     sources: &Sources,
     previous: Option<&Published>,
     requested: bool,
-) -> Result<Arc<Published>, String> {
-    let blobs = BlobStore::open(files.blobs()).map_err(|error| format!("blob store: {error}"))?;
+) -> Result<Arc<Published>, PublishError> {
+    let blobs = BlobStore::open(files.blobs()).map_err(PublishError::Blobs)?;
     let saved: Option<Manifest> = match previous {
         Some(previous) => Some(previous.manifest.clone()),
         // After a restart: the generation goes on from the saved manifest.
-        None => files::read_json(&files.manifest()).map_err(|error| error.to_string())?,
+        None => files::read_json(&files.manifest()).map_err(PublishError::Manifest)?,
     };
-    let bundled = vessel_fleet::bundle(sources, &blobs, saved.as_ref())
-        .map_err(|error| format!("bundling: {error}"))?;
+    let bundled =
+        vessel_fleet::bundle(sources, &blobs, saved.as_ref()).map_err(PublishError::Bundle)?;
     let problems: Vec<String> = bundled.problems.iter().map(ToString::to_string).collect();
     for problem in &problems {
         tracing::warn!(%problem, "left out of the fleet bundle");
     }
     let changed = bundled.changed || previous.is_none();
     if bundled.changed {
-        files::write_json(&files.manifest(), &bundled.manifest)
-            .map_err(|error| error.to_string())?;
+        files::write_json(&files.manifest(), &bundled.manifest).map_err(PublishError::Manifest)?;
         tracing::info!(
             generation = bundled.manifest.generation.get(),
             files = bundled.manifest.files.len(),
@@ -339,14 +363,14 @@ fn publish_blocking(
         tracing::warn!(%error, "could not clean the fleet's blob store");
     }
     if requested {
-        files::remove(&files.apply_request()).map_err(|error| error.to_string())?;
+        files::remove(&files.apply_request()).map_err(PublishError::Request)?;
     }
     if changed || requested {
         // The home's own profiles get the bundle too; its sources (and
         // homes linked to them) are left alone by the plan.
         let _outcome = local
             .apply(&bundled.manifest, &blobs, &sources.paths())
-            .map_err(|error| format!("applying here: {error}"))?;
+            .map_err(PublishError::Apply)?;
     }
     local.state.update(|state| state.problems = problems);
     Ok(Arc::new(Published::new(bundled.manifest, blobs)))

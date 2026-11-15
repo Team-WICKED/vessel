@@ -342,7 +342,6 @@ impl Drop for Registration {
     }
 }
 
-/// `scopes` limited to what an agent may have.
 /// The depth of a session an agent at `depth` starts, within the limit.
 fn deeper(depth: u8) -> Result<u8, ServiceError> {
     depth
@@ -369,6 +368,7 @@ fn owns_fewer_than_the_limit(
     Ok(())
 }
 
+/// `scopes` limited to what an agent may have.
 fn within_agent_scopes(scopes: &[Scope]) -> Vec<Scope> {
     AGENT_SCOPES
         .into_iter()

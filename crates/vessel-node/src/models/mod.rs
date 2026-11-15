@@ -273,7 +273,7 @@ impl Models {
     /// # Errors
     /// The provider names a secret that is not set, or the file cannot be
     /// read; the message names the secret, never a value.
-    pub(crate) async fn key(&self, provider: &Provider) -> Result<Option<ApiKey>, String> {
+    pub(crate) async fn key(&self, provider: &Provider) -> Result<Option<ApiKey>, KeyError> {
         let Some(name) = provider.key.clone() else {
             return Ok(None);
         };
@@ -281,19 +281,19 @@ impl Models {
         let wanted = name.clone();
         let read = tokio::task::spawn_blocking(move || crate::fleet::secret_value(&files, &wanted))
             .await
-            .map_err(|_panicked| "the node could not read its secrets".to_owned())?;
+            .map_err(|_panicked| KeyError::Unreadable)?;
         let value = read.map_err(|error| {
             tracing::warn!(%error, "cannot read secrets.toml for a model call");
-            "the node could not read its secrets".to_owned()
+            KeyError::Unreadable
         })?;
         let key = value
             .map(|value| ApiKey::new(value.expose().to_owned()))
-            .ok_or_else(|| missing_key(&name))?;
+            .ok_or_else(|| KeyError::Missing(name.clone()))?;
         // Every answer is searched for the key (`proxy`): one a model may
         // write as ordinary text would end valid answers.
         if !key.distinctive() {
             tracing::warn!(secret = %name, "refused a model call: the route's key is too plain");
-            return Err(plain_key(&name));
+            return Err(KeyError::Plain(name));
         }
         Ok(Some(key))
     }
@@ -342,19 +342,24 @@ fn missing_route(profile: Option<&Profile>, name: &ModelRouteName) -> ServiceErr
     }
 }
 
-fn plain_key(name: &SecretName) -> String {
-    format!(
-        "the route's provider key `{name}` is too short or too plain to keep out of model \
+/// Why a route's provider key cannot be used; each names the secret,
+/// never a value.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum KeyError {
+    /// `secrets.toml` could not be read (the cause is logged, not shown).
+    #[error("the node could not read its secrets")]
+    Unreadable,
+    /// The secret the provider names is not set.
+    #[error("the route's provider key `{0}` is not set on this node (`vessel secret set {0}`)")]
+    Missing(SecretName),
+    /// The key is too short or plain to search answers for.
+    #[error(
+        "the route's provider key `{0}` is too short or too plain to keep out of model \
          answers: give the provider no key in models.toml (a local server needs none), \
-         or a random one of at least {} characters",
-        vessel_llm::client::MIN_KEY_BYTES
-    )
-}
-
-fn missing_key(name: &SecretName) -> String {
-    format!(
-        "the route's provider key `{name}` is not set on this node (`vessel secret set {name}`)"
-    )
+         or a random one of at least {min} characters",
+        min = vessel_llm::client::MIN_KEY_BYTES
+    )]
+    Plain(SecretName),
 }
 
 fn read(dir: &DataDir) -> Result<Routes, ModelsError> {

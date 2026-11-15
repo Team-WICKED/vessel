@@ -1,13 +1,15 @@
 //! `vesseld`: one node per machine, serving its harness sessions over
-//! the protocol (versions 2 and 3).
+//! the protocol (versions 2 to 7, `vessel_proto::ProtocolRange`).
 //!
 //! This crate assembles the others; it holds wiring and node policy, not
 //! mechanisms:
 //!
 //! ```text
 //!  client --ws /rpc (bearer token)-----------------> server ---+
-//!  ssh -> vesseld attach --local socket (token)----> ipc ------+--> vessel-rpc Server
-//!                                                                    | Handler
+//!  ssh -> vesseld attach --local socket (token)----> ipc ------+
+//!  agent --local socket (agent credential)---------> ipc ------+--> vessel-rpc Server
+//!  device --/secure or a relay (Noise, preamble)---> secure ---+         | Handler
+//!                                                     guard (principal, scope, ownership)
 //!                                                     service (routing only), lifecycle
 //!                                                                    |
 //!            sessions: live runtime sessions + stored ones (ended, handed over)
@@ -19,8 +21,23 @@
 //! - `config`, `identity`: what to run and who this node is.
 //! - `server`, `auth`, `transport`: HTTP (`GET /health`) and the `/rpc`
 //!   websocket, token check before the upgrade.
+//! - `principal`, `guard`: who a connection is (owner, device, agent,
+//!   delegated) and the check every call passes (its method's scope, and
+//!   ownership for an agent) before `service` sees it.
 //! - `service`: the `Handler` implementation; routes each call, maps typed
 //!   errors to wire errors once.
+//! - `devices`, `secure`, `relays`: paired devices (ADR 0010), the Noise
+//!   gateway for `/secure` and relayed channels, and the node's relay links
+//!   (ADR 0009).
+//! - `agents`: agent principals, their credentials and limits (ADR 0013).
+//! - `envelope`, `waits`: calls across nodes through the fleet's home
+//!   (protocol 6) and the shares of waiting `session.read`s.
+//! - `profiles`: `profiles.toml` and what a session launches with (ADR
+//!   0011).
+//! - `transfers`, `secret_copy`: sessions and memory moved between nodes,
+//!   and copying a secret to another node (protocol 6).
+//! - `models`: model routes and the loopback proxy (ADR 0015).
+//! - `lsp`, `lsp_config`: language context for agents (ADR 0016).
 //! - `sessions`: the node's view of sessions, live and stored.
 //! - `persist`: drains each session's durable channel into the store and
 //!   publishes how far it is committed; once a log is complete, `sessions`

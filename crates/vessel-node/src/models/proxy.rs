@@ -784,7 +784,7 @@ const fn usage(usage: &ir::Usage) -> TokenUsage {
 }
 
 /// The call's endpoint, with its key read now.
-async fn endpoint(models: &Models, provider: &Provider) -> Result<Endpoint, String> {
+async fn endpoint(models: &Models, provider: &Provider) -> Result<Endpoint, super::KeyError> {
     Ok(Endpoint {
         api: provider.flavor.api(),
         base_url: provider.base_url.clone(),
@@ -910,9 +910,9 @@ async fn pass(
     let (record, provider) = Record::new(admitted, front.api(), passed.model.clone());
     let endpoint = match endpoint(&models, &provider).await {
         Ok(endpoint) => endpoint,
-        Err(message) => {
+        Err(error) => {
             record.finish(&Outcome::failed(ir::FailureClass::Unauthorized));
-            return refuse(front, Refusal::Forbidden, &message);
+            return refuse(front, Refusal::Forbidden, &error.to_string());
         }
     };
     let answer = match models.client().send(&endpoint, passed.body, &headers).await {
@@ -1244,9 +1244,9 @@ async fn translate(
     };
     let endpoint = match endpoint(&models, &provider).await {
         Ok(endpoint) => endpoint,
-        Err(message) => {
+        Err(error) => {
             record.finish(&Outcome::failed(ir::FailureClass::Unauthorized));
-            return refuse(front, Refusal::Forbidden, &message);
+            return refuse(front, Refusal::Forbidden, &error.to_string());
         }
     };
     let answer = match models.client().send(&endpoint, body, &[]).await {
