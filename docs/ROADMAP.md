@@ -2,14 +2,18 @@
 
 Rough order. Each phase ends with something usable on its own.
 
-## Where it stands (2026-11-07)
+## Where it stands (2026-11-15)
 
-Milestones 1 to 4 are done and on `main`: they were built on stacked
-branches (`backend/m1` to `backend/m4`, each on top of the one before) and
-merged together from `backend/m4` once it was green on Linux, macOS and
-Windows and every plan's manual smokes had passed. The branches stay as
-the record. Each milestone's plan in `docs/plans/` records what was built,
-what was checked by hand, and what it left open.
+Milestones 1 to 7 are done and on `main`. Milestones 1 to 4 were built on
+stacked branches (`backend/m1` to `backend/m4`, each on top of the one
+before) and merged together from `backend/m4` once it was green on Linux,
+macOS and Windows and every plan's manual smokes had passed; milestones 5
+to 7 followed, each by a pull request from its own branch. The branches
+stay as the record. Each milestone's plan in `docs/plans/` records what
+was built, what was checked by hand, and what it left open.
+
+A read of the whole tree after milestone 7 (2026-11-15) fixed what it
+found on `backend/review-fixes`; what it left open is under "Next".
 
 ## Phase 0: one node, one machine (milestone 1, done)
 
@@ -99,6 +103,31 @@ order. Milestone 4 left these follow-ups, none scheduled:
   has never run.
 - A clean websocket close when `vessel` exits (the node logs "ended
   abnormally" today; harmless).
+
+The read of the whole tree (2026-11-15) left these, none scheduled:
+
+- Units as newtypes on the wire: `ReadEvents.wait` and
+  `InviteDevice.ttl_secs` are bare seconds (AGENTS.md section 2). The
+  JSON can stay as it is (`serde(transparent)`), but it is a change to the
+  shared contract, so the coordinator decides it.
+- `vessel-llm`'s neutral form names tool calls and models with bare
+  strings (`ToolCall.id`, `ToolResult.call_id`, `Request.model`).
+- Files and functions past the size smell with no stated reason: the
+  model proxy (`vessel-node/src/models/proxy.rs`), the fleet's links
+  (`fleet/links.rs`), the relay's server state (`vessel-relay/src/server/
+  mod.rs`, whose `Relay` is also a set of locked maps rather than a task
+  that owns them), `service.rs`, and `vessel-llm`'s fronts and upstreams.
+  Splitting them is a refactor of its own, best done with no behaviour
+  change in the same branch.
+- Tests that wait by polling with short sleeps (`vessel-node`'s e2e
+  `waiting`, `grants`, `across`; `vessel-cli`'s `fleet` and `canary`)
+  instead of on an event (AGENTS.md section 8).
+- `vessel ui` reads the book again under one lock for every call (ADR
+  0017's rule that using the book refreshes the registry); cheap today,
+  and a cache keyed on the book file would keep the rule.
+- The browser trusts the bridge's frames' shapes (`JSON.parse` cast to
+  `ServerFrame`) after the mutual proof; a runtime check would need a
+  schema library.
 
 ## Phase 3: model routing
 

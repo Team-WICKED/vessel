@@ -75,19 +75,28 @@ depend on). Do not add an edge without updating `docs/ARCHITECTURE.md`.
 vessel-proto    (wire types, ids, Request trait, Handler; no I/O, no tokio)
 vessel-rpc      -> proto           (frames over any transport, correlation)
 vessel-proc     (command specs, process groups, kill tree)
+vessel-secure   -> proto           (Noise NK channel, node keys)
+vessel-relay    -> proto, secure   (the relay, node links, dialing relays)
 vessel-harness  -> proto, proc     (one module per harness: discovery, launch)
 vessel-pty      -> proc            (terminal sessions in a PTY)
 vessel-agent    -> proto, proc     (ACP client; ACP types never leave it)
+vessel-lsp      -> proto, proc     (saved-file language context)
+vessel-llm      -> proto           (model APIs for the routing proxy)
 vessel-session  -> proto, harness, pty, agent   (session actors, seq, fan-out)
 vessel-store    -> proto           (data dir, identity, token, SQLite log)
-vessel-node     -> proto, rpc, harness, session, store   (daemon assembly)
-vessel-client   -> proto, rpc      (typed client; no clap, no printing)
-vessel-web      -> proto, client      (`vessel ui`: loopback server, bridge)
-vessel-cli      -> proto, client, node, web   (the `vessel` binary)
+vessel-fleet    -> proto, harness  (fleet bundles, apply, transfers)
+vessel-client   -> proto, rpc, secure, relay    (typed client; no clap, no printing)
+vessel-remote   -> proto, rpc, client           (nodes over SSH, install)
+vessel-mcp      -> proto, client   (`vessel mcp`, the agents' tools)
+vessel-node     -> proto, rpc, harness, session, store, secure, relay, fleet,
+                   client, lsp, llm             (daemon assembly)
+vessel-web      -> proto, client   (`vessel ui`: loopback server, bridge)
+vessel-cli      -> proto, client, node, remote, mcp, harness, web   (the `vessel` binary)
 vessel-testkit  (fake harness binaries; dev-dependency only)
 ```
-
-ADR 0001 records why; `docs/plans/backend-m1.md` says who owns which crate.
+ADR 0001 records why, and `docs/ARCHITECTURE.md`'s crate table holds the
+same edges with each crate's job; each milestone's plan says who owns which
+crate.
 
 - No cycles, no reaching into another crate's internals, no "utils" or
   "common" grab-bag crate or module. If two crates need the same thing, it

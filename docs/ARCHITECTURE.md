@@ -1,8 +1,8 @@
 # Architecture
 
-The backend as built through milestone 4 (2026-11-06). What each crate
-holds now is in "State" below; each milestone's plan is in `docs/plans/`,
-and the reasons are in `docs/adr/`.
+The backend as built through milestone 7 (2026-11-07), with the review
+fixes of 2026-11-15. What each crate holds now is in "State" below; each
+milestone's plan is in `docs/plans/`, and the reasons are in `docs/adr/`.
 
 ## Pieces
 
@@ -46,7 +46,7 @@ and 0013).
 | `vessel-pty` | Runs a command in a PTY; byte I/O and resize; on Windows, answers the pseudo console's startup cursor query. | proc |
 | `vessel-agent` | ACP client: drives a harness or adapter over stdio and maps ACP updates to `AgentEvent`s; gives MCP servers in `session/new` and `session/load` (milestone 4). | proto, proc |
 | `vessel-session` | Session actors: owns the process, assigns `EventSeq`, keeps a ring cache, broadcasts, hands every record to the node for persistence. | proto, harness, pty, agent |
-| `vessel-store` | Data directory (`node.id`, `token`, `node.key`, `vessel.db`, `profiles.toml`, `mcp/`) and its locks, SQLite event log (schema 2: paired devices; schema 3: sessions' current profile and creator; schema 4: where a session came from, `origin` and `via`, protocol 6), retention, restart recovery. | proto |
+| `vessel-store` | Data directory (`node.id`, `token`, `node.key`, `vessel.db`, `profiles.toml`, `mcp/`) and its locks, SQLite event log (schema 2: paired devices; schema 3: sessions' current profile and creator; schema 4: where a session came from, `origin` and `via`, protocol 6), retention, restart recovery; schema 5: a routed session's model route (milestone 5). | proto |
 | `vessel-node` | `vesseld`: config, auth, HTTP/websocket server, `Handler` implementation, persistence and subscription plumbing; devices, scopes and the secure gateway, and `vesseld relay` (milestone 3); harness profiles (`profiles`: `profiles.toml`, `profile.list`/`reload`, what `session.create` launches with, what `session.move_profile` moves to), agent principals (`agents`: a credential per session, grants, limits, ownership) and fleet sync (`fleet`: the home publishing `fleet.toml`'s sources and serving `fleet.*`, members joining, pulling, applying into every profile's home and reporting; this node's secrets) (milestone 4); transfers (`transfers`: `session.export`/`memory.export` snapshots held for whoever opened them, `transfer.read`/`close`, expiry, and `session.import`/`memory.import` pulling through a `Source`: this node, or another through the envelope as the caller) (protocol 6, F4); `envelope` and `fleet/links` (protocol 6, Track X): `fleet.forward`/`relay`/`deliver` with the delegated principal (the delivering device's scopes ∩ the origin's, ownership and agent limits applied to the origin), the mutual grant (`fleet.grant`, `fleet/granted.json` on a member, `fleet/grants/` and the binding record `fleet/bindings.json` on the home, `fleet.forget`, which withdraws the home's outstanding invitations, and `fleet.callback`, the home's relays and a relay ticket for a member with no route of its own, which `relays` links to: `fleet/links/callback.rs`), `fleet.peers`/`nodes`, and `session.read` waiting with its shares (`waits`). Model routing (`models`: `models.toml`, the loopback proxy, model tokens, limits, `ModelCall` records, `model.list`) (milestone 5, ADR 0015). | proto, rpc, harness, session, store, secure, relay, fleet, client, lsp, llm |
 | `vessel-client` | Typed async client and gap-free session streams; the node book; pairing and secure connections over direct and relay routes (milestone 3); the local socket with the token or an agent's credential (milestone 4); fetching a file chunk by chunk into a caller's `ChunkSink` (`fetch_chunks`, protocol 6). | proto, rpc, secure, relay |
 | `vessel-remote` | Remote nodes over SSH (milestone 2): the `ssh` runner, platform detection, installing `vesseld` by upload, `cleanup`; the SSH connector. | proto, rpc, client |
@@ -60,11 +60,12 @@ and 0013).
 | `vessel-testkit` | Fake harnesses (`fake-tui`, `fake-acp`, which also make one model call through a routed session's proxy on `model <text>`, milestone 5), `fake-ssh` for tests and `fake-provider` for the model routing smoke; with the `relay` feature, a relay that misbehaves on command; with the `upstream` feature, a model provider on loopback answering with scripted streams, errors, drops, silences and hangs (milestone 5). The fakes report the environment, arguments, MCP servers, loaded session id and working directory they got (milestone 4). | - |
 
 The dependency direction is fixed by ADR 0001; adding an edge means updating
-that ADR and this table. Test-only edges: `vessel-node`'s end-to-end tests
-drive a node through `vessel-client` (a dev-dependency; the client does not
-depend on the node, so there is no cycle), and `vessel-remote`'s and
-`vessel-cli`'s SSH tests read `vessel-store`'s node lock to stop any node
-they started.
+that ADR, this table and the map in `AGENTS.md`. `vessel-node` depends on
+`vessel-client` (its fleet links dial members and the home, protocol 6;
+the client does not depend on the node, so there is no cycle), and its
+end-to-end tests drive a node through it too. Test-only edges:
+`vessel-remote`'s and `vessel-cli`'s SSH tests read `vessel-store`'s node
+lock to stop any node they started.
 
 ## Data flow
 
@@ -143,7 +144,7 @@ they started.
 - Wire types exist once, in `vessel-proto`.
 - No panics, no unbounded queues, no untyped JSON (see `AGENTS.md`).
 
-## State (2026-11-06)
+## State (2026-11-15)
 
 ### Milestones
 
@@ -173,6 +174,18 @@ they started.
   findings, fixes and accepted residuals are recorded in the plan. Both
   manual smokes passed on 2026-11-07 (three real accounts; a fresh machine
   joining), recorded under the plan's done criteria.
+- **Milestone 5** (model routing; `docs/plans/backend-m5.md`, ADR 0015,
+  protocol 7): done 2026-11-07 after three security review rounds; on
+  `main` through `backend/m5`. `vessel-llm` and the node's `models`
+  proxy; checked against a real provider with `docs/smoke/model-route.sh`.
+- **Milestone 6** (IDE context; `docs/plans/backend-m6.md`, ADR 0016,
+  protocol 7): done 2026-11-07 after two security review rounds; on
+  `main` through `backend/m6`. `vessel-lsp` and the `vessel_lsp_*` MCP
+  tools; checked through a real rust-analyzer with
+  `docs/smoke/m6-lsp.py`.
+- **Review fixes** (2026-11-15, `backend/review-fixes`): a read of the
+  whole tree after milestone 7; the fixes are in that branch's commits
+  and the "By crate" notes below say where behaviour changed.
 - **Milestone 7** (the web UI; `docs/plans/backend-m7.md`, ADR 0017,
   design under `docs/design/web-ui/`): built on `backend/m7-web`.
   `vessel ui` (crate `vessel-web`) serves the page embedded from `web/`
@@ -205,9 +218,14 @@ a browser supporting these names (Chromium is exercised in CI).
 The launch's private Unix handoff/printed URL carries a one-use bootstrap,
 not the tab's session key. `auth` and `socket` verify role-separated HMAC
 proofs and fresh nonces before starting `bridge`; `transport` counts sockets
-from TCP accept through upgrades and enforces HTTP deadlines. The browser
+from TCP accept through upgrades and enforces HTTP deadlines; a failed
+accept is logged and retried, never the end of the UI. The browser
 keeps the issued session key in `sessionStorage` for reloads. A changed
-launch or bad proof stops the tab. `files` serves content ETags; the web
+launch or bad proof stops the tab; once the server has proved itself, a
+frame the page fails to handle is reported, not treated as a refusal.
+`files` serves content ETags and answers the app's routes (`fleet`,
+`sessions`, `sync`, `devices`, `settings`) with the page even when a node
+name in them holds a dot; the web
 build's `scripts/integrity.mjs` closes the script/stylesheet SRI graph.
 `registry` validates the current book before allocating entries and cancels
 removed nodes. Pairing deliberately dials the supplied link before adding
@@ -218,7 +236,7 @@ its entry. See ADR 0017 for transcripts, bounds and platform tradeoffs.
 
 In the crate table's order.
 
-- `vessel-proto`: the wire contract, versions 2 to 6 (`docs/PROTOCOL.md`).
+- `vessel-proto`: the wire contract, versions 2 to 7 (`docs/PROTOCOL.md`).
   Protocol 2, milestone 1: typed RPC, the event log, the ACP-shaped agent
   timeline. 3: `node.stop` and `NodeInfo.state`. 4: devices, scopes on
   every method, the node's public key. 5: profiles, `session.move_profile`,
@@ -227,6 +245,8 @@ In the crate table's order.
   `fleet.forward`/`relay`/`deliver`), `fleet.grant`/`forget`/`peers`/`nodes`,
   `session.read` with `wait`, transfers (`transfer`, with the size
   limits) and secrets (`secret`: `SecretValue`, redacted in `Debug`).
+  7: model routing (`model.list`, `SessionInfo.model`, `ModelCall`
+  records) and the read-only LSP calls (`lsp.*`), milestones 5 and 6.
   Every method has a first version (`since`), and a call that uses a
   later field needs that version (`Call::since`). No I/O.
 - `vessel-rpc`: handshake, typed calls with cancellation and an in-flight
@@ -270,7 +290,11 @@ In the crate table's order.
   `setup` holds what `vessel init` offers (install and login commands,
   other accounts' homes). The `fakes` feature installs testkit binaries
   under real harness names. Model selection is not here: it goes over ACP
-  in `vessel-agent`.
+  in `vessel-agent`. A layout also says whose default home a harness reads
+  besides its own (`HarnessLayout::also_reads`: `OpenCode` reads
+  `~/.claude`), which the node uses to skip it in fleet sync without
+  naming harnesses; `TRANSFER_DEFAULT` is the harness a transfer naming no
+  profile means.
 - `vessel-pty`: `PtyProcess` over `portable-pty`, with dedicated reader,
   control (input and resize, in order) and waiter threads behind bounded
   channels. On Windows it answers the pseudo console's startup cursor
@@ -301,7 +325,9 @@ In the crate table's order.
   agent runs, the agent is stopped and started again with
   `session/load`; if the new one does not start, the old command starts
   again on the same conversation and the move fails without
-  `ProfileChanged`.
+  `ProfileChanged`. A caller-chosen id is reserved from its check until
+  the session is in the map, so two creations with one id cannot both
+  start.
 - `vessel-store`: an owner-only data directory (Unix: 0700, an existing
   one tightened or refused if another user's; secrets 0600), the SQLite
   event log with a batching writer thread, paged reads, restart recovery
@@ -370,8 +396,9 @@ In the crate table's order.
     `<data_dir>/fleet.toml` making a node the home. One loop looks every
     5 s: the home bundles when its sources changed (at least every 10
     minutes), publishes, and applies to its own profiles (its sources
-    protected); a member pulls on (re)connecting, on a `fleet.watch`
-    answer and every 10 minutes, fetches missing blobs in 1 MiB chunks,
+    protected); a member pulls on (re)connecting (with a backoff when
+    the home dropped the last connection before answering anything), on
+    a `fleet.watch` answer and every 10 minutes, fetches missing blobs in 1 MiB chunks,
     applies into every profile's home and reports. The home serves
     `fleet.manifest`, `fleet.blob`, `fleet.watch` (a 50 s long poll),
     `fleet.report` and `fleet.members`. `<data_dir>/secrets.toml`
@@ -476,7 +503,8 @@ In the crate table's order.
   token or an agent's credential), `call_on` (`fleet.forward`), the
   fleet, secret and transfer calls, and `fetch_chunks`, the one per-file
   loop that streams a file into a caller's `ChunkSink` (the fleet's blob
-  writer: hashed as written, kept only if right).
+  writer: hashed as written, kept only if right). The websocket transport
+  holds messages to `vessel_rpc::MAX_FRAME`, as every other transport.
 - `vessel-remote`: `ssh` (the system client with fixed options,
   `ControlMaster` sharing on Unix, commands from fixed words and
   single-quoted values), `platform` (`uname -sm`, four release targets),
@@ -486,6 +514,7 @@ In the crate table's order.
   `gh release download` and checked), `provision` (`local`, `release` or
   `auto`), and `SshConnector` (`ssh … <data_dir>/bin/<binary> attach`,
   `ProxyExit` codes as typed errors, exit 127 installs and retries once).
+  `ssh`'s stderr is kept as its last 64 lines, each cut at 4 KiB.
   Tested against a temporary home through `ssh` and `gh` stand-ins, and
   with the real `vesseld` through `fake-ssh` (Unix only).
 - `vessel-secure`: Noise `NK_25519_ChaChaPoly_SHA256` (prologue
@@ -520,7 +549,12 @@ In the crate table's order.
   registration counts against the node cap and ends when the ticket
   expires. `NodeLink` keeps a node registered (jittered backoff,
   `LinkState` on a watch), with the token or tickets it is handed, again
-  at once with each newer one. One `Keepalive` (a ping every 10 s, a drop after
+  at once with each newer one; it opens at most `RELAYED_UNADMITTED` data
+  connections at once (an `Incoming` past that is dropped), and each wait
+  for the relay's next message while registering has one deadline however
+  many pings arrive. `reach::is_public` judges IPv4 inside IPv6 (mapped,
+  NAT64, 6to4) as the IPv4 address and refuses Teredo and the
+  documentation ranges. One `Keepalive` (a ping every 10 s, a drop after
   30 s of silence) covers relayed and direct connections. `respond` runs
   the node's handshake on a websocket and closes with `4401` when it
   fails. `vesseld relay` runs it (README, "Running a relay").
@@ -590,8 +624,8 @@ In the crate table's order.
 
 ## Later
 
-Model routing (Phase 3), the LSP bridge (Phase 4) and the clients (Phase
-5) each get a plan and ADRs when they start. See `ROADMAP.md`.
+Editor integrations (Zed, VS Code) are next in roadmap order; each later
+phase gets a plan and ADRs when it starts. See `ROADMAP.md`.
 
 ## Saved-file IDE context (milestone 6)
 
@@ -610,6 +644,10 @@ child group and two pipe tasks; `protocol` contains the typed LSP subset;
 `sync` owns bounded saved snapshots and coalesced native watches; `query`
 converts into protocol types. A server handles one query at a time (eight
 queued), while notifications and server requests are serviced during waits.
+A caller that gives up costs nothing to the next one: a start it abandons
+ends without a backoff, and a query already written runs to its end
+(within the request timeout) with its answer dropped, rather than killing a
+healthy server.
 Different servers run independently. Idle/crash/shutdown drop or reap the
 whole process group. The node's task tracker waits for LSP shutdown.
 
