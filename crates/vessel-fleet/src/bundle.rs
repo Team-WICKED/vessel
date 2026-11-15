@@ -328,7 +328,9 @@ impl Builder<'_> {
             });
             return Ok(());
         }
-        let (hash, size) = self.blobs.insert_file(path).map_err(|source| {
+        // The size above is only a first look: the file may grow before it
+        // is copied, so the copy is bounded too.
+        let read = |source: io::Error| {
             if source.kind() == io::ErrorKind::NotFound
                 || source.kind() == io::ErrorKind::PermissionDenied
             {
@@ -336,7 +338,15 @@ impl Builder<'_> {
             } else {
                 BundleError::Store(source)
             }
-        })?;
+        };
+        let file = fs::File::open(path).map_err(|source| read_error(path, source))?;
+        let Some((hash, size)) = self.blobs.insert_limited(file, MAX_FILE).map_err(read)? else {
+            self.problems.push(SourceProblem::TooLarge {
+                path: path.to_path_buf(),
+                size: metadata.len().max(MAX_FILE.saturating_add(1)),
+            });
+            return Ok(());
+        };
         let _previous = self.files.insert(
             bundle,
             BundleFile {

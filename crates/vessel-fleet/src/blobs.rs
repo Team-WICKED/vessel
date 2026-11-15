@@ -1,7 +1,7 @@
 //! The content-addressed blob store: one file per blob, named by its
 //! SHA-256, under `<root>/<first two hex digits>/`.
 //!
-//! The home fills it when it bundles ([`BlobStore::insert_file`]) and
+//! The home fills it when it bundles ([`BlobStore::insert_limited`]) and
 //! serves it chunk by chunk (`fleet.blob`, [`BlobStore::read_chunk`]); a
 //! member fills it from those chunks ([`BlobStore::writer`]), which are
 //! checked against the hash before the blob counts as present. Every blob
@@ -85,17 +85,6 @@ impl BlobStore {
     #[must_use]
     pub fn contains(&self, hash: &BlobHash) -> bool {
         self.path(hash).is_file()
-    }
-
-    /// Copy the file at `source` into the store; its hash and size.
-    ///
-    /// # Errors
-    /// The source cannot be read, or the store cannot be written.
-    pub fn insert_file(&self, source: &Path) -> io::Result<(BlobHash, u64)> {
-        let mut writer = self.writer_unchecked()?;
-        let mut file = File::open(source)?;
-        let _copied = io::copy(&mut file, &mut writer)?;
-        writer.commit(None)
     }
 
     /// Copy what `reader` holds into the store, if it is at most `limit`
