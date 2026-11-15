@@ -53,7 +53,7 @@ mod writer;
 pub use config::{ByteCount, Retention, StoreConfig};
 pub use data_dir::{DataDir, ProfilesFile};
 pub use devices::{CredentialHash, StoredDevice};
-pub use error::{Column, Quantity, StoreError};
+pub use error::{Column, Quantity, StoreError, TextError};
 pub use lock::{NodeLock, NodeOwner, StartLock};
 pub use node_key::{NODE_KEY_BYTES, NodeKeySecret};
 pub use store::{Opened, Store};
