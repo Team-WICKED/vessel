@@ -8,7 +8,10 @@
 // - Choice: a pure reducer over `EventRecord`s in sequence order, fed in
 //   batches. It copies the entry list once per batch and replaces only the
 //   entries that change, so React re-renders those alone, and replaying a
-//   long log is linear. Keys come from sequence numbers and the protocol's
+//   long log is linear: a batch finds tool calls, permission requests and
+//   touched files through maps it builds once (from one scan of the
+//   entries, only if it needs them), never by searching the list per
+//   record. Keys come from sequence numbers and the protocol's
 //   ids, so an entry keeps its key while it grows.
 // - Model calls (protocol 7) are entries too, and summed into `usage` as
 //   they arrive, so the inspector's totals cost nothing per render. They
@@ -138,9 +141,14 @@ class Work {
   turns: number;
   inTurn: boolean;
   readonly files: string[];
+  readonly #touched: Set<string>;
   status: SessionStatus | null;
   usage: Usage | null;
   next: number;
+  /** Where each tool call's and permission request's entry is, built on
+   * first use from one scan and kept up to date by `push`. */
+  #at: { tools: Map<string, number>; permissions: Map<string, number> } | null =
+    null;
 
   constructor(timeline: Timeline) {
     this.entries = [...timeline.entries];
@@ -148,6 +156,7 @@ class Work {
     this.turns = timeline.turns;
     this.inTurn = timeline.inTurn;
     this.files = [...timeline.files];
+    this.#touched = new Set(timeline.files);
     this.status = timeline.status;
     this.usage = timeline.usage;
     this.next = timeline.next;
@@ -172,6 +181,48 @@ class Work {
     };
   }
 
+  /** Append `entry`, indexing it if it is a tool call or a request. */
+  push(entry: Entry): void {
+    const index = this.entries.length;
+    this.entries.push(entry);
+    if (this.#at !== null) {
+      Work.#register(this.#at, entry, index);
+    }
+  }
+
+  #positions(): {
+    tools: Map<string, number>;
+    permissions: Map<string, number>;
+  } {
+    if (this.#at === null) {
+      const at = {
+        tools: new Map<string, number>(),
+        permissions: new Map<string, number>(),
+      };
+      this.entries.forEach((entry, index) => {
+        Work.#register(at, entry, index);
+      });
+      this.#at = at;
+    }
+    return this.#at;
+  }
+
+  /** The first entry for an id wins, as a search from the start would. */
+  static #register(
+    at: { tools: Map<string, number>; permissions: Map<string, number> },
+    entry: Entry,
+    index: number,
+  ): void {
+    if (entry.kind === "tool" && !at.tools.has(entry.tool.id)) {
+      at.tools.set(entry.tool.id, index);
+    } else if (
+      entry.kind === "permission" &&
+      !at.permissions.has(entry.request.id)
+    ) {
+      at.permissions.set(entry.request.id, index);
+    }
+  }
+
   apply(record: EventRecord): void {
     this.next = record.seq + 1;
     const base = { key: `r${record.seq}`, seq: record.seq, at: record.at };
@@ -185,12 +236,12 @@ class Work {
         ) {
           this.inTurn = false;
         }
-        this.entries.push({ ...base, kind: "status", status: event.status });
+        this.push({ ...base, kind: "status", status: event.status });
         return;
       case "terminal":
         return;
       case "profile_changed":
-        this.entries.push({
+        this.push({
           ...base,
           kind: "profile",
           from: event.from ?? null,
@@ -203,7 +254,7 @@ class Work {
       case "model_call":
         // The record itself: it is metadata only (route, model, tokens,
         // how it ended, how long).
-        this.entries.push({ ...base, kind: "model", call: event });
+        this.push({ ...base, kind: "model", call: event });
         this.usage = addCall(this.usage, event);
         return;
     }
@@ -212,7 +263,7 @@ class Work {
   agent(base: Base, event: AgentEvent): void {
     switch (event.event) {
       case "ready":
-        this.entries.push({
+        this.push({
           ...base,
           kind: "ready",
           harnessSession: event.harness_session,
@@ -221,7 +272,7 @@ class Work {
       case "turn_started":
         this.turns += 1;
         this.inTurn = true;
-        this.entries.push({
+        this.push({
           ...base,
           kind: "prompt",
           text: event.content.map(blockText).join(""),
@@ -255,11 +306,11 @@ class Work {
         return;
       case "plan":
         this.plan = event.entries;
-        this.entries.push({ ...base, kind: "plan", entries: event.entries });
+        this.push({ ...base, kind: "plan", entries: event.entries });
         return;
       case "permission_requested": {
         const call = this.findTool(event.tool_call);
-        this.entries.push({
+        this.push({
           ...base,
           key: `p${event.id}`,
           kind: "permission",
@@ -274,19 +325,16 @@ class Work {
         return;
       }
       case "permission_resolved": {
-        const index = this.entries.findIndex(
-          (entry) =>
-            entry.kind === "permission" && entry.request.id === event.id,
-        );
-        const entry = this.entries[index];
-        if (entry?.kind === "permission") {
+        const index = this.#positions().permissions.get(event.id);
+        const entry = index === undefined ? undefined : this.entries[index];
+        if (index !== undefined && entry?.kind === "permission") {
           this.entries[index] = { ...entry, outcome: event.outcome };
         }
         return;
       }
       case "turn_ended":
         this.inTurn = false;
-        this.entries.push({
+        this.push({
           ...base,
           kind: "turn_ended",
           reason: event.reason,
@@ -294,14 +342,14 @@ class Work {
         return;
       case "turn_failed":
         this.inTurn = false;
-        this.entries.push({
+        this.push({
           ...base,
           kind: "turn_failed",
           message: event.message,
         });
         return;
       case "harness_log":
-        this.entries.push({ ...base, kind: "log", line: event.line });
+        this.push({ ...base, kind: "log", line: event.line });
         return;
     }
   }
@@ -322,7 +370,7 @@ class Work {
       return;
     }
     if (kind === "prompt") {
-      this.entries.push({
+      this.push({
         ...base,
         kind,
         text,
@@ -330,28 +378,25 @@ class Work {
         turn: this.turns,
       });
     } else {
-      this.entries.push({ ...base, kind, text });
+      this.push({ ...base, kind, text });
     }
   }
 
   findTool(id: string): Extract<Entry, { kind: "tool" }> | undefined {
-    return this.entries.find(
-      (entry): entry is Extract<Entry, { kind: "tool" }> =>
-        entry.kind === "tool" && entry.tool.id === id,
-    );
+    const index = this.#positions().tools.get(id);
+    const entry = index === undefined ? undefined : this.entries[index];
+    return entry?.kind === "tool" ? entry : undefined;
   }
 
   tool(base: Base, tool: ToolState): void {
     this.touch(tool.locations);
-    const index = this.entries.findIndex(
-      (entry) => entry.kind === "tool" && entry.tool.id === tool.id,
-    );
-    const existing = this.entries[index];
-    if (existing?.kind === "tool") {
+    const index = this.#positions().tools.get(tool.id);
+    const existing = index === undefined ? undefined : this.entries[index];
+    if (index !== undefined && existing?.kind === "tool") {
       this.entries[index] = { ...existing, tool };
       return;
     }
-    this.entries.push({ ...base, key: `t${tool.id}`, kind: "tool", tool });
+    this.push({ ...base, key: `t${tool.id}`, kind: "tool", tool });
   }
 
   update(
@@ -374,7 +419,8 @@ class Work {
 
   touch(locations: readonly ToolLocation[]): void {
     for (const location of locations) {
-      if (!this.files.includes(location.path)) {
+      if (!this.#touched.has(location.path)) {
+        this.#touched.add(location.path);
         this.files.push(location.path);
       }
     }
