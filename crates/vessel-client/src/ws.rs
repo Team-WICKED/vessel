@@ -2,8 +2,10 @@
 //! frame transport (one text message per frame).
 //!
 //! Pings are answered by tungstenite itself; this adapter only skips them.
-//! A binary message is an error, since protocol 2 is text frames only and a
-//! peer sending binary is speaking something else.
+//! A binary message is an error, since the protocol (every version, 2 on)
+//! is text frames only and a peer sending binary is speaking something
+//! else. A message is at most [`vessel_rpc::MAX_FRAME`], as on every other
+//! transport, not tungstenite's larger default.
 
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -14,6 +16,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -28,7 +31,7 @@ pub enum WsTransportError {
     #[error("websocket failed")]
     Websocket(#[from] tungstenite::Error),
     /// The peer sent a binary message.
-    #[error("the peer sent a binary message; protocol 2 uses text frames only")]
+    #[error("the peer sent a binary message; the protocol uses text frames only")]
     BinaryFrame,
 }
 
@@ -111,7 +114,10 @@ pub(crate) async fn connect(
         .map_err(|_invalid| ConnectError::InvalidToken)?;
     authorization.set_sensitive(true);
     let _previous = request.headers_mut().insert(AUTHORIZATION, authorization);
-    match tokio_tungstenite::connect_async(request).await {
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(vessel_rpc::MAX_FRAME.get()))
+        .max_frame_size(Some(vessel_rpc::MAX_FRAME.get()));
+    match tokio_tungstenite::connect_async_with_config(request, Some(config), false).await {
         Ok((stream, _response)) => Ok(WsTransport::new(stream)),
         Err(tungstenite::Error::Http(response))
             if response.status() == StatusCode::UNAUTHORIZED =>

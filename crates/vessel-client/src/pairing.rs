@@ -51,16 +51,51 @@ pub enum PreambleError {
     /// The node did not answer in time.
     #[error("the node did not answer within {} s", PREAMBLE_TIMEOUT.as_secs())]
     Timeout,
-    /// The node answered something else.
-    #[error("the node's answer is not a preamble reply: {0}")]
-    Protocol(String),
+    /// The preamble could not be encoded.
+    #[error("could not encode the preamble")]
+    Encode(#[source] serde_json::Error),
+    /// The node's answer is not a preamble reply.
+    #[error("the node's answer is not a preamble reply")]
+    Decode(#[source] serde_json::Error),
+    /// The node gave a reply of the wrong kind for the request.
+    #[error("the node answered {reply} to {request}")]
+    OutOfTurn {
+        /// What was asked.
+        request: &'static str,
+        /// What came back.
+        reply: &'static str,
+    },
+    /// The node authenticated another device than the credential's.
+    #[error("the node authenticated device {answered}, not {sent}")]
+    OtherDevice {
+        /// The credential's device.
+        sent: DeviceId,
+        /// The device the node named.
+        answered: DeviceId,
+    },
     /// The channel failed.
-    #[error("the connection failed: {0}")]
-    Transport(String),
+    #[error("the connection failed")]
+    Transport(#[source] std::io::Error),
     /// The node that paired the device is not the one the link names (its
     /// id, or the key in its `NodeInfo`). Nothing is pinned.
     #[error("the node that answered is not the one in the pairing link: {0}")]
-    OtherNode(String),
+    OtherNode(OtherNode),
+}
+
+/// How the node that answered a pairing differs from the link's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum OtherNode {
+    /// Another node id.
+    #[error("node {answered} answered a link for {link}")]
+    Id {
+        /// The id the node described itself with.
+        answered: NodeId,
+        /// The id the link names.
+        link: NodeId,
+    },
+    /// The node's description names another key than the link, or none.
+    #[error("its description names another key than the link")]
+    Key,
 }
 
 impl PreambleError {
@@ -76,7 +111,13 @@ impl PreambleError {
                 RefusalReason::Unavailable => false,
             },
             Self::OtherNode(_) => true,
-            Self::Closed | Self::Timeout | Self::Protocol(_) | Self::Transport(_) => false,
+            Self::Closed
+            | Self::Timeout
+            | Self::Encode(_)
+            | Self::Decode(_)
+            | Self::OutOfTurn { .. }
+            | Self::OtherDevice { .. }
+            | Self::Transport(_) => false,
         }
     }
 
@@ -86,7 +127,13 @@ impl PreambleError {
     pub const fn is_answer(&self) -> bool {
         match self {
             Self::Refused(_) | Self::OtherNode(_) => true,
-            Self::Closed | Self::Timeout | Self::Protocol(_) | Self::Transport(_) => false,
+            Self::Closed
+            | Self::Timeout
+            | Self::Encode(_)
+            | Self::Decode(_)
+            | Self::OutOfTurn { .. }
+            | Self::OtherDevice { .. }
+            | Self::Transport(_) => false,
         }
     }
 }
@@ -136,15 +183,13 @@ pub async fn pair<T: FrameTransport>(
             node,
         } => {
             if node.id != offer.node {
-                return Err(PreambleError::OtherNode(format!(
-                    "node {} answered a link for {}",
-                    node.id, offer.node
-                )));
+                return Err(PreambleError::OtherNode(OtherNode::Id {
+                    answered: node.id,
+                    link: offer.node,
+                }));
             }
             if node.public_key != Some(offer.key) {
-                return Err(PreambleError::OtherNode(
-                    "its description names another key than the link".to_owned(),
-                ));
+                return Err(PreambleError::OtherNode(OtherNode::Key));
             }
             let credential = credential(offer.node, offer.key, device, secret);
             Ok((
@@ -156,9 +201,10 @@ pub async fn pair<T: FrameTransport>(
             ))
         }
         PreambleReply::Refused { reason } => Err(PreambleError::Refused(reason)),
-        PreambleReply::Authenticated { .. } => Err(PreambleError::Protocol(
-            "`authenticated` in answer to a pairing request".to_owned(),
-        )),
+        PreambleReply::Authenticated { .. } => Err(PreambleError::OutOfTurn {
+            request: "a pairing request",
+            reply: "`authenticated`",
+        }),
     }
 }
 
@@ -176,14 +222,15 @@ pub async fn authenticate<T: FrameTransport>(
     };
     match exchange(&mut channel, &request).await? {
         PreambleReply::Authenticated { device } if device == credential.device => Ok(channel),
-        PreambleReply::Authenticated { device } => Err(PreambleError::Protocol(format!(
-            "authenticated as device {device}, not {}",
-            credential.device
-        ))),
+        PreambleReply::Authenticated { device } => Err(PreambleError::OtherDevice {
+            sent: credential.device,
+            answered: device,
+        }),
         PreambleReply::Refused { reason } => Err(PreambleError::Refused(reason)),
-        PreambleReply::Paired { .. } => Err(PreambleError::Protocol(
-            "`paired` in answer to a device credential".to_owned(),
-        )),
+        PreambleReply::Paired { .. } => Err(PreambleError::OutOfTurn {
+            request: "a device credential",
+            reply: "`paired`",
+        }),
     }
 }
 
@@ -191,18 +238,17 @@ async fn exchange<T: FrameTransport>(
     channel: &mut T,
     request: &Preamble,
 ) -> Result<PreambleReply, PreambleError> {
-    let text = serde_json::to_string(request)
-        .map_err(|error| PreambleError::Protocol(error.to_string()))?;
+    let text = serde_json::to_string(request).map_err(PreambleError::Encode)?;
     channel
         .send(text)
         .await
-        .map_err(|error| PreambleError::Transport(error.to_string()))?;
+        .map_err(|error| PreambleError::Transport(std::io::Error::other(error)))?;
     let answer = tokio::time::timeout(PREAMBLE_TIMEOUT, channel.next())
         .await
         .map_err(|_elapsed| PreambleError::Timeout)?
         .ok_or(PreambleError::Closed)?
-        .map_err(|error| PreambleError::Transport(error.to_string()))?;
-    serde_json::from_str(&answer).map_err(|error| PreambleError::Protocol(error.to_string()))
+        .map_err(|error| PreambleError::Transport(std::io::Error::other(error)))?;
+    serde_json::from_str(&answer).map_err(PreambleError::Decode)
 }
 
 /// A device's credential for the node `node` with `key`; for callers that
@@ -265,7 +311,7 @@ mod tests {
         });
         assert!(matches!(
             authenticate(channel, &credential).await,
-            Err(PreambleError::Protocol(_))
+            Err(PreambleError::OtherDevice { .. })
         ));
         let (closed, node) = memory::pair(NonZeroUsize::new(4).unwrap());
         drop(node);
