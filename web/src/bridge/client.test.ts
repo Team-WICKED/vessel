@@ -186,3 +186,37 @@ test("a refusal is final: Retry does not redial", () => {
   bridge.retry();
   expect(Socket.all.length).toBe(1);
 });
+
+test("a page-side bug handling a frame neither refuses nor drops the key", async () => {
+  const { bridge, socket } = start();
+  const welcome = await answer(socket);
+  socket.message(welcome);
+  await vi.waitFor(() => {
+    expect(bridge.link.kind).toBe("open");
+  });
+  const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  bridge.onNode(() => {
+    throw new Error("a listener bug");
+  });
+  socket.message({ type: "node", node: "gpu", status: { state: "idle" } });
+  socket.message({ type: "node", node: "box", status: { state: "idle" } });
+  await vi.waitFor(() => {
+    expect(bridge.statuses().size).toBe(2);
+  });
+  expect(bridge.link.kind).toBe("open");
+  expect(quiet).toHaveBeenCalled();
+  quiet.mockRestore();
+});
+
+test("a frame that is not JSON after the welcome redials instead of refusing", async () => {
+  const { bridge, socket } = start();
+  const welcome = await answer(socket);
+  socket.message(welcome);
+  await vi.waitFor(() => {
+    expect(bridge.link.kind).toBe("open");
+  });
+  socket.dispatchEvent(new MessageEvent("message", { data: "{not json" }));
+  await vi.waitFor(() => {
+    expect(bridge.link.kind).toBe("closed");
+  });
+});

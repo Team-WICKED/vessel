@@ -294,7 +294,17 @@ export class Bridge {
         .then(async () => {
           if (!this.#current(socket)) return;
           if (typeof data !== "string") throw new Error("Not a frame");
-          const frame = JSON.parse(data) as ServerFrame;
+          let frame: ServerFrame;
+          try {
+            frame = JSON.parse(data) as ServerFrame;
+          } catch (error) {
+            if (!verified) throw error;
+            // After the server proved itself, a frame that is not JSON is
+            // a broken connection, not a refusal: redial, keeping the key.
+            socket.close();
+            this.#dropped(socket);
+            return;
+          }
           if (!verified) {
             if (frame.type === "challenge") {
               const hello = await handshake.hello(frame);
@@ -313,10 +323,18 @@ export class Bridge {
           } else {
             if (frame.type === "challenge" || frame.type === "welcome")
               throw new Error("Repeated handshake");
-            this.#receive(frame);
+            // Once the server proved itself, a frame this page fails to
+            // handle (a store or reducer bug) is the page's fault, not a
+            // refusal: report it and keep the connection and the key.
+            try {
+              this.#receive(frame);
+            } catch (error) {
+              console.error("vessel ui could not handle a frame", error);
+            }
           }
         })
         .catch(() => {
+          // A failed handshake, or a repeated one: the key is dropped.
           if (this.#socket === socket) this.#refuse();
         });
     });
