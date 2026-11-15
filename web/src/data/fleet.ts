@@ -75,6 +75,9 @@ export class Fleet {
   readonly bridge: Bridge;
   readonly store = new Store<FleetState>(INITIAL);
   #timer: ReturnType<typeof setInterval> | null = null;
+  /** Nodes whose session list is being polled: a slow node is asked
+   * again only once its last answer is in, so polls never pile up. */
+  readonly #polling = new Set<NodeKey>();
 
   constructor(bridge: Bridge) {
     this.bridge = bridge;
@@ -108,6 +111,7 @@ export class Fleet {
   stop(): void {
     if (this.#timer !== null) {
       clearInterval(this.#timer);
+      this.#timer = null;
     }
     this.bridge.stop();
   }
@@ -202,8 +206,11 @@ export class Fleet {
 
   #pollSessions(): void {
     for (const [node, status] of Object.entries(this.store.get().statuses)) {
-      if (status.state === "connected") {
-        void this.refreshSessions(node);
+      if (status.state === "connected" && !this.#polling.has(node)) {
+        this.#polling.add(node);
+        void this.refreshSessions(node).finally(() => {
+          this.#polling.delete(node);
+        });
       }
     }
   }

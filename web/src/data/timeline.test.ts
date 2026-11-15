@@ -161,6 +161,53 @@ describe("the timeline", () => {
     expect(second.entries.at(-1)?.kind).toBe("turn_ended");
   });
 
+  it("finds tool calls and requests by id across many batches", () => {
+    const calls = 300;
+    const opened: EventRecord[] = [];
+    for (let index = 0; index < calls; index += 1) {
+      opened.push(
+        agent({
+          event: "tool_call",
+          id: `bulk-${String(index)}`,
+          title: "Edit",
+          kind: "edit",
+          status: "pending",
+          content: [],
+          locations: [{ path: `/src/f${String(index % 7)}.rs`, line: 1 }],
+          raw_input: null,
+        }),
+        agent({
+          event: "permission_requested",
+          id: `bulk-perm-${String(index)}`,
+          tool_call: `bulk-${String(index)}`,
+          options: [{ id: "allow-once", name: "Allow", kind: "allow_once" }],
+        }),
+      );
+    }
+    let timeline = reduce(EMPTY, opened);
+    for (let index = calls - 1; index >= 0; index -= 1) {
+      timeline = reduce(timeline, [
+        agent({
+          event: "tool_call_update",
+          id: `bulk-${String(index)}`,
+          status: "completed",
+        }),
+        agent({
+          event: "permission_resolved",
+          id: `bulk-perm-${String(index)}`,
+          outcome: { outcome: "selected", option: "allow-once" },
+        }),
+      ]);
+    }
+    const statuses = timeline.entries.flatMap((entry) =>
+      entry.kind === "tool" ? [entry.tool.status] : [],
+    );
+    expect(statuses).toHaveLength(calls);
+    expect(statuses.every((status) => status === "completed")).toBe(true);
+    expect(timeline.pending).toBeNull();
+    expect(timeline.files).toHaveLength(7);
+  });
+
   it("skips records it has seen, so a resumed stream can overlap", () => {
     const records = turn();
     const once = reduce(EMPTY, records);

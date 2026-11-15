@@ -11,10 +11,10 @@ use vessel_proto::lsp::{FilePath, Language};
 use crate::error::LspError as Error;
 use crate::position::Utf16Position;
 use crate::process::{Document, MAX_DOCUMENTS, Process};
+use crate::protocol::data;
 
 /// Saved text all open documents of one server may hold together.
 const MAX_OPEN_BYTES: usize = 32 * 1024 * 1024;
-use crate::protocol::data;
 
 /// Coalescing events is safe: each wake rereads the bounded open document set.
 #[derive(Debug, Clone)]

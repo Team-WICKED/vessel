@@ -28,6 +28,12 @@ use vessel_proto::HarnessKind;
 
 use crate::harnesses::descriptor;
 
+/// The harness whose default profile a transfer means when it names no
+/// profile and no harness (`memory.export` without `profile`): Claude Code,
+/// the harness whose memory is per project and the one transfers were
+/// first built for.
+pub const TRANSFER_DEFAULT: HarnessKind = HarnessKind::ClaudeCode;
+
 /// Why a profile's memory cannot be listed.
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryFilesError {

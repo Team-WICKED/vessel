@@ -4,7 +4,18 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use vessel_proto::{DeviceId, ErrorCode, EventSeq, NodeId, SessionId};
+use vessel_proto::{DeviceId, ErrorCode, EventSeq, InvalidName, NodeId, SessionId};
+
+/// Why a value stored as bare text did not parse.
+#[derive(Debug, thiserror::Error)]
+pub enum TextError {
+    /// Not a valid name.
+    #[error("not a valid name")]
+    Name(#[source] InvalidName),
+    /// Not a valid id.
+    #[error("not a valid id")]
+    Id(#[source] <NodeId as FromStr>::Err),
+}
 
 /// A value that does not fit the on-disk representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +144,17 @@ pub enum StoreError {
         #[source]
         source: serde_json::Error,
     },
+    /// A value stored as bare text (a name or an id) did not parse.
+    #[error("stored {column:?} of session {session} is invalid")]
+    CorruptText {
+        /// Session the row belongs to.
+        session: SessionId,
+        /// Column that failed.
+        column: Column,
+        /// Why.
+        #[source]
+        source: TextError,
+    },
     /// A stored session id did not parse.
     #[error("stored session id {text:?} is invalid")]
     CorruptId {
@@ -212,6 +234,7 @@ impl StoreError {
             | Self::Commit(_)
             | Self::Corrupt { .. }
             | Self::CorruptId { .. }
+            | Self::CorruptText { .. }
             | Self::CorruptDevice { .. }
             | Self::Encode(_)
             | Self::OutOfRange(_)

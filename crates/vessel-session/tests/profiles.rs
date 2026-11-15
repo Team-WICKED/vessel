@@ -999,3 +999,35 @@ async fn sessions_that_cannot_move_are_refused_unchanged() {
     })
     .await;
 }
+
+/// Two creations racing with one caller-chosen id: one wins, the other is
+/// refused, never silently replacing the first's handle.
+#[tokio::test]
+async fn racing_creations_with_one_id_start_one_session() {
+    within(async {
+        let fixture = Fixture::new();
+        let options = LaunchOptions {
+            id: Some(SessionId::random()),
+            ..LaunchOptions::default()
+        };
+        let (one, two) = tokio::join!(
+            fixture.create(terminal(HarnessKind::ClaudeCode), options.clone()),
+            fixture.create(terminal(HarnessKind::ClaudeCode), options.clone()),
+        );
+        let refused = [&one, &two]
+            .iter()
+            .filter(|result| matches!(result, Err(SessionError::DuplicateId(_))))
+            .count();
+        assert_eq!(
+            refused,
+            1,
+            "{:?} / {:?}",
+            one.as_ref().err(),
+            two.as_ref().err()
+        );
+        assert_eq!(fixture.runtime.list().len(), 1);
+        drop((one, two));
+        fixture.runtime.shutdown().await;
+    })
+    .await;
+}

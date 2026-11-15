@@ -17,6 +17,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+/// How long a failed accept waits before trying again, when no connection
+/// ended meanwhile to free a descriptor.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
 /// A socket owns these until its actual I/O is dropped, including upgrades.
 #[derive(Debug)]
 pub(crate) struct Connection {
@@ -40,17 +44,32 @@ pub(crate) async fn serve(
     pending: usize,
     header_timeout: Duration,
     shutdown: CancellationToken,
-) -> io::Result<()> {
+) {
     let total = Arc::new(Semaphore::new(total));
     let pending = Arc::new(Semaphore::new(pending));
     let mut tasks = JoinSet::new();
     loop {
         let accepted = tokio::select! {
-            () = shutdown.cancelled() => return Ok(()),
+            () = shutdown.cancelled() => return,
             Some(_done) = tasks.join_next(), if !tasks.is_empty() => continue,
-            accepted = listener.accept() => accepted?,
+            accepted = listener.accept() => accepted,
         };
-        let (stream, _) = accepted;
+        let stream = match accepted {
+            Ok((stream, _peer)) => stream,
+            Err(error) => {
+                // One failed accept (out of descriptors, or a connection
+                // reset before it was taken) must not end the UI. Descriptors
+                // free up as connections end, so wait for one to end, or a
+                // moment, rather than spin on the same error.
+                tracing::warn!(%error, "the UI could not accept a connection");
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    Some(_done) = tasks.join_next(), if !tasks.is_empty() => {}
+                    () = tokio::time::sleep(ACCEPT_RETRY) => {}
+                }
+                continue;
+            }
+        };
         let Ok(total) = Arc::clone(&total).try_acquire_owned() else {
             continue;
         };

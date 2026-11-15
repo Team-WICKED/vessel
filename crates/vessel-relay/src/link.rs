@@ -15,7 +15,14 @@
 //!   registration once the new one proves the key.
 //! - Each client's data connection is opened in a task of its own and
 //!   handed, as a carrier, to the node's `accept`: the node runs
-//!   `vessel_secure::respond` on it, exactly as for its own `/secure`.
+//!   `vessel_secure::respond` on it, exactly as for its own `/secure`. At
+//!   most [`RELAYED_UNADMITTED`](crate::RELAYED_UNADMITTED) are being opened
+//!   at once; an `Incoming` past that is dropped (the relay's own limits
+//!   cap it too, but a relay a fleet's home named is not trusted to keep
+//!   them).
+//! - Every wait for the relay's next message while registering has one
+//!   deadline ([`STEP`]) however many pings arrive meanwhile, so a relay
+//!   cannot hold a registration open by pinging.
 //! - The state is published on a watch ([`LinkState`]) for `vessel node
 //!   status` and for tests to wait on, instead of sleeping.
 //! - Tickets (protocol 6, `fleet.callback`): a fleet member registers with
@@ -32,7 +39,7 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
@@ -75,6 +82,8 @@ pub struct NodeLink {
     /// Which addresses of the relay's host it connects to.
     reach: Reach,
     state: watch::Sender<LinkState>,
+    /// Places for data connections being opened at once.
+    opening: Arc<Semaphore>,
 }
 
 /// What a link registers with.
@@ -176,6 +185,7 @@ impl NodeLink {
             tls,
             reach: Reach::Any,
             state,
+            opening: Arc::new(Semaphore::new(crate::RELAYED_UNADMITTED)),
         }
     }
 
@@ -340,9 +350,14 @@ impl NodeLink {
     where
         F: Fn(WsCarrier) + Send + Sync + 'static,
     {
+        let Ok(place) = Arc::clone(&self.opening).try_acquire_owned() else {
+            tracing::debug!("too many relayed clients being accepted at once; dropped one");
+            return;
+        };
         let url = endpoint(&self.relay, &format!("{ACCEPT_PATH}?conn={conn}"));
         let (tls, reach) = (self.tls.clone(), self.reach);
         drop(tokio::spawn(async move {
+            let _place = place;
             match timeout(STEP, socket::open_reaching(&url, &tls, reach)).await {
                 Ok(Ok(socket)) => accept(WsCarrier::new(socket, Some(Keepalive::DEFAULT.silence))),
                 Ok(Err(error)) => tracing::debug!(%error, "could not accept a relayed client"),
@@ -373,8 +388,10 @@ async fn send<T: Serialize>(
 async fn receive<T: DeserializeOwned>(
     socket: &mut Socket,
 ) -> Result<T, Option<RegistrationRefusal>> {
+    let now = tokio::time::Instant::now();
+    let deadline = now.checked_add(STEP).unwrap_or(now);
     loop {
-        let message = match timeout(STEP, socket.next()).await {
+        let message = match tokio::time::timeout_at(deadline, socket.next()).await {
             Ok(Some(Ok(message))) => message,
             Ok(Some(Err(error))) => {
                 tracing::debug!(%error, "lost the relay while registering");

@@ -136,7 +136,7 @@ pub async fn serve<S: NodeSource>(
         config.header_deadline,
         shutdown,
     )
-    .await?;
+    .await;
     Ok(())
 }
 

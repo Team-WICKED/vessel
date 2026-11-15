@@ -99,12 +99,13 @@ impl Unary for ExportMemory {}
 impl Unary for ImportMemory {}
 impl Unary for ReadTransfer {}
 impl Unary for CloseTransfer {}
-// Protocol 7.
-impl Unary for ListModels {}
+// Protocol 6.
 impl Unary for SetSecret {}
 impl Unary for ListSecrets {}
 impl Unary for DeleteSecret {}
 impl Unary for CopySecret {}
+// Protocol 7.
+impl Unary for ListModels {}
 impl Unary for vessel_proto::lsp::WorkspaceSymbols {}
 impl Unary for vessel_proto::lsp::DocumentSymbols {}
 impl Unary for vessel_proto::lsp::Definition {}
@@ -208,14 +209,6 @@ const fn is_unary(method: Method) -> bool {
     }
 }
 
-/// `n` as a `NonZeroUsize` for constants.
-const fn at_least_one(n: usize) -> NonZeroUsize {
-    match NonZeroUsize::new(n) {
-        Some(n) => n,
-        None => NonZeroUsize::MIN,
-    }
-}
-
 /// Limits for a client connection.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -233,8 +226,8 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            command_capacity: at_least_one(64),
-            subscription_capacity: at_least_one(1024),
+            command_capacity: crate::at_least_one(64),
+            subscription_capacity: crate::at_least_one(1024),
             handshake_timeout: Duration::from_secs(10),
         }
     }

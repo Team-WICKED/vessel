@@ -65,6 +65,7 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     layout: HarnessLayout {
         instructions: Some("CLAUDE.md"),
         skills: Some("skills"),
+        also_reads: None,
     },
     login: Some(&["auth", "status"]),
     install: "npm install -g @anthropic-ai/claude-code",

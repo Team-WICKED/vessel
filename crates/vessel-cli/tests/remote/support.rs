@@ -61,7 +61,11 @@ impl Machine {
         let tui = Fake::Tui.path().unwrap();
         drop(install(bin.path(), HarnessKind::ClaudeCode, Role::Terminal, &tui).unwrap());
         let profile = format!("export PATH='{}':\"$PATH\"\n", bin.path().display());
-        std::fs::write(home.path().join(".profile"), profile).unwrap();
+        // `.profile` for sh and bash, `.zprofile` for zsh (macOS's login
+        // shell, whose `/etc/zprofile` rebuilds `PATH` first): either way
+        // the fakes come before any real harness this machine has.
+        std::fs::write(home.path().join(".profile"), &profile).unwrap();
+        std::fs::write(home.path().join(".zprofile"), &profile).unwrap();
         Self {
             home,
             _bin: bin,

@@ -13,6 +13,8 @@
 //! ACP), and there is no login check or session move yet.
 
 use super::{Descriptor, Home, Structured};
+use vessel_proto::HarnessKind;
+
 use crate::layout::HarnessLayout;
 
 pub(super) const DESCRIPTOR: Descriptor = Descriptor {
@@ -26,6 +28,7 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     layout: HarnessLayout {
         instructions: Some("AGENTS.md"),
         skills: Some("skills"),
+        also_reads: Some(HarnessKind::ClaudeCode),
     },
     login: None,
     install: "npm install -g opencode-ai",

@@ -1,7 +1,7 @@
 //! [`SessionRuntime`]: starts sessions and keeps their handles.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -54,6 +54,26 @@ pub struct SessionRuntime {
     shutdown: CancellationToken,
     tasks: TaskTracker,
     sessions: RwLock<HashMap<SessionId, SessionHandle>>,
+    /// Ids of sessions being created: taken when the id is checked and
+    /// released once the session is in `sessions` (or its creation
+    /// failed), so two creations with one id cannot both pass the check.
+    starting: Mutex<HashSet<SessionId>>,
+}
+
+/// An id held for a session being created; released when dropped.
+struct Reserved<'runtime> {
+    starting: &'runtime Mutex<HashSet<SessionId>>,
+    id: SessionId,
+}
+
+impl Drop for Reserved<'_> {
+    fn drop(&mut self) {
+        let _released = self
+            .starting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+    }
 }
 
 /// How a session is launched beyond its spec: the node decides these
@@ -168,6 +188,7 @@ impl SessionRuntime {
             shutdown,
             tasks: TaskTracker::new(),
             sessions: RwLock::new(HashMap::new()),
+            starting: Mutex::new(HashSet::new()),
         }
     }
 
@@ -221,9 +242,9 @@ impl SessionRuntime {
             model_proxy,
         } = options;
         let id = id.unwrap_or_else(SessionId::random);
-        if self.get(id).is_some() {
-            return Err(SessionError::DuplicateId(id));
-        }
+        // Held until this function returns: by then the session is in the
+        // map (`start`) or its creation failed.
+        let _reserved = self.reserve(id)?;
         let record = Record {
             id,
             created_by,
@@ -558,6 +579,19 @@ impl SessionRuntime {
         );
         tracing::info!(session = %id, harness = %handle.info().spec.harness, "session started");
         Created { handle, durable }
+    }
+
+    /// Hold `id` for a session being created, unless a session has it or
+    /// another creation holds it.
+    fn reserve(&self, id: SessionId) -> Result<Reserved<'_>, SessionError> {
+        let mut starting = self.starting.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.get(id).is_some() || !starting.insert(id) {
+            return Err(SessionError::DuplicateId(id));
+        }
+        Ok(Reserved {
+            starting: &self.starting,
+            id,
+        })
     }
 
     /// A session of this run, live or ended (until [`remove`](Self::remove)d).

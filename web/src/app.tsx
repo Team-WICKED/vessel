@@ -36,6 +36,9 @@ function Home(): ReactElement {
 
 const rootRoute = createRootRoute({ component: Shell });
 
+// The first segment of every route here is listed in `APP_ROUTES`
+// (crates/vessel-web/src/files.rs), so a reload of a deep link is served
+// the page even when a node name holds a dot: keep the two in step.
 const routeTree = rootRoute.addChildren([
   createRoute({
     getParentRoute: () => rootRoute,

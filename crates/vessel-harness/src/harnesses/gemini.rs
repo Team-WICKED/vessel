@@ -26,6 +26,7 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     layout: HarnessLayout {
         instructions: Some("GEMINI.md"),
         skills: None,
+        also_reads: None,
     },
     login: None,
     install: "npm install -g @google/gemini-cli",

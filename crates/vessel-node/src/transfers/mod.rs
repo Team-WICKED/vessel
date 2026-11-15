@@ -208,9 +208,12 @@ pub(crate) enum TransferError {
     /// The staging directory could not be used.
     #[error("the transfer's staging directory: {0}")]
     Staging(#[source] io::Error),
-    /// Fetching from the source failed (its answer, or the store).
-    #[error("fetching a file: {0}")]
-    Fetch(String),
+    /// A fetched file could not be written, or is not the file (its hash).
+    #[error("fetching a file")]
+    Fetch(#[source] io::Error),
+    /// The source sent more of a file than its manifest or the limit allows.
+    #[error("a fetched file is {0} bytes, more than its manifest or the limit allows")]
+    FetchedTooLarge(u64),
     /// A blocking task failed.
     #[error("a node task failed")]
     Task(#[source] tokio::task::JoinError),
@@ -265,6 +268,7 @@ impl TransferError {
             | Self::WrongKind(_)
             | Self::Staging(_)
             | Self::Fetch(_)
+            | Self::FetchedTooLarge(_)
             | Self::Task(_) => ErrorCode::Internal,
         }
     }

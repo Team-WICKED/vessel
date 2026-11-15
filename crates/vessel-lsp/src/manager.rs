@@ -423,6 +423,8 @@ fn plan(key: &Key, home: Option<&Path>) -> Result<Generation, Error> {
     })
 }
 
+/// One server's actor: owns the process for `key` and answers `inbox` one
+/// query at a time, restarting the process (after a backoff) when it fails.
 async fn server(
     key: Key,
     config: Config,
@@ -434,89 +436,207 @@ async fn server(
     let Ok((watcher, mut changes)) = Watcher::new().await else {
         return;
     };
-    let mut process: Option<Process> = None;
-    let mut generation = Generation::default();
-    let mut retry_at = Instant::now();
-    let mut backoff = config.restart_backoff.min(Duration::from_secs(30));
-    let mut idle_at = Instant::now()
-        .checked_add(config.idle_timeout)
-        .unwrap_or_else(Instant::now);
+    let mut actor = Actor::new(key, config, tools, watcher);
+    let mut idle_at = actor.idle_deadline();
     loop {
         tokio::select! {
             () = shutdown.cancelled() => break,
             () = retire.cancelled() => break,
             () = tokio::time::sleep_until(idle_at) => break,
-            event = changes.changed(), if process.is_some() => {
-                if event.is_err() { break; }
+            event = changes.changed(), if actor.process.is_some() => {
+                if event.is_err() {
+                    break;
+                }
                 drop(changes.borrow_and_update());
-                if let Some(server) = &mut process {
-                    let result = tokio::time::timeout(config.request_timeout, server.refresh_all(&watcher)).await;
-                    if !matches!(result, Ok(Ok(()))) { process = None; }
-                }
+                actor.refresh().await;
             }
-            message = receive_event(&mut process) => {
-                if let Some(server) = &mut process {
-                    let result = match message { Some(Ok(message)) => tokio::time::timeout(config.request_timeout, server.event(message)).await.ok(), Some(Err(_)) | None => None };
-                    if !matches!(result, Some(Ok(()))) {
-                        process = None;
-                        retry_at = Instant::now().checked_add(backoff).unwrap_or_else(Instant::now);
-                        backoff = backoff.saturating_mul(2).min(Duration::from_secs(30));
-                    }
-                }
-            }
+            message = receive_event(&mut actor.process) => actor.event(message).await,
             work = inbox.recv() => {
-                let Some(mut work) = work else { break; };
-                if work.reply.is_closed() { continue; }
-                if Instant::now() < retry_at { drop(work.reply.send(Err(Error::Unavailable))); continue; }
-                let policy_key = key.clone();
-                let policy_home = config.registry.home.clone();
-                let planned = tokio::task::spawn_blocking(move || {
-                    plan(&policy_key, policy_home.as_deref())
-                }).await;
-                let next = match planned {
-                    Ok(Ok(next)) => next,
-                    Ok(Err(error)) => { process = None; drop(work.reply.send(Err(error))); continue; }
-                    Err(error) => { process = None; drop(work.reply.send(Err(error.into()))); continue; }
-                };
-                if next != generation { process = None; }
-                generation = next;
-                if process.is_none() {
-                    let started = tokio::select! {
-                        () = shutdown.cancelled() => break,
-                        _cancelled = work.reply.closed() => Err(Error::Unavailable),
-                        result = launch(&key, &config, &tools, &generation.projects, &watcher) => result,
-                    };
-                    match started {
-                        Ok(started) => process = Some(started),
-                        Err(error) => {
-                            retry_at = Instant::now().checked_add(backoff).unwrap_or_else(Instant::now);
-                            backoff = backoff.saturating_mul(2).min(Duration::from_secs(30));
-                            drop(work.reply.send(Err(error))); continue;
-                        }
-                    }
+                let Some(work) = work else { break };
+                match actor.work(work, &shutdown).await {
+                    Flow::Answered => idle_at = actor.idle_deadline(),
+                    Flow::Skipped => {}
+                    Flow::Stop => break,
                 }
-                let Some(server) = &mut process else { break; };
-                let mut reply = work.reply;
-                let result = tokio::select! {
-                    () = shutdown.cancelled() => break,
-                    _cancelled = reply.closed() => Err(Error::Unavailable),
-                    result = tokio::time::timeout(config.request_timeout, server.query(work.query, &watcher)) => result.unwrap_or(Err(Error::Timeout)),
-                };
-                let failed = matches!(&result, Err(Error::Protocol | Error::Timeout | Error::Frame(_) | Error::Json(_) | Error::Unavailable));
-                if failed {
-                    process = None;
-                    retry_at = Instant::now().checked_add(backoff).unwrap_or_else(Instant::now);
-                    backoff = backoff.saturating_mul(2).min(Duration::from_secs(30));
-                } else { backoff = config.restart_backoff.min(Duration::from_secs(30)); }
-                drop(reply.send(result));
-                idle_at = Instant::now().checked_add(config.idle_timeout).unwrap_or_else(Instant::now);
             }
         }
     }
-    if let Some(mut process) = process {
+    if let Some(mut process) = actor.process {
         process.shutdown().await;
     }
 }
+
+/// What handling one piece of work did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Flow {
+    /// It ran a query (or failed one) on the server: the idle clock restarts.
+    Answered,
+    /// It was refused or abandoned before reaching the server.
+    Skipped,
+    /// The node is shutting down.
+    Stop,
+}
+
+/// The state one server's actor owns.
+struct Actor {
+    key: Key,
+    config: Config,
+    tools: Tools,
+    watcher: Watcher,
+    process: Option<Process>,
+    generation: Generation,
+    /// No new process starts before this.
+    retry_at: Instant,
+    /// The wait after the next failure (doubling, at most 30 s).
+    backoff: Duration,
+}
+
+impl Actor {
+    fn new(key: Key, config: Config, tools: Tools, watcher: Watcher) -> Self {
+        let backoff = config.restart_backoff.min(MAX_BACKOFF);
+        Self {
+            key,
+            config,
+            tools,
+            watcher,
+            process: None,
+            generation: Generation::default(),
+            retry_at: Instant::now(),
+            backoff,
+        }
+    }
+
+    fn idle_deadline(&self) -> Instant {
+        Instant::now()
+            .checked_add(self.config.idle_timeout)
+            .unwrap_or_else(Instant::now)
+    }
+
+    /// Drop the process and wait the backoff before starting another.
+    fn failed(&mut self) {
+        self.process = None;
+        self.retry_at = Instant::now()
+            .checked_add(self.backoff)
+            .unwrap_or_else(Instant::now);
+        self.backoff = self.backoff.saturating_mul(2).min(MAX_BACKOFF);
+    }
+
+    /// Saved files changed: resend them, or drop a process that cannot take
+    /// them (it starts again with the next query).
+    async fn refresh(&mut self) {
+        if let Some(server) = &mut self.process {
+            let result = tokio::time::timeout(
+                self.config.request_timeout,
+                server.refresh_all(&self.watcher),
+            )
+            .await;
+            if !matches!(result, Ok(Ok(()))) {
+                self.process = None;
+            }
+        }
+    }
+
+    /// A message the server sent between queries.
+    async fn event(&mut self, message: Option<Result<crate::protocol::Incoming, Error>>) {
+        let Some(server) = &mut self.process else {
+            return;
+        };
+        let result = match message {
+            Some(Ok(message)) => {
+                tokio::time::timeout(self.config.request_timeout, server.event(message))
+                    .await
+                    .ok()
+            }
+            Some(Err(_)) | None => None,
+        };
+        if !matches!(result, Some(Ok(()))) {
+            self.failed();
+        }
+    }
+
+    /// Answer one query, starting the server for it when needed.
+    ///
+    /// A caller that gives up (its reply closed) is noticed only before
+    /// the query reaches the server: while the server starts, the start is
+    /// abandoned without a backoff; once the query is written it runs to
+    /// its end (at most `request_timeout`) and the answer is dropped.
+    /// Abandoning it midway could leave half a frame written, or an answer
+    /// the next query would read as its own, so the only safe way out
+    /// would be killing a healthy server and its index, which made one
+    /// caller's cancellation everyone's outage.
+    async fn work(&mut self, work: Work, shutdown: &CancellationToken) -> Flow {
+        let Work { query, mut reply } = work;
+        if reply.is_closed() {
+            return Flow::Skipped;
+        }
+        if Instant::now() < self.retry_at {
+            drop(reply.send(Err(Error::Unavailable)));
+            return Flow::Skipped;
+        }
+        let policy_key = self.key.clone();
+        let policy_home = self.config.registry.home.clone();
+        let planned =
+            tokio::task::spawn_blocking(move || plan(&policy_key, policy_home.as_deref())).await;
+        let next = match planned {
+            Ok(Ok(next)) => next,
+            Ok(Err(error)) => {
+                self.process = None;
+                drop(reply.send(Err(error)));
+                return Flow::Skipped;
+            }
+            Err(error) => {
+                self.process = None;
+                drop(reply.send(Err(error.into())));
+                return Flow::Skipped;
+            }
+        };
+        if next != self.generation {
+            self.process = None;
+        }
+        self.generation = next;
+        if self.process.is_none() {
+            let started = tokio::select! {
+                () = shutdown.cancelled() => return Flow::Stop,
+                _abandoned = reply.closed() => return Flow::Skipped,
+                result = launch(&self.key, &self.config, &self.tools, &self.generation.projects, &self.watcher) => result,
+            };
+            match started {
+                Ok(started) => self.process = Some(started),
+                Err(error) => {
+                    self.failed();
+                    drop(reply.send(Err(error)));
+                    return Flow::Skipped;
+                }
+            }
+        }
+        let Some(server) = &mut self.process else {
+            return Flow::Stop;
+        };
+        let result = tokio::select! {
+            () = shutdown.cancelled() => return Flow::Stop,
+            result = tokio::time::timeout(self.config.request_timeout, server.query(query, &self.watcher)) => {
+                result.unwrap_or(Err(Error::Timeout))
+            }
+        };
+        if matches!(
+            &result,
+            Err(Error::Protocol
+                | Error::Timeout
+                | Error::Frame(_)
+                | Error::Json(_)
+                | Error::Unavailable)
+        ) {
+            self.failed();
+        } else {
+            self.backoff = self.config.restart_backoff.min(MAX_BACKOFF);
+        }
+        drop(reply.send(result));
+        Flow::Answered
+    }
+}
+
+/// The longest wait before a failed server is started again.
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Start a new server generation: resolve the toolchain once, prepare the
 /// launch off the async workers and initialize the process.

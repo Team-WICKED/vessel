@@ -4,12 +4,12 @@
 use chrono::{DateTime, Utc};
 use rusqlite::Row;
 use vessel_proto::{
-    EventRecord, EventSeq, HarnessSessionId, ProfileName, SessionEvent, SessionId, SessionInfo,
-    SessionSpec, SessionStatus,
+    EventRecord, EventSeq, HarnessSessionId, NodeId, ProfileName, SessionEvent, SessionId,
+    SessionInfo, SessionSpec, SessionStatus,
 };
 
 use crate::config::ByteCount;
-use crate::error::{Column, Quantity, StoreError};
+use crate::error::{Column, Quantity, StoreError, TextError};
 
 pub(crate) fn seq_to_sql(seq: EventSeq) -> Result<i64, StoreError> {
     i64::try_from(seq.get()).map_err(|_too_big| StoreError::OutOfRange(Quantity::Seq))
@@ -83,14 +83,13 @@ pub(crate) fn session_from_row(row: &Row<'_>) -> Result<SessionInfo, StoreError>
     info.profile = row
         .get::<_, Option<String>>(7)?
         .map(|name| {
-            // Stored as the bare name; the name rule is the serde one.
-            serde_json::from_value::<ProfileName>(serde_json::Value::String(name)).map_err(
-                |source| StoreError::Corrupt {
+            // Stored as the bare name.
+            name.parse::<ProfileName>()
+                .map_err(|source| StoreError::CorruptText {
                     session: id,
                     column: Column::Profile,
-                    source,
-                },
-            )
+                    source: TextError::Name(source),
+                })
         })
         .transpose()?;
     if let Some(creator) = row.get::<_, Option<String>>(8)? {
@@ -100,11 +99,13 @@ pub(crate) fn session_from_row(row: &Row<'_>) -> Result<SessionInfo, StoreError>
     info.via = row
         .get::<_, Option<String>>(9)?
         .map(|node| {
-            decode(
-                id,
-                Column::Via,
-                &serde_json::Value::String(node).to_string(),
-            )
+            // Stored as the bare id.
+            node.parse::<NodeId>()
+                .map_err(|source| StoreError::CorruptText {
+                    session: id,
+                    column: Column::Via,
+                    source: TextError::Id(source),
+                })
         })
         .transpose()?;
     info.origin = row

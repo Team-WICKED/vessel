@@ -96,6 +96,9 @@ use crate::relays::Relays;
 
 mod callback;
 
+/// The home's connection to one member, while it has one.
+type MemberSlot = Arc<tokio::sync::Mutex<Option<NodeClient>>>;
+
 pub(crate) use callback::HomeRelays;
 
 /// How long a pairing link for the home is valid: the home redeems it at
@@ -208,8 +211,10 @@ pub(crate) struct Links {
     ticketed: callback::Ticketed,
     /// A member's connection to its home, while the pull loop has one.
     home: Mutex<Option<NodeClient>>,
-    /// The home's open connections to its members.
-    members: tokio::sync::Mutex<HashMap<NodeId, NodeClient>>,
+    /// The home's connections to its members, one slot per member: the
+    /// map is locked only to find a slot, and a slot is held while its
+    /// member is dialled (`member_client`).
+    members: Mutex<HashMap<NodeId, MemberSlot>>,
     /// Held while a grant is checked and recorded (and while `reconcile`
     /// revokes), never across a network call: two grants cannot both pass
     /// the checks, and a revocation never races a grant being recorded.
@@ -496,7 +501,7 @@ impl Links {
             home_relays,
             ticketed: callback::Ticketed::default(),
             home: Mutex::new(None),
-            members: tokio::sync::Mutex::new(HashMap::new()),
+            members: Mutex::new(HashMap::new()),
             granting: tokio::sync::Mutex::new(()),
             accepting: Mutex::new(HashSet::new()),
             in_flight: AtomicBool::new(false),
@@ -971,7 +976,12 @@ impl Links {
         })
         .await?;
         let replaced = recorded?;
-        drop(self.members.lock().await.remove(&node));
+        drop(
+            self.members
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&node),
+        );
         tracing::info!(member = %node, device = %member, replaced = ?replaced, "a member granted this home a credential");
         Ok(())
     }
@@ -1016,7 +1026,12 @@ impl Links {
                     format!("this home has no binding for node {node}"),
                 )
             })?;
-        drop(self.members.lock().await.remove(&node));
+        drop(
+            self.members
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&node),
+        );
         tracing::info!(%node, withdrawn, devices = ?forgot.devices, "forgot a fleet node's binding at its owner's request");
         Ok(NodeForgotten {
             key: forgot.key,
@@ -1117,14 +1132,25 @@ impl Links {
         let client = self.member_client(node).await?;
         let called = client.call(request).await;
         if matches!(called, Err(CallError::Disconnected)) {
-            drop(self.members.lock().await.remove(&node));
+            drop(
+                self.members
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&node),
+            );
         }
         called.map_err(|error| hop_error(node, error))
     }
 
     async fn member_client(&self, node: NodeId) -> Result<NodeClient, WireError> {
-        let mut members = self.members.lock().await;
-        if let Some(client) = members.get(&node)
+        let slot = self.member_slot(node);
+        // A tokio lock held across the dial below, on purpose: calls to the
+        // same member wait for one dial and share its connection rather
+        // than each opening one (a burst of 64 calls would take every place
+        // the relay keeps for that node), while calls to other members never
+        // wait on it, so one unreachable member holds up only its own.
+        let mut held = slot.lock().await;
+        if let Some(client) = held.as_ref()
             && client.closed().now_or_never().is_none()
         {
             return Ok(client.clone());
@@ -1174,8 +1200,14 @@ impl Links {
             .connect(client_info())
             .await
             .map_err(|error| unavailable(format!("cannot reach node {node}: {error}")))?;
-        let _previous = members.insert(node, client.clone());
+        *held = Some(client.clone());
         Ok(client)
+    }
+
+    /// Member `node`'s slot, made on first use.
+    fn member_slot(&self, node: NodeId) -> MemberSlot {
+        let mut members = self.members.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(members.entry(node).or_default())
     }
 
     /// `fleet.peers` on the home: the home itself, and every member that
@@ -1191,10 +1223,16 @@ impl Links {
         let open: Vec<NodeId> = self
             .members
             .lock()
-            .await
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .filter(|(_node, client)| client.closed().now_or_never().is_none())
-            .map(|(node, _client)| *node)
+            .filter(|(_node, slot)| {
+                // A slot being dialled is not open yet.
+                slot.try_lock().is_ok_and(|held| {
+                    held.as_ref()
+                        .is_some_and(|client| client.closed().now_or_never().is_none())
+                })
+            })
+            .map(|(node, _slot)| *node)
             .collect();
         for grant in self.grants().await {
             nodes.push(FleetNode {

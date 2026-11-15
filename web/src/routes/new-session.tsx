@@ -168,7 +168,13 @@ export function NewSessionDialog({
               aria-label="Harness"
               value={chosenHarness?.kind ?? ""}
               onChange={(event) => {
-                setHarness(event.target.value as HarnessKind);
+                // The value is one of the options below: find it rather
+                // than cast it.
+                const picked = harnesses.find(
+                  (candidate) => candidate.kind === event.target.value,
+                );
+                if (picked === undefined) return;
+                setHarness(picked.kind);
                 setProfile("");
               }}
             >

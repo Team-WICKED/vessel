@@ -165,6 +165,8 @@ impl DeviceCredential {
             path: path.to_owned(),
             source,
         })?;
+        // The message only, never the error itself: its display quotes the
+        // offending line, which may hold the device's secret.
         toml_edit::de::from_str(&text).map_err(|error| CredentialError::Invalid {
             path: path.to_owned(),
             message: error.message().to_owned(),

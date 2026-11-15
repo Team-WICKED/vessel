@@ -98,6 +98,49 @@ async fn an_idle_server_shuts_down_and_closes_its_mailbox() {
     .unwrap();
 }
 
+/// A caller giving up on its query (here, before or while it runs) costs
+/// nothing to the next caller: the warm server is neither killed nor put
+/// behind a backoff.
+#[tokio::test]
+async fn an_abandoned_query_keeps_the_server_warm() {
+    within(Duration::from_secs(45), async {
+        let state = tempfile::tempdir().unwrap();
+        let dir = root();
+        let root = dir.path().canonicalize().unwrap();
+        let (sender, receiver) = mpsc::channel(8);
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(server(
+            Key {
+                workspace: root.clone(),
+                language: lsp::Language::Rust,
+                full: false,
+            },
+            config("normal", &state),
+            stop.clone(),
+            CancellationToken::new(),
+            receiver,
+            super::Tools::default(),
+        ));
+        assert!(call(&sender, query(root.clone())).await.is_ok());
+        for _ in 0..4 {
+            let (reply, response) = oneshot::channel();
+            sender
+                .send(Work {
+                    query: query(root.clone()),
+                    reply,
+                })
+                .await
+                .unwrap();
+            drop(response);
+            assert!(call(&sender, query(root.clone())).await.is_ok());
+        }
+        stop.cancel();
+        task.await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn a_crashed_server_restarts_only_after_backoff() {
     within(Duration::from_secs(45), async {

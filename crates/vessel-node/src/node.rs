@@ -100,6 +100,11 @@ impl Node {
         } = prepare_off_thread(&config).await?;
         let store = open_store(&config).await?;
         let (models, proxy) = model_proxy(models).await?;
+        // Bound before `core` starts any task: a socket or address that
+        // cannot be bound then fails the start with nothing left running
+        // (the fleet loop, the LSP manager and the model proxy are spawned
+        // from here on, and only a started node stops them).
+        let (local, tcp) = bind(&config, id).await?;
         let session_setup = SessionSetup::new(&config, id, profiles, Arc::clone(&models), mcp_dir);
 
         let Core {
@@ -124,7 +129,6 @@ impl Node {
         let token = Arc::new(token);
         let connections = TaskTracker::new();
 
-        let (local, tcp) = bind(&config, id).await?;
         let local_endpoint = local.endpoint().clone();
         let address = tcp.as_ref().map(|(_, address)| *address);
 
@@ -523,9 +527,6 @@ fn prepare(dir: &DataDir, env: HarnessEnv) -> Result<Prepared, NodeError> {
     })
 }
 
-/// The client model calls go out with: the operating system's roots, or
-/// none (with a warning) on a machine that has none, where only `http`
-/// providers (a local server) can then be reached.
 /// [`prepare`], on a thread that may block.
 async fn prepare_off_thread(config: &Config) -> Result<Prepared, NodeError> {
     let dir = config.data_dir.clone();
@@ -547,6 +548,9 @@ async fn model_proxy(models: Models) -> Result<(Arc<Models>, TcpListener), NodeE
     Ok((Arc::new(models), listener))
 }
 
+/// The client model calls go out with: the operating system's roots, or
+/// none (with a warning) on a machine that has none, where only `http`
+/// providers (a local server) can then be reached.
 fn model_client() -> Result<vessel_llm::client::Client, NodeError> {
     let limits = vessel_llm::client::Limits::default();
     vessel_llm::client::Client::new(limits)

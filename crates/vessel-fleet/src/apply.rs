@@ -187,11 +187,7 @@ impl Applied {
                 drop_incoming(plan, place, managed)
             }
             Decision::Write(replaces) => {
-                write(plan, place, file, blobs, |now| match (&now, replaces) {
-                    (Found::Missing, None) => true,
-                    (Found::File { content, .. }, Some(replaces)) => content.same(&replaces),
-                    _ => false,
-                })?;
+                write(plan, place, file, blobs, |now| as_planned(now, replaces))?;
                 let adopted = record.is_some_and(|record| record.adopted);
                 managed.record(&place.root, place.rel.clone(), Record::new(wanted, adopted));
                 self.written = self.written.saturating_add(1);
@@ -253,6 +249,19 @@ impl Applied {
 
 /// Write `file` at `place`, if what is there right before writing passes
 /// `expected` (it may have changed since the decision).
+/// Whether `now` is still what a write planned to replace: nothing, or
+/// the content Vessel wrote there. Matched in full, so a new kind of place
+/// has to say whether a write may go over it.
+fn as_planned(now: &Found, replaces: Option<Content>) -> bool {
+    match (now, replaces) {
+        (Found::Missing, None) => true,
+        (Found::File { content, .. }, Some(replaces)) => content.same(&replaces),
+        (Found::Missing, Some(_))
+        | (Found::File { .. }, None)
+        | (Found::Source | Found::Symlink(_) | Found::Blocked, _) => false,
+    }
+}
+
 fn write(
     plan: &Plan,
     place: &Place,
@@ -297,11 +306,7 @@ fn keep(
         }
     };
     if let Some(replaces) = write_it {
-        write(plan, &beside, file, blobs, |now| match (now, replaces) {
-            (Found::Missing, None) => true,
-            (Found::File { content, .. }, Some(replaces)) => content.same(&replaces),
-            _ => false,
-        })?;
+        write(plan, &beside, file, blobs, |now| as_planned(now, replaces))?;
     }
     managed.record_incoming(&beside.root, beside.rel.clone(), Record::new(wanted, false));
     Ok(Some(beside.path()))
