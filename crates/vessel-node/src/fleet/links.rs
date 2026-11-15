@@ -96,6 +96,9 @@ use crate::relays::Relays;
 
 mod callback;
 
+/// The home's connection to one member, while it has one.
+type MemberSlot = Arc<tokio::sync::Mutex<Option<NodeClient>>>;
+
 pub(crate) use callback::HomeRelays;
 
 /// How long a pairing link for the home is valid: the home redeems it at
@@ -208,8 +211,10 @@ pub(crate) struct Links {
     ticketed: callback::Ticketed,
     /// A member's connection to its home, while the pull loop has one.
     home: Mutex<Option<NodeClient>>,
-    /// The home's open connections to its members.
-    members: Mutex<HashMap<NodeId, NodeClient>>,
+    /// The home's connections to its members, one slot per member: the
+    /// map is locked only to find a slot, and a slot is held while its
+    /// member is dialled (`member_client`).
+    members: Mutex<HashMap<NodeId, MemberSlot>>,
     /// Held while a grant is checked and recorded (and while `reconcile`
     /// revokes), never across a network call: two grants cannot both pass
     /// the checks, and a revocation never races a grant being recorded.
@@ -1138,13 +1143,17 @@ impl Links {
     }
 
     async fn member_client(&self, node: NodeId) -> Result<NodeClient, WireError> {
-        // The map is locked only to look and to insert, never across the
-        // dial below: one unreachable member must not hold up calls to the
-        // others. Two calls racing to dial the same member may both
-        // connect; the first one in keeps its place and the other's
-        // connection is dropped.
-        if let Some(client) = self.open_member(node) {
-            return Ok(client);
+        let slot = self.member_slot(node);
+        // A tokio lock held across the dial below, on purpose: calls to the
+        // same member wait for one dial and share its connection rather
+        // than each opening one (a burst of 64 calls would take every place
+        // the relay keeps for that node), while calls to other members never
+        // wait on it, so one unreachable member holds up only its own.
+        let mut held = slot.lock().await;
+        if let Some(client) = held.as_ref()
+            && client.closed().now_or_never().is_none()
+        {
+            return Ok(client.clone());
         }
         // By the member device bound to `node`: exactly one, as grants are
         // checked when made. Two can only come from grants kept before
@@ -1191,23 +1200,14 @@ impl Links {
             .connect(client_info())
             .await
             .map_err(|error| unavailable(format!("cannot reach node {node}: {error}")))?;
-        let mut members = self.members.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(open) = members.get(&node)
-            && open.closed().now_or_never().is_none()
-        {
-            return Ok(open.clone());
-        }
-        let _previous = members.insert(node, client.clone());
+        *held = Some(client.clone());
         Ok(client)
     }
 
-    /// The open connection to member `node`, if the home holds one.
-    fn open_member(&self, node: NodeId) -> Option<NodeClient> {
-        let members = self.members.lock().unwrap_or_else(PoisonError::into_inner);
-        members
-            .get(&node)
-            .filter(|client| client.closed().now_or_never().is_none())
-            .cloned()
+    /// Member `node`'s slot, made on first use.
+    fn member_slot(&self, node: NodeId) -> MemberSlot {
+        let mut members = self.members.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(members.entry(node).or_default())
     }
 
     /// `fleet.peers` on the home: the home itself, and every member that
@@ -1225,8 +1225,14 @@ impl Links {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .filter(|(_node, client)| client.closed().now_or_never().is_none())
-            .map(|(node, _client)| *node)
+            .filter(|(_node, slot)| {
+                // A slot being dialled is not open yet.
+                slot.try_lock().is_ok_and(|held| {
+                    held.as_ref()
+                        .is_some_and(|client| client.closed().now_or_never().is_none())
+                })
+            })
+            .map(|(node, _slot)| *node)
             .collect();
         for grant in self.grants().await {
             nodes.push(FleetNode {
