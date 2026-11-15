@@ -2,6 +2,12 @@
 //! agent's own principal. Arguments and results are JSON; sessions, events
 //! and nodes appear as the protocol describes them (PROTOCOL.md).
 //!
+//! The SDK hands arguments over as a JSON object: each is read once, here,
+//! into a typed value. Results are typed values ([`Answer`] and the
+//! protocol's own replies) rendered to JSON text at the end; the tools'
+//! input schemas are the one place JSON is written by hand, since MCP wants
+//! a JSON Schema document.
+//!
 //! [Decision Log]
 //! - Other nodes (protocol 6, Track X): every tool but `list_nodes` takes
 //!   `node`, a node's id or its name in `list_nodes` (`fleet.nodes`); a
@@ -36,14 +42,16 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
+use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
 use vessel_client::{CallError, NodeClient, Unary};
 use vessel_proto::{
     AgentEvent, ContentBlock, CreateSession, EventPage, EventSeq, FleetNode, GetSession,
-    HarnessKind, KillSession, ListNodes, ListSessions, ModelId, NodeId, PermissionOutcome,
-    ReadEvents, SendInput, SessionEvent, SessionId, SessionInput, SessionMode, SessionSpec,
-    SessionStatus, TerminalBytes, TerminalInput, TerminalSize,
+    HarnessKind, KillSession, ListNodes, ListSessions, ModelId, NodeId, PermissionId,
+    PermissionOptionId, PermissionOutcome, PermissionRequest, ReadEvents, SendInput, SessionEvent,
+    SessionId, SessionInfo, SessionInput, SessionMode, SessionSpec, SessionStatus, StopReason,
+    TerminalBytes, TerminalInput, TerminalSize,
 };
 
 /// How long `wait_turn` waits when not told.
@@ -82,13 +90,13 @@ impl VesselTools {
         }
     }
 
-    async fn call(&self, name: &str, args: &JsonObject) -> Result<Value, ToolError> {
+    async fn call(&self, name: &str, args: &JsonObject) -> Result<String, ToolError> {
         match name {
             name if name.starts_with("vessel_lsp_") => self.lsp(name, args).await,
-            "list_nodes" => Ok(json!(self.client.call(ListNodes).await?)),
+            "list_nodes" => render(&self.client.call(ListNodes).await?),
             "list_sessions" => {
                 let node = self.target(args).await?;
-                Ok(json!(self.on(node, ListSessions).await?))
+                render(&self.on(node, ListSessions).await?)
             }
             "create_session" => self.create_session(args).await,
             "send_input" => self.send_input(args).await,
@@ -99,7 +107,7 @@ impl VesselTools {
                 let node = self.target(args).await?;
                 let session = session(args)?;
                 let _ack = self.on(node, KillSession { session }).await?;
-                Ok(json!({ "killed": session }))
+                render(&Answer::Killed { killed: session })
             }
             other => Err(ToolError::Arguments(format!("no tool `{other}`"))),
         }
@@ -127,7 +135,7 @@ impl VesselTools {
         })
     }
 
-    async fn create_session(&self, args: &JsonObject) -> Result<Value, ToolError> {
+    async fn create_session(&self, args: &JsonObject) -> Result<String, ToolError> {
         let node = self.target(args).await?;
         let harness: HarnessKind = required(args, "harness")?
             .parse()
@@ -156,14 +164,20 @@ impl VesselTools {
         }
         let info = self.on(node, CreateSession { spec }).await?;
         let Some(prompt) = text(args, "prompt")? else {
-            return Ok(json!({ "session": info }));
+            return render(&Answer::Created {
+                session: Box::new(info),
+                from: None,
+            });
         };
         if !terminal {
             self.until_running(node, info.id).await?;
         }
         let from = self.send_text(node, info.id, terminal, prompt).await?;
         let session = self.on(node, GetSession { session: info.id }).await?;
-        Ok(json!({ "session": session, "from": from }))
+        render(&Answer::Created {
+            session: Box::new(session),
+            from: Some(from),
+        })
     }
 
     /// One long poll of `session` from `from`, for at most `wait`.
@@ -211,7 +225,7 @@ impl VesselTools {
                     if !status.is_live() {
                         return Err(ToolError::Failed(format!(
                             "the session ended before it was ready: {}",
-                            json!(status)
+                            serde_json::to_string(status).unwrap_or_default()
                         )));
                     }
                 }
@@ -220,7 +234,7 @@ impl VesselTools {
         }
     }
 
-    async fn send_input(&self, args: &JsonObject) -> Result<Value, ToolError> {
+    async fn send_input(&self, args: &JsonObject) -> Result<String, ToolError> {
         let node = self.target(args).await?;
         let session = session(args)?;
         let text = required(args, "text")?;
@@ -229,7 +243,7 @@ impl VesselTools {
             SessionMode::Terminal { .. }
         );
         let from = self.send_text(node, session, terminal, text).await?;
-        Ok(json!({ "from": from }))
+        render(&Answer::Sent { from })
     }
 
     /// Send `text` as a prompt, or typed into a terminal followed by Enter;
@@ -259,24 +273,25 @@ impl VesselTools {
         Ok(from)
     }
 
-    async fn answer_permission(&self, args: &JsonObject) -> Result<Value, ToolError> {
+    async fn answer_permission(&self, args: &JsonObject) -> Result<String, ToolError> {
         let node = self.target(args).await?;
         let session = session(args)?;
-        let id = serde_json::from_value(Value::String(required(args, "request")?.to_owned()))
+        let id = required(args, "request")?
+            .parse::<PermissionId>()
             .map_err(|error| ToolError::Arguments(format!("request: {error}")))?;
         let outcome = match text(args, "option")? {
+            // Minted by the harness: any text names an option.
             Some(option) => PermissionOutcome::Selected {
-                option: serde_json::from_value(Value::String(option.to_owned()))
-                    .map_err(|error| ToolError::Arguments(format!("option: {error}")))?,
+                option: PermissionOptionId::new(option),
             },
             None => PermissionOutcome::Cancelled,
         };
         let input = SessionInput::AnswerPermission { id, outcome };
         let _ack = self.on(node, SendInput { session, input }).await?;
-        Ok(json!({ "answered": true }))
+        render(&Answer::Answered { answered: true })
     }
 
-    async fn read_events(&self, args: &JsonObject) -> Result<Value, ToolError> {
+    async fn read_events(&self, args: &JsonObject) -> Result<String, ToolError> {
         let node = self.target(args).await?;
         let session = session(args)?;
         let from = EventSeq::new(number(args, "from")?.unwrap_or(0));
@@ -295,13 +310,13 @@ impl VesselTools {
                 },
             )
             .await?;
-        Ok(json!(page))
+        render(&page)
     }
 
     /// Read the session from `from` until a turn ends, a permission is
     /// asked for, the session ends, or the wait runs out; returns the
     /// reply text read meanwhile and where to go on from.
-    async fn wait_turn(&self, args: &JsonObject) -> Result<Value, ToolError> {
+    async fn wait_turn(&self, args: &JsonObject) -> Result<String, ToolError> {
         let node = self.target(args).await?;
         let session = session(args)?;
         // Required: from the start, the first turn ever would answer.
@@ -317,7 +332,7 @@ impl VesselTools {
         let outcome = loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                break json!({ "outcome": "timeout" });
+                break TurnOutcome::Timeout;
             }
             let asked = Instant::now();
             let page = self.poll(node, session, next, left).await?;
@@ -335,15 +350,14 @@ impl VesselTools {
                     .status
                     .is_live()
             {
-                break json!({ "outcome": "session_ended" });
+                break TurnOutcome::SessionEnded { status: None };
             }
         };
-        let mut result = outcome;
-        if let Some(object) = result.as_object_mut() {
-            let _none = object.insert("reply".to_owned(), Value::String(reply));
-            let _none = object.insert("next".to_owned(), json!(next));
-        }
-        Ok(result)
+        render(&TurnReply {
+            outcome,
+            reply,
+            next,
+        })
     }
 }
 
@@ -401,7 +415,7 @@ fn after(wait: Duration) -> Instant {
 
 /// What `page` says of a turn, if it ends one; the reply text read and
 /// where the reading got to are kept in `reply` and `next`.
-fn turn_outcome(page: &EventPage, reply: &mut String, next: &mut EventSeq) -> Option<Value> {
+fn turn_outcome(page: &EventPage, reply: &mut String, next: &mut EventSeq) -> Option<TurnOutcome> {
     for record in &page.records {
         *next = record.seq.next().unwrap_or(record.seq);
         match &record.event {
@@ -413,17 +427,25 @@ fn turn_outcome(page: &EventPage, reply: &mut String, next: &mut EventSeq) -> Op
             } => reply.push_str(text),
             SessionEvent::Agent {
                 event: AgentEvent::TurnEnded { reason },
-            } => return Some(json!({ "outcome": "ended", "reason": reason })),
+            } => return Some(TurnOutcome::Ended { reason: *reason }),
             SessionEvent::Agent {
                 event: AgentEvent::TurnFailed { message },
-            } => return Some(json!({ "outcome": "failed", "message": message })),
+            } => {
+                return Some(TurnOutcome::Failed {
+                    message: message.clone(),
+                });
+            }
             SessionEvent::Agent {
                 event: AgentEvent::PermissionRequested(request),
             } => {
-                return Some(json!({ "outcome": "permission_requested", "request": request }));
+                return Some(TurnOutcome::PermissionRequested {
+                    request: request.clone(),
+                });
             }
             SessionEvent::Status { status } if !status.is_live() => {
-                return Some(json!({ "outcome": "session_ended", "status": status }));
+                return Some(TurnOutcome::SessionEnded {
+                    status: Some(status.clone()),
+                });
             }
             SessionEvent::Agent { .. }
             | SessionEvent::Status { .. }
@@ -461,7 +483,7 @@ impl ServerHandler for VesselTools {
     ) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
         match self.call(&request.name, &args).await {
-            Ok(value) => Ok(CallToolResult::success(vec![McpContent::text(pretty(&value))]).into()),
+            Ok(text) => Ok(CallToolResult::success(vec![McpContent::text(text)]).into()),
             Err(ToolError::Arguments(message)) => Err(ErrorData::invalid_params(message, None)),
             Err(ToolError::LspJson(error)) => {
                 Err(ErrorData::invalid_params(error.to_string(), None))
@@ -479,9 +501,12 @@ enum ToolError {
     /// The call itself is wrong: a JSON-RPC error.
     #[error("{0}")]
     Arguments(String),
-    /// Typed LSP arguments or results failed to encode/decode at the SDK edge.
+    /// Typed LSP arguments failed to decode at the SDK edge.
     #[error("invalid LSP tool JSON")]
     LspJson(#[source] serde_json::Error),
+    /// A result could not be written as JSON.
+    #[error("could not write the result")]
+    Render(#[source] serde_json::Error),
     /// The node refused or failed; the agent reads why.
     #[error("{}", node_error(.0))]
     Node(#[from] CallError),
@@ -493,7 +518,11 @@ enum ToolError {
 /// `code: message` for a refusal, the error's text otherwise.
 fn node_error(error: &CallError) -> String {
     match error {
-        CallError::Remote(error) => format!("{}: {}", json!(error.code), error.message),
+        CallError::Remote(error) => format!(
+            "{}: {}",
+            serde_json::to_string(&error.code).unwrap_or_default(),
+            error.message
+        ),
         other @ (CallError::Disconnected
         | CallError::UnexpectedReply(_)
         | CallError::RequestIdsExhausted
@@ -501,8 +530,57 @@ fn node_error(error: &CallError) -> String {
     }
 }
 
-fn pretty(value: &Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|_unprintable| value.to_string())
+/// `value` as the JSON text a tool answers with.
+fn render<T: Serialize>(value: &T) -> Result<String, ToolError> {
+    serde_json::to_string_pretty(value).map_err(ToolError::Render)
+}
+
+/// What a tool that is not one protocol call answers.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum Answer {
+    /// `create_session`: the session, and where its first prompt's records
+    /// start when one was sent.
+    Created {
+        session: Box<SessionInfo>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from: Option<EventSeq>,
+    },
+    /// `send_input`: where the input's records start.
+    Sent { from: EventSeq },
+    /// `answer_permission`.
+    Answered { answered: bool },
+    /// `kill_session`.
+    Killed { killed: SessionId },
+}
+
+/// `wait_turn`'s answer: how the wait ended, the reply text read, and
+/// where to read on from.
+#[derive(Debug, Serialize)]
+struct TurnReply {
+    #[serde(flatten)]
+    outcome: TurnOutcome,
+    reply: String,
+    next: EventSeq,
+}
+
+/// How a `wait_turn` ended.
+#[derive(Debug, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+enum TurnOutcome {
+    /// The turn ended.
+    Ended { reason: StopReason },
+    /// The turn failed.
+    Failed { message: String },
+    /// The agent asks for a permission.
+    PermissionRequested { request: PermissionRequest },
+    /// The session ended (its status, when the wait saw it).
+    SessionEnded {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<SessionStatus>,
+    },
+    /// The wait ran out.
+    Timeout,
 }
 
 fn text<'a>(args: &'a JsonObject, key: &str) -> Result<Option<&'a str>, ToolError> {
@@ -643,7 +721,7 @@ fn session_tools() -> Vec<Tool> {
         ),
         tool(
             "kill_session",
-            "Stop a session you started (or one those started).",
+            "Stop a session you started (or one of those started).",
             json!({ "node": node, "session": session }),
             &["session"],
         ),
