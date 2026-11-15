@@ -75,7 +75,7 @@ pub use launch::{Launch, launch};
 pub use layout::{HarnessLayout, layout};
 pub use lookup::Lookup;
 pub use mcp::{EncodeProblem, McpError, McpFile, WrittenMcpFile};
-pub use memory::{MemoryFilesError, RebaseError, memory_files, rebase};
+pub use memory::{MemoryFilesError, RebaseError, TRANSFER_DEFAULT, memory_files, rebase};
 pub use profile::{
     Position, Profile, ProfileProblem, Profiles, ProfilesError, parse_profiles, same_variable,
 };

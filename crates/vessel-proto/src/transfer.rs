@@ -61,7 +61,8 @@ pub struct ExportSession {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ExportMemory {
-    /// Whose memory; absent is the harness's default profile.
+    /// Whose memory; absent is Claude Code's default profile (the node's
+    /// transfer default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ProfileName>,
     /// One project's, by its working directory on this node; absent is

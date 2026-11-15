@@ -18,7 +18,8 @@
 //!   configuration directory (`~/.config/opencode`). It also reads
 //!   `~/.claude/CLAUDE.md` and `~/.claude/skills`, `~/.agents/skills`
 //!   unless told not to, so a fleet that fills Claude Code's home reaches it
-//!   twice; deduplicating is the fleet's call.
+//!   twice ([`HarnessLayout::also_reads`]; the node leaves `OpenCode` out
+//!   then).
 //! - Gemini CLI (not installed where this was grounded): `GEMINI.md` in
 //!   `~/.gemini`, its documented default context file name (configurable
 //!   with `context.fileName`). Skills are unconfirmed, so `None`.
@@ -37,6 +38,10 @@ pub struct HarnessLayout {
     /// The directory of skills: one directory per skill, holding
     /// `SKILL.md`.
     pub skills: Option<&'static str>,
+    /// Another harness whose *default* home's instructions and skills this
+    /// one reads as well (`OpenCode` reads `~/.claude`). When that home is
+    /// filled, filling this harness's own would show it everything twice.
+    pub also_reads: Option<HarnessKind>,
 }
 
 /// The layout of `harness`'s home.
@@ -54,6 +59,7 @@ mod tests {
         let named = |instructions, skills| HarnessLayout {
             instructions,
             skills,
+            also_reads: None,
         };
         assert_eq!(
             layout(HarnessKind::ClaudeCode),
@@ -65,7 +71,10 @@ mod tests {
         );
         assert_eq!(
             layout(HarnessKind::OpenCode),
-            named(Some("AGENTS.md"), Some("skills"))
+            HarnessLayout {
+                also_reads: Some(HarnessKind::ClaudeCode),
+                ..named(Some("AGENTS.md"), Some("skills"))
+            }
         );
         assert_eq!(layout(HarnessKind::Gemini), named(Some("GEMINI.md"), None));
     }

@@ -56,6 +56,7 @@ pub(super) const DESCRIPTOR: Descriptor = Descriptor {
     layout: HarnessLayout {
         instructions: Some("AGENTS.md"),
         skills: Some("skills"),
+        also_reads: None,
     },
     login: Some(&["login", "status"]),
     install: "npm install -g @openai/codex",
