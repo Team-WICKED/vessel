@@ -1,10 +1,12 @@
 //! The web UI's files, embedded at build time (`build.rs`), and how they
 //! are served.
 //!
-//! The app routes in the browser, so a path that names no file and has no
-//! extension (`/nodes/gpu-box/sessions`) is answered with `index.html`;
-//! one with an extension that is not there (`/missing.js`) is a `404`, so a
-//! broken bundle shows as a missing file rather than as a page. Hashed
+//! The app routes in the browser, so a path that names no file is answered
+//! with `index.html` when it is one of the app's routes ([`APP_ROUTES`]:
+//! `/fleet/gpu.box` is a page even though a node name may hold a dot) or
+//! has no extension; any other path with an extension that is not there
+//! (`/missing.js`) is a `404`, so a broken bundle shows as a missing file
+//! rather than as a page. Hashed
 //! assets revalidate even when their filenames are hashed: a different
 //! process could have held this port and poisoned the browser cache;
 //! `index.html` is never cached, so a new build is picked up at once.
@@ -29,6 +31,21 @@ pub(crate) struct File {
 
 include!(concat!(env!("OUT_DIR"), "/files.rs"));
 
+/// The first segments of the app's routes (`web/src/app.tsx`; keep the two
+/// in step). Their later segments are node names and session ids, which may
+/// hold dots, so the extension rule cannot tell them from files.
+const APP_ROUTES: [&str; 5] = ["fleet", "sessions", "sync", "devices", "settings"];
+
+/// Whether `path` lies under one of the app's routes.
+fn is_app_route(path: &str) -> bool {
+    let first = path
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    APP_ROUTES.contains(&first)
+}
+
 /// The file at `path`, if embedded (`FILES` is sorted by path).
 fn find(path: &str) -> Option<&'static File> {
     FILES
@@ -49,10 +66,12 @@ pub(crate) async fn serve(method: Method, uri: Uri, request: HeaderMap) -> Respo
     let last = path.rsplit('/').next().unwrap_or_default();
     let file = match find(path) {
         Some(file) => file,
-        None if path == "/" || !last.contains('.') => match find("/index.html") {
-            Some(index) => index,
-            None => return StatusCode::NOT_FOUND.into_response(),
-        },
+        None if path == "/" || is_app_route(path) || !last.contains('.') => {
+            match find("/index.html") {
+                Some(index) => index,
+                None => return StatusCode::NOT_FOUND.into_response(),
+            }
+        }
         None => return StatusCode::NOT_FOUND.into_response(),
     };
     let index = file.path == "/index.html";
@@ -98,6 +117,28 @@ mod tests {
         let index = find("/index.html").unwrap();
         assert_eq!(index.kind, "text/html; charset=utf-8");
         assert!(FILES.iter().all(|file| file.path.starts_with('/')));
+    }
+
+    #[tokio::test]
+    async fn app_routes_with_dotted_names_are_pages_and_missing_files_are_not() {
+        for page in [
+            "/fleet/gpu.box",
+            "/sessions/gpu.box/3f2a",
+            "/fleet",
+            "/devices",
+        ] {
+            let response = serve(Method::GET, page.parse().unwrap(), HeaderMap::new()).await;
+            assert_eq!(response.status(), StatusCode::OK, "{page}");
+            assert_eq!(
+                response.headers().get(CACHE_CONTROL).unwrap(),
+                "no-store",
+                "{page}"
+            );
+        }
+        for missing in ["/missing.js", "/assets/gone.css", "/fleetx/a.js"] {
+            let response = serve(Method::GET, missing.parse().unwrap(), HeaderMap::new()).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{missing}");
+        }
     }
 }
 
