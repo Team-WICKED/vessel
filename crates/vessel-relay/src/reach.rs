@@ -36,8 +36,10 @@ pub enum Reach {
 
 /// Whether `address` is reachable on the internet at large: not this
 /// machine, a private, shared (CGNAT), link-local or site-local network,
-/// multicast, broadcast, or a reserved or unspecified range. IPv4 inside
-/// IPv6 (mapped, compatible, NAT64) is judged as the IPv4 address.
+/// multicast, broadcast, documentation, or a reserved or unspecified range.
+/// IPv4 inside IPv6 (mapped, compatible, NAT64, 6to4) is judged as the IPv4
+/// address; Teredo (`2001::/32`), whose IPv4 address is hidden, is not
+/// public.
 #[must_use]
 pub fn is_public(address: IpAddr) -> bool {
     match address {
@@ -54,6 +56,9 @@ fn is_public_v4(address: Ipv4Addr) -> bool {
         || address.is_link_local()
         || (a == 100 && (b & 0xc0) == 64) // shared address space (CGNAT)
         || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
+        || (a == 192 && b == 0 && c == 2) // documentation (TEST-NET-1)
+        || (a == 198 && b == 51 && c == 100) // documentation (TEST-NET-2)
+        || (a == 203 && b == 0 && c == 113) // documentation (TEST-NET-3)
         || (a == 198 && (b & 0xfe) == 18) // benchmarking
         || address.is_multicast()
         || a >= 240; // reserved, and broadcast
@@ -80,8 +85,18 @@ fn is_public_v6(address: Ipv6Addr) -> bool {
     {
         return is_public_v4(embedded());
     }
+    if first == 0x2002 {
+        // 6to4: the IPv4 address is the next 32 bits (`2002:7f00:1::` is
+        // 127.0.0.1 behind a relay router).
+        let [h1, h2] = second.to_be_bytes();
+        let [l1, l2] = third.to_be_bytes();
+        return is_public_v4(Ipv4Addr::new(h1, h2, l1, l2));
+    }
     let special = address.is_loopback()
         || address.is_unspecified()
+        || (first == 0x2001 && second == 0) // Teredo: the IPv4 address is obscured
+        || (first == 0x2001 && second == 0x0db8) // documentation
+        || (first == 0x0100 && second == 0 && third == 0 && fourth == 0) // discard-only
         || (first & 0xfe00) == 0xfc00 // unique local
         || (first & 0xffc0) == 0xfe80 // link-local
         || (first & 0xffc0) == 0xfec0 // site-local (deprecated)
@@ -143,6 +158,14 @@ mod tests {
             "fe80::1",
             "fec0::1",
             "ff02::1",
+            "192.0.2.1",
+            "198.51.100.7",
+            "203.0.113.9",
+            "2001:db8::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "2002:7f00:1::",
+            "2002:c0a8:101::1",
+            "100::1",
         ] {
             assert!(!public(local), "{local}");
         }
@@ -150,8 +173,9 @@ mod tests {
             "1.1.1.1",
             "100.63.255.255",
             "100.128.0.1",
-            "203.0.113.9",
+            "8.8.8.8",
             "2606:4700::1111",
+            "2002:0101:0101::1",
             "::ffff:1.1.1.1",
             "64:ff9b::1.1.1.1",
         ] {
