@@ -7,9 +7,10 @@
 //!   exact `vesseld` for this client, side by side with any other version
 //!   and never half-installed.
 //! - Constraint (plan decision 1): no download on the remote in milestone
-//!   2. The release is private, so the client fetches it locally (see
-//!   [`crate::release`]) or uses a local build, and sends the bytes through
-//!   `ssh` stdin.
+//!   2: the remote may have no GitHub access (and the release needed a
+//!   login while the repository was private, before ADR 0014), so the
+//!   client fetches it locally (see [`crate::release`]) or uses a local
+//!   build, and sends the bytes through `ssh` stdin.
 //! - Choice: one remote command per install, a fixed `sh -c` script with
 //!   the paths and the expected digest as quoted arguments. It writes a
 //!   temporary file in `bin/` (`.vesseld-<version>.<random>.tmp`, the name

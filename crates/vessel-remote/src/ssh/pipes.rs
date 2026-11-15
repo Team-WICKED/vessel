@@ -96,14 +96,70 @@ pub(super) async fn read_limited(mut reader: impl AsyncRead + Unpin) -> std::io:
     }
 }
 
+/// The longest stderr line kept, in bytes; the rest of a longer one is
+/// dropped (and the kept part marked), so a remote that writes without
+/// newlines cannot grow this process's memory.
+const STDERR_LINE: usize = 4096;
+
 /// Keep the last lines of `pipe` in `tail`, logging each at debug level.
 pub(super) async fn collect_stderr(pipe: impl AsyncRead + Unpin, tail: Arc<Mutex<StderrTail>>) {
-    let mut lines = tokio::io::BufReader::new(pipe).split(b'\n');
-    while let Ok(Some(line)) = lines.next_segment().await {
-        let line = String::from_utf8_lossy(&line).trim_end().to_owned();
-        tracing::debug!(%line, "ssh stderr");
-        if let Ok(mut tail) = tail.lock() {
-            tail.push(line);
+    let mut reader = tokio::io::BufReader::new(pipe);
+    let mut line = Vec::new();
+    let mut cut = false;
+    loop {
+        let chunk = match reader.fill_buf().await {
+            Ok(chunk) if !chunk.is_empty() => chunk,
+            Ok(_) | Err(_) => break,
+        };
+        let newline = chunk.iter().position(|&byte| byte == b'\n');
+        let content = chunk
+            .get(..newline.unwrap_or(chunk.len()))
+            .unwrap_or_default();
+        let room = STDERR_LINE.saturating_sub(line.len());
+        line.extend_from_slice(content.get(..room).unwrap_or(content));
+        cut |= content.len() > room;
+        let used = newline.map_or(chunk.len(), |at| at.saturating_add(1));
+        reader.consume(used);
+        if newline.is_some() {
+            keep_line(&tail, &mut line, &mut cut);
         }
+    }
+    if !line.is_empty() || cut {
+        keep_line(&tail, &mut line, &mut cut);
+    }
+}
+
+/// Move one finished line into `tail`.
+fn keep_line(tail: &Mutex<StderrTail>, line: &mut Vec<u8>, cut: &mut bool) {
+    let mut text = String::from_utf8_lossy(line).trim_end().to_owned();
+    if *cut {
+        text.push_str(" [cut]");
+    }
+    tracing::debug!(line = %text, "ssh stderr");
+    if let Ok(mut tail) = tail.lock() {
+        tail.push(text);
+    }
+    line.clear();
+    *cut = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stderr_lines_are_kept_within_a_bound() {
+        let mut input = b"first\n".to_vec();
+        input.extend(std::iter::repeat_n(b'x', STDERR_LINE * 3));
+        input.extend_from_slice(b"\nlast");
+        let tail = Arc::new(Mutex::new(StderrTail::default()));
+        collect_stderr(input.as_slice(), Arc::clone(&tail)).await;
+        let tail = tail.lock().unwrap().clone();
+        let lines: Vec<&str> = tail.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "first");
+        assert!(lines[1].starts_with('x') && lines[1].ends_with(" [cut]"));
+        assert_eq!(lines[1].len(), STDERR_LINE + " [cut]".len());
+        assert_eq!(lines[2], "last");
     }
 }
