@@ -1,5 +1,5 @@
 //! [`Framed`]: protocol frames over a byte stream (SSH stdio, the node's
-//! local socket), as PROTOCOL.md version 3 specifies.
+//! local socket), as PROTOCOL.md specifies (introduced in its version 3).
 //!
 //! [Decision Log]
 //! - Purpose: a websocket delimits messages itself; a pipe or a socket is a
@@ -26,7 +26,7 @@ use futures_util::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-/// Largest frame, in bytes (PROTOCOL.md version 3: 16 MiB). Larger than any
+/// Largest frame, in bytes (PROTOCOL.md, since its version 3: 16 MiB). Larger than any
 /// frame the protocol produces (a page of terminal output is bounded by the
 /// store's page byte limit), small enough that a bad length cannot exhaust
 /// memory.
@@ -66,7 +66,7 @@ impl<R: AsyncRead, W: AsyncWrite> Framed<R, W> {
     }
 }
 
-/// The length-delimited codec of PROTOCOL.md version 3.
+/// The length-delimited codec of PROTOCOL.md (since its version 3).
 fn codec(max_frame: NonZeroUsize) -> LengthDelimitedCodec {
     LengthDelimitedCodec::builder()
         .big_endian()

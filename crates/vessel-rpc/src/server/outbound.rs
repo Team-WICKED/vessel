@@ -181,11 +181,11 @@ impl SubscriptionSink {
     /// the connection's queue is full (that wait is the backpressure that
     /// makes a slow client lag instead of growing a buffer).
     ///
-    /// # Errors
-    /// The client unsubscribed or the connection is closing.
-    ///
     /// The record is shared, not copied: the same `Arc` can go to every
     /// subscriber of a session.
+    ///
+    /// # Errors
+    /// The client unsubscribed or the connection is closing.
     pub async fn send(&mut self, record: Arc<EventRecord>) -> Result<(), SubscriptionClosed> {
         self.wait_announced().await?;
         let event = Outgoing::Event {

@@ -1,4 +1,4 @@
-//! Protocol 2 frames over any transport.
+//! The protocol's frames (every version, 2 to 7) over any transport.
 //!
 //! This crate moves `vessel-proto`'s `ClientFrame`/`ServerFrame` over a
 //! [`FrameTransport`]: a websocket, any byte stream through [`Framed`] (SSH
@@ -54,3 +54,12 @@ pub use error::{CallError, ConnectError, OutboundError, ProtocolViolation, Serve
 pub use framed::{Framed, FramedError, MAX_FRAME};
 pub use server::{Outbound, Peer, Server, ServerConfig, SubscriptionClosed, SubscriptionSink};
 pub use transport::FrameTransport;
+
+/// `n` as a `NonZeroUsize` for constants (`NonZeroUsize::new` is not usable
+/// with `?` or `unwrap` in a `const`); one if it is zero.
+const fn at_least_one(n: usize) -> std::num::NonZeroUsize {
+    match std::num::NonZeroUsize::new(n) {
+        Some(n) => n,
+        None => std::num::NonZeroUsize::MIN,
+    }
+}

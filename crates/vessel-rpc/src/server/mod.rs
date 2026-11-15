@@ -36,15 +36,6 @@ pub use outbound::{Outbound, SubscriptionClosed, SubscriptionSink};
 use crate::error::{ProtocolViolation, ServeError};
 use crate::transport::FrameTransport;
 
-/// `n` as a `NonZeroUsize` for constants (`NonZeroUsize::new` is not usable
-/// with `?` or `unwrap` in a `const`).
-const fn at_least_one(n: usize) -> NonZeroUsize {
-    match NonZeroUsize::new(n) {
-        Some(n) => n,
-        None => NonZeroUsize::MIN,
-    }
-}
-
 /// Limits for each server connection.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -70,8 +61,8 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            max_in_flight: at_least_one(64),
-            outbound_capacity: at_least_one(256),
+            max_in_flight: crate::at_least_one(64),
+            outbound_capacity: crate::at_least_one(256),
             handshake_timeout: Duration::from_secs(10),
             close_timeout: Duration::from_secs(2),
         }
